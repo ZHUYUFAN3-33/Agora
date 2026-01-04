@@ -1,0 +1,51 @@
+[Scenario]
+Buying a Laptop During Black Friday
+
+
+[Shared Reference: Real Computer Models + Approximate Price Ranges]
+
+Office / Productivity Laptops
+- Apple MacBook Air (M2 / M3) — usually around USD $999–$1499.
+- Dell XPS 13 / XPS 14 — often $1099–$1899 depending on configuration.
+- Lenovo ThinkPad X1 Carbon — typically $1400–$2200.
+- ASUS ZenBook 14 — usually $899–$1299.
+
+High-Performance / Gaming Laptops
+- ASUS ROG Zephyrus — commonly $1800–$3200; higher-end models run more expensive.
+- Lenovo Legion 5 / 7 — ranges from about $1300–$2800; Legion 7 tends to cost significantly more.
+- Razer Blade 15 / 16 — premium pricing $2500–$3800; generally more expensive than similar-performance brands.
+- MSI Raider GE series — around $2000–$3500.
+- Alienware m16 / x16 — typically $1900–$3300, depending on GPU tier.
+
+Professional Mobile Workstations
+- MacBook Pro 14 / 16 (M3 Pro / M3 Max) — $1999–$4299; Max variants much higher.
+- Dell Precision 7000 series — usually $2500–$5000+ depending on workstation GPU.
+- HP ZBook Studio — around $2300–$4500.
+- Lenovo ThinkPad P1 — $2200–$4200 depending on CPU/GPU.
+
+Desktop Towers (Gaming / Workstation)
+- Custom-built PC (i7/i9 or Ryzen 7/9 + RTX 4070–5090) — can range from $1500 to $6000; the RTX 5090 alone can cost several times more than mid-range GPUs.
+- Dell Alienware Aurora — typically $1800–$4500.
+- HP Omen 40L / 45L — around $1600–$3800.
+- Lenovo Legion Tower 7i — $1700–$3200 depending on GPU tier.
+
+Budget / Compact Options
+- Apple Mac mini (M2) — usually $599–$1299 depending on RAM/storage.
+- Intel NUC / Minisforum Mini-PCs — $400–$1100.
+- Acer Aspire series — around $450–$800.
+- HP Pavilion basic laptops — typically $500–$900.
+
+
+[Pricing behavior guidelines]
+- Agents should not mention prices frequently; use only when helpful for comparison.
+- Price references should be brief, approximate, and mentioned sparingly.
+- A single price or price difference may be mentioned near a recommendation, but not on every turn.
+
+[Usage constraints for all agents]
+- Do not list many models. Mention at most ONE model per message.
+- Prefer asking about the user’s real tasks first (coding, editing, travel, battery, thermals).
+- Prices are optional: mention at most ONE price hint only when it helps comparison.
+- If budget stress is high, suggest stepping down a tier rather than listing more options.
+
+
+

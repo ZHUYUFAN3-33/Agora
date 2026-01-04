@@ -1,0 +1,22 @@
+{
+  "price_range_usd": [800, 6000],
+  "gpu_upper_limit": "NVIDIA RTX 5090",
+  "allowed_categories": [
+    "office / productivity laptop",
+    "high-performance / gaming laptop",
+    "desktop tower",
+    "mini-PC"
+  ],
+  "brand_pool": {
+    "office_laptops": ["MacBook Air", "Dell XPS", "ThinkPad X1 Carbon", "ASUS ZenBook"],
+    "gaming_laptops": ["ROG Zephyrus", "Lenovo Legion 7", "Razer Blade", "Alienware"],
+    "workstations": ["MacBook Pro (M3 Pro/M3 Max)", "Dell Precision 7000", "HP ZBook Studio", "ThinkPad P1"],
+    "desktops": ["Custom-built PC (RTX 4070–5090)", "Alienware Aurora", "HP Omen 40L/45L", "Legion Tower 7i"],
+    "budget_compact": ["Mac mini", "Intel NUC", "Minisforum", "Acer Aspire", "HP Pavilion"]
+  },
+  "pricing_behavior_rules": [
+    "Mention prices only occasionally and approximately.",
+    "Do not repeat the full price range unless the user asks.",
+    "At most one brand/model per reply."
+  ]
+}

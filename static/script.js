@@ -5,6 +5,112 @@ let scenesData = null;
 // Auto-detect port from current location
 const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
 
+// ─── Emotion Mode State ────────────────────────────────────────────────────
+let emotionModeOn = false;
+let currentEmotionTag = null;   // "joy" | "anger" | "fear" | "sadness" | "surprise" | "disgust"
+let emotionSliderDebounce = null;
+
+const EMOTION_EMOJI = {
+    joy:      '😄',
+    anger:    '😠',
+    fear:     '😨',
+    sadness:  '😢',
+    surprise: '😲',
+    disgust:  '🤢',
+    neutral:  '😐',
+};
+
+const EMOTION_COLORS = {
+    joy:      '#ffd93d',
+    anger:    '#ff6b6b',
+    fear:     '#a855f7',
+    sadness:  '#4ecdc4',
+    surprise: '#f97316',
+    disgust:  '#84cc16',
+};
+
+function toggleEmotionMode() {
+    emotionModeOn = document.getElementById('emotionModeToggle').checked;
+    const controls = document.getElementById('emotionControls');
+
+    if (emotionModeOn) {
+        controls.classList.add('active');
+        // Trigger initial analysis with neutral text
+        onSliderChange();
+    } else {
+        controls.classList.remove('active');
+        currentEmotionTag = null;
+        resetEmotionBadge();
+    }
+}
+
+function resetEmotionBadge() {
+    document.getElementById('emotionEmoji').textContent = '😐';
+    document.getElementById('emotionName').textContent  = 'Off';
+    document.getElementById('emotionConfidence').textContent = '–';
+    // Reset bars
+    document.querySelectorAll('.prob-bar-fill').forEach(b => b.style.width = '0%');
+    document.querySelectorAll('.prob-bar-row').forEach(r => r.classList.remove('active-emotion'));
+}
+
+function onSliderChange() {
+    const v = document.getElementById('valenceSlider').value / 100;
+    const a = document.getElementById('arousalSlider').value / 100;
+    const c = document.getElementById('controlSlider').value / 100;
+
+    document.getElementById('valenceVal').textContent = v.toFixed(2);
+    document.getElementById('arousalVal').textContent = a.toFixed(2);
+    document.getElementById('controlVal').textContent = c.toFixed(2);
+
+    if (!emotionModeOn) return;
+
+    // Debounce API call
+    clearTimeout(emotionSliderDebounce);
+    emotionSliderDebounce = setTimeout(() => {
+        fetchEmotionAnalysis('', v, a, c);
+    }, 120);
+}
+
+async function fetchEmotionAnalysis(text, v, a, c) {
+    try {
+        const res = await fetch(`${API_BASE}/emotion/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, valence: v, arousal: a, control: c }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        updateEmotionUI(data);
+    } catch (_) { /* server not ready */ }
+}
+
+function updateEmotionUI(data) {
+    currentEmotionTag = data.emotion_tag;
+    const emoji = EMOTION_EMOJI[currentEmotionTag] || '😐';
+    const color = EMOTION_COLORS[currentEmotionTag] || '#888';
+    const conf  = Math.round(data.confidence * 100);
+
+    document.getElementById('emotionEmoji').textContent = emoji;
+    document.getElementById('emotionName').textContent  =
+        currentEmotionTag.charAt(0).toUpperCase() + currentEmotionTag.slice(1);
+    document.getElementById('emotionConfidence').textContent = `${conf}%`;
+
+    const badge = document.getElementById('emotionBadge');
+    badge.style.borderColor = color;
+    badge.style.background  = color + '18';
+
+    // Update prob bars
+    const probs = data.probabilities || {};
+    document.querySelectorAll('.prob-bar-row').forEach(row => {
+        const em   = row.dataset.emotion;
+        const fill = row.querySelector('.prob-bar-fill');
+        const pct  = Math.round((probs[em] || 0) * 100);
+        fill.style.width = pct + '%';
+        row.classList.toggle('active-emotion', em === currentEmotionTag);
+    });
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 // DOM elements
 const chatMessages = document.getElementById('chatMessages');
 const messageInput = document.getElementById('messageInput');
@@ -169,6 +275,24 @@ async function sendMessage() {
     showTypingIndicator();
     
     try {
+        // If emotion mode is on, re-analyze with actual message text before sending
+        if (emotionModeOn) {
+            const v = document.getElementById('valenceSlider').value / 100;
+            const a = document.getElementById('arousalSlider').value / 100;
+            const c = document.getElementById('controlSlider').value / 100;
+            try {
+                const eRes = await fetch(`${API_BASE}/emotion/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: message, valence: v, arousal: a, control: c }),
+                });
+                if (eRes.ok) {
+                    const eData = await eRes.json();
+                    updateEmotionUI(eData);
+                }
+            } catch (_) {}
+        }
+
         const response = await fetch(`${API_BASE}/message`, {
             method: 'POST',
             headers: {
@@ -176,7 +300,8 @@ async function sendMessage() {
             },
             body: JSON.stringify({
                 room_id: currentRoomId,
-                message: message
+                message: message,
+                emotion_tag: emotionModeOn ? currentEmotionTag : null,
             })
         });
         

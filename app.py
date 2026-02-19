@@ -23,6 +23,27 @@ import importlib.util
 
 # Get base directory (will be reused)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ─── Load emotion module (optional) ───────────────────────────────────────────
+EMOTION_MODULE_LOADED = False
+_emotion_probs_from_text = None
+_emotion_probs_from_sliders = None
+_emotion_fuse = None
+
+_emotion_module_path = os.path.join(BASE_DIR, "emotion block", "emotion.py")
+if os.path.exists(_emotion_module_path):
+    try:
+        _spec_e = importlib.util.spec_from_file_location("emotion", _emotion_module_path)
+        _emotion_mod = importlib.util.module_from_spec(_spec_e)
+        _spec_e.loader.exec_module(_emotion_mod)
+        _emotion_probs_from_text = _emotion_mod.emotion_probs_from_text
+        _emotion_probs_from_sliders = _emotion_mod.emotion_probs_from_sliders
+        _emotion_fuse = _emotion_mod.fuse
+        EMOTION_MODULE_LOADED = True
+        print("✓ Emotion module loaded")
+    except Exception as _e:
+        print(f"⚠ Emotion module failed to load: {_e}")
+# ──────────────────────────────────────────────────────────────────────────────
 AGENT_MODULE_PATH = os.path.join(BASE_DIR, "agent_wakeup_4o_e.py")
 
 spec = importlib.util.spec_from_file_location("agent_wakeup_4o_e", AGENT_MODULE_PATH)
@@ -191,7 +212,29 @@ def send_message():
         return jsonify({"error": "Message cannot be empty"}), 400
     
     session = chat_sessions[room_id]
-    
+
+    # Emotion mode: optional emotion_tag from frontend
+    emotion_tag = data.get("emotion_tag")  # e.g. "joy", "anger", None
+    emotion_prompt = ""
+    if emotion_tag and EMOTION_MODULE_LOADED:
+        ep_path = os.path.join(BASE_DIR, "emotion block", "prompts", f"{emotion_tag}.txt")
+        if os.path.exists(ep_path):
+            with open(ep_path, "r", encoding="utf-8") as _f:
+                emotion_prompt = _f.read()
+
+    # Effective scene: append emotion prompt if active
+    effective_scene = scene
+    if emotion_prompt:
+        effective_scene = (
+            scene
+            + "\n\n"
+            + "=" * 60
+            + "\nEMOTIONAL CONTEXT — apply to ALL agents this turn:\n"
+            + "=" * 60
+            + "\n"
+            + emotion_prompt
+        )
+
     # Add user message to history
     user_msg = {
         "chat_room_id": room_id,
@@ -236,7 +279,7 @@ def send_message():
             nxt, raw, err = call_admin_onepass(
                 client=client_admin,
                 model="gpt-4o",
-                scene=scene,
+                scene=effective_scene,
                 agents=agent_list,
                 history=session["history"],
                 known_user_facts=session["known_user_facts"],
@@ -274,7 +317,7 @@ def send_message():
         txt = call_chat_agent(
             client=client_chat,
             model="gpt-4o",
-            scene=scene,
+            scene=effective_scene,
             agent=agent,
             history=session["history"],
             known_user_facts=session["known_user_facts"],
@@ -315,6 +358,7 @@ def send_message():
         "user_message": user_message,
         "responses": responses,
         "known_facts": list(session["known_user_facts"].values()),
+        "emotion_tag": emotion_tag,
     })
 
 
@@ -335,7 +379,37 @@ def get_history(room_id):
 @app.route('/api/health', methods=['GET'])
 def health():
     """Health check endpoint"""
-    return jsonify({"status": "ok", "sessions": len(chat_sessions)})
+    return jsonify({
+        "status": "ok",
+        "sessions": len(chat_sessions),
+        "emotion_module": EMOTION_MODULE_LOADED
+    })
+
+
+@app.route('/api/emotion/analyze', methods=['POST'])
+def analyze_emotion():
+    """Analyze text + sliders to determine emotional state"""
+    if not EMOTION_MODULE_LOADED:
+        return jsonify({"error": "Emotion module not available"}), 503
+
+    data = request.json or {}
+    text    = data.get("text", "")
+    valence = float(data.get("valence", 0.5))
+    arousal = float(data.get("arousal", 0.5))
+    control = float(data.get("control", 0.5))
+
+    p_text   = _emotion_probs_from_text(text)
+    p_slider = _emotion_probs_from_sliders(valence, arousal, control)
+    p_final  = _emotion_fuse(p_text, p_slider)
+
+    emotion_tag = max(p_final.items(), key=lambda x: x[1])[0]
+    confidence  = p_final[emotion_tag]
+
+    return jsonify({
+        "emotion_tag":   emotion_tag,
+        "confidence":    round(confidence, 4),
+        "probabilities": {k: round(v, 4) for k, v in p_final.items()},
+    })
 
 
 @app.route('/api/agent-prompt/<agent_key>', methods=['GET'])

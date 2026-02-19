@@ -127,6 +127,83 @@
                     <p><strong>Room ID:</strong> <span id="roomId"></span></p>
                     <button class="btn-secondary" onclick="loadHistory()">Load History</button>
                 </div>
+
+                <!-- Emotion Mode Panel -->
+                <div class="emotion-mode-section" id="emotionSection">
+                    <div class="emotion-header">
+                        <h3>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px; margin-right:6px;">
+                                <circle cx="12" cy="12" r="10"/>
+                                <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                                <line x1="9" y1="9" x2="9.01" y2="9"/>
+                                <line x1="15" y1="9" x2="15.01" y2="9"/>
+                            </svg>
+                            Emotion Mode
+                        </h3>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="emotionModeToggle" onchange="toggleEmotionMode()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="emotion-controls" id="emotionControls">
+                        <!-- Current emotion badge -->
+                        <div class="emotion-badge" id="emotionBadge">
+                            <span class="emotion-emoji" id="emotionEmoji">😐</span>
+                            <div class="emotion-label-wrap">
+                                <span class="emotion-name" id="emotionName">Neutral</span>
+                                <span class="emotion-confidence" id="emotionConfidence">–</span>
+                            </div>
+                        </div>
+
+                        <!-- PAD Sliders -->
+                        <div class="emotion-sliders">
+                            <div class="slider-row">
+                                <span class="slider-label">😊 Valence</span>
+                                <input type="range" class="emotion-slider" id="valenceSlider" min="0" max="100" value="50" oninput="onSliderChange()">
+                                <span class="slider-val" id="valenceVal">0.5</span>
+                            </div>
+                            <div class="slider-row">
+                                <span class="slider-label">⚡ Arousal</span>
+                                <input type="range" class="emotion-slider" id="arousalSlider" min="0" max="100" value="50" oninput="onSliderChange()">
+                                <span class="slider-val" id="arousalVal">0.5</span>
+                            </div>
+                            <div class="slider-row">
+                                <span class="slider-label">🎯 Control</span>
+                                <input type="range" class="emotion-slider" id="controlSlider" min="0" max="100" value="50" oninput="onSliderChange()">
+                                <span class="slider-val" id="controlVal">0.5</span>
+                            </div>
+                        </div>
+
+                        <!-- Emotion probability bars -->
+                        <div class="emotion-prob-bars" id="emotionProbBars">
+                            <div class="prob-bar-row" data-emotion="joy">
+                                <span class="prob-label">😄 Joy</span>
+                                <div class="prob-bar-track"><div class="prob-bar-fill joy"></div></div>
+                            </div>
+                            <div class="prob-bar-row" data-emotion="anger">
+                                <span class="prob-label">😠 Anger</span>
+                                <div class="prob-bar-track"><div class="prob-bar-fill anger"></div></div>
+                            </div>
+                            <div class="prob-bar-row" data-emotion="fear">
+                                <span class="prob-label">😨 Fear</span>
+                                <div class="prob-bar-track"><div class="prob-bar-fill fear"></div></div>
+                            </div>
+                            <div class="prob-bar-row" data-emotion="sadness">
+                                <span class="prob-label">😢 Sadness</span>
+                                <div class="prob-bar-track"><div class="prob-bar-fill sadness"></div></div>
+                            </div>
+                            <div class="prob-bar-row" data-emotion="surprise">
+                                <span class="prob-label">😲 Surprise</span>
+                                <div class="prob-bar-track"><div class="prob-bar-fill surprise"></div></div>
+                            </div>
+                            <div class="prob-bar-row" data-emotion="disgust">
+                                <span class="prob-label">🤢 Disgust</span>
+                                <div class="prob-bar-track"><div class="prob-bar-fill disgust"></div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="chat-main">

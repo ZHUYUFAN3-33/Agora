@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>多智能体聊天机器人 - Multi-Agent Chatbot</title>
-    <link rel="stylesheet" href="/style.css?v=5">
+    <link rel="stylesheet" href="/style.css?v=6">
     <script src="https://cdn.jsdelivr.net/npm/animejs@3.2.2/lib/anime.min.js"></script>
     <script type="module">
         import { animate, svg, stagger } from 'https://esm.sh/animejs';
@@ -213,6 +213,7 @@
 
         <div class="chat-container" id="chatContainer">
             <div class="sidebar" id="sidebar">
+                <div class="sidebar-inner" id="sidebarInner">
                 <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebar()" title="Hide sidebar">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                         <polyline points="15 18 9 12 15 6"/>
@@ -404,9 +405,10 @@
                     </div>
                 </div>
 
+                </div><!-- /.sidebar-inner -->
             </div>
-            <!-- Sidebar expand button (shows when collapsed) -->
-            <button class="sidebar-expand-btn" id="sidebarExpandBtn" onclick="toggleSidebar()" title="Show sidebar" style="display:none;">
+            <!-- Sidebar expand button -->
+            <button class="sidebar-expand-btn" id="sidebarExpandBtn" onclick="toggleSidebar()" title="Show sidebar">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                     <polyline points="9 18 15 12 9 6"/>
                 </svg>
@@ -583,7 +585,7 @@
         </div>
     </div>
 
-    <script src="/script.js?v=5"></script>
+    <script src="/script.js?v=6"></script>
 </body>
 </html>
 

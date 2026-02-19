@@ -387,17 +387,29 @@ header h1 {
 }
 
 .sidebar {
+    /* Width-only — no content inside, overflow hides the sliding inner */
     width: 310px;
-    min-width: 310px;
+    min-width: 0;           /* allow shrinking to 0 */
     background: #1e1e1e;
     border-right: 1px solid #2d2d2d;
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+    transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+                border-color 0.28s ease;
+}
+
+/* Inner wrapper: fixed width so content never reflows during sidebar resize */
+.sidebar-inner {
+    width: 310px;
+    min-width: 310px;
+    box-sizing: border-box;
     padding: 44px 16px 16px 16px;
     overflow-y: auto;
     overflow-x: hidden;
-    position: relative;
-    transition: width 0.3s ease, min-width 0.3s ease, padding 0.3s ease, opacity 0.3s ease, border 0.3s ease;
-    flex-shrink: 0;
-    box-sizing: border-box;
+    height: 100%;
+    opacity: 1;
+    transition: opacity 0.15s ease;
 }
 
 .agent-info h3 {
@@ -1583,7 +1595,7 @@ header h1 {
 /* ─────────────────────────────────────────────────────────────
    Sidebar Collapse Button
 ───────────────────────────────────────────────────────────── */
-/* Sidebar collapse button — lives INSIDE the sidebar, top-right corner */
+/* Sidebar collapse button — inside sidebar-inner, top-right */
 .sidebar-collapse-btn {
     position: absolute;
     top: 10px;
@@ -1600,7 +1612,6 @@ header h1 {
     cursor: pointer;
     z-index: 20;
     transition: background 0.2s, color 0.2s, border-color 0.2s;
-    flex-shrink: 0;
 }
 .sidebar-collapse-btn:hover {
     background: rgba(255,255,255,0.12);
@@ -1608,15 +1619,17 @@ header h1 {
     color: #fff;
 }
 
+/* Collapsed state — only width collapses; opacity handled by JS timing */
 .sidebar.collapsed {
-    width: 0 !important;
-    min-width: 0 !important;
-    overflow: hidden;
-    padding: 0 !important;
-    border: none !important;
+    width: 0;
+    border-color: transparent;
+}
+.sidebar.collapsed .sidebar-inner {
+    opacity: 0;
+    pointer-events: none;
 }
 
-/* Expand button floats at the left edge of the chat area */
+/* Expand button: always in DOM, fades in/out via opacity */
 .sidebar-expand-btn {
     position: absolute;
     left: 8px;
@@ -1633,7 +1646,13 @@ header h1 {
     justify-content: center;
     cursor: pointer;
     z-index: 20;
-    transition: background 0.2s, color 0.2s;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, background 0.2s, color 0.2s;
+}
+.sidebar-expand-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
 }
 .sidebar-expand-btn:hover {
     background: rgba(255,255,255,0.12);

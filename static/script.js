@@ -1133,20 +1133,59 @@ function showEmotionExamples(tag) {
 
 // ─── Sidebar Collapse ──────────────────────────────────────────────────────────
 let sidebarCollapsed = false;
+let sidebarAnimating = false;
 
 function toggleSidebar() {
-    sidebarCollapsed = !sidebarCollapsed;
-    const sidebar = document.getElementById('sidebar');
-    const expandBtn = document.getElementById('sidebarExpandBtn');
-    const container = document.getElementById('chatContainer');
-    if (sidebarCollapsed) {
-        sidebar.classList.add('collapsed');
-        expandBtn.style.display = 'flex';
-        container.classList.add('sidebar-hidden');
+    if (sidebarAnimating) return;
+    sidebarAnimating = true;
+
+    const sidebar    = document.getElementById('sidebar');
+    const inner      = document.getElementById('sidebarInner');
+    const expandBtn  = document.getElementById('sidebarExpandBtn');
+    const container  = document.getElementById('chatContainer');
+
+    if (!sidebarCollapsed) {
+        // ── CLOSE ──────────────────────────────────────────────
+        // 1. Fade out content immediately (150ms)
+        inner.style.transition = 'opacity 0.15s ease';
+        inner.style.opacity = '0';
+        inner.style.pointerEvents = 'none';
+
+        // 2. After content fades, collapse width (280ms)
+        setTimeout(() => {
+            sidebar.classList.add('collapsed');
+            container.classList.add('sidebar-hidden');
+        }, 120);
+
+        // 3. Show expand button after sidebar starts closing
+        setTimeout(() => {
+            expandBtn.classList.add('visible');
+            sidebarCollapsed = true;
+            sidebarAnimating = false;
+        }, 300);
+
     } else {
+        // ── OPEN ───────────────────────────────────────────────
+        // 1. Hide expand button
+        expandBtn.classList.remove('visible');
+
+        // 2. Expand width immediately (280ms)
         sidebar.classList.remove('collapsed');
-        expandBtn.style.display = 'none';
         container.classList.remove('sidebar-hidden');
+        inner.style.opacity = '0';
+        inner.style.transition = 'none'; // hold at 0 while width opens
+
+        // 3. After width is mostly open, fade in content
+        setTimeout(() => {
+            inner.style.transition = 'opacity 0.2s ease';
+            inner.style.opacity = '1';
+            inner.style.pointerEvents = '';
+        }, 180);
+
+        setTimeout(() => {
+            sidebarCollapsed = false;
+            sidebarAnimating = false;
+        }, 400);
     }
 }
 

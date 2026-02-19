@@ -1,5 +1,7 @@
 // Global state
 let currentRoomId = null;
+let selectedScene = null;
+let scenesData = null;
 // Auto-detect port from current location
 const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
 
@@ -9,7 +11,6 @@ const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendButton');
 const startButton = document.getElementById('startButton');
 const clearButton = document.getElementById('clearButton');
-const loadingOverlay = document.getElementById('loadingOverlay');
 const sessionInfo = document.getElementById('sessionInfo');
 const roomIdSpan = document.getElementById('roomId');
 
@@ -25,10 +26,29 @@ function handleScroll(element) {
 
 // Agent colors and icons
 const agentConfig = {
-    'A': { color: '#ff6b6b', icon: '🔥', name: 'ChatbotA', description: '兴奋急躁的朋友' },
-    'B': { color: '#4ecdc4', icon: '🧠', name: 'ChatbotB', description: '冷静分析型顾问' },
-    'C': { color: '#ffd93d', icon: '🛡️', name: 'ChatbotC', description: '怀疑节俭的风险守卫' },
-    'user': { color: '#667eea', icon: '👤', name: 'You' }
+    'A': { 
+        color: '#ff6b6b', 
+        icon: '<img src="/Assets/AgentA.png" alt="Agent A" width="28" height="28" style="border-radius: 50%;">', 
+        name: 'ChatbotA', 
+        description: 'Enthusiastic Advisor' 
+    },
+    'B': { 
+        color: '#4ecdc4', 
+        icon: '<img src="/Assets/AgentB.png" alt="Agent B" width="28" height="28" style="border-radius: 50%;">', 
+        name: 'ChatbotB', 
+        description: 'Analytical Consultant' 
+    },
+    'C': { 
+        color: '#ffd93d', 
+        icon: '<img src="/Assets/AgentC.png" alt="Agent C" width="28" height="28" style="border-radius: 50%;">', 
+        name: 'ChatbotC', 
+        description: 'Skeptical Risk Guard' 
+    },
+    'user': { 
+        color: '#667eea', 
+        icon: '<img src="/Assets/YOU.png" alt="You" width="28" height="28" style="border-radius: 50%; object-fit: cover;">', 
+        name: 'You' 
+    }
 };
 
 // Agent configurations (stored in memory)
@@ -65,7 +85,6 @@ let currentEditingAgent = null;
 // Start a new chat session with anime.js animations
 async function startChat() {
     try {
-        showLoading();
         const response = await fetch(`${API_BASE}/start`, {
             method: 'POST',
             headers: {
@@ -129,12 +148,9 @@ async function startChat() {
                 messageInput.focus();
             }
         });
-        
-        hideLoading();
     } catch (error) {
         console.error('Error starting chat:', error);
-        alert('启动对话失败，请检查服务器是否运行');
-        hideLoading();
+        alert('Failed to start chat. Please check if the server is running.');
     }
 }
 
@@ -148,7 +164,9 @@ async function sendMessage() {
     messageInput.value = '';
     messageInput.disabled = true;
     sendButton.disabled = true;
-    showLoading();
+    
+    // Show typing indicator instead of full screen loading
+    showTypingIndicator();
     
     try {
         const response = await fetch(`${API_BASE}/message`, {
@@ -164,21 +182,31 @@ async function sendMessage() {
         
         const data = await response.json();
         
-        // Add agent responses
+        // Hide typing indicator
+        hideTypingIndicator();
+        
+        // Add agent responses with staggered animation
+        // Backend returns all responses at once, we display them one by one
         if (data.responses && data.responses.length > 0) {
-            data.responses.forEach(response => {
+            for (let i = 0; i < data.responses.length; i++) {
+                // Add delay between each message (except the first one)
+                if (i > 0) {
+                    await new Promise(resolve => setTimeout(resolve, 1500)); // 1.5 second delay
+                }
+                
+                const response = data.responses[i];
                 const agentKey = response.agent_key;
                 addMessage(agentKey, response.message, 'agent');
-            });
+            }
         }
         
     } catch (error) {
         console.error('Error sending message:', error);
+        hideTypingIndicator();
         addMessage('system', '发送消息失败，请重试', 'system');
     } finally {
         messageInput.disabled = false;
         sendButton.disabled = false;
-        hideLoading();
         messageInput.focus();
     }
 }
@@ -197,24 +225,13 @@ function addMessage(agentKey, text, type) {
     const config = agentConfig[agentKey] || agentConfig['user'];
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     
-    // Create SVG icon based on agent
-    let iconSvg = '';
-    if (type === 'agent') {
-        if (agentKey === 'A') {
-            iconSvg = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4 12H2M6.314 6.314l2.828 2.828M14.858 14.858l2.828 2.828M6.314 17.686l2.828-2.828M14.858 9.142l2.828-2.828M22 12h-2M17.686 6.314l-2.828 2.828M9.142 14.858l-2.828 2.828M17.686 17.686l-2.828-2.828M9.142 9.142l-2.828-2.828"/></svg>';
-        } else if (agentKey === 'B') {
-            iconSvg = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44L2 22h14.5a2.5 2.5 0 0 0 2.5-2.5v-15a2.5 2.5 0 0 0-2.5-2.5h-5z"/><path d="M12 7v6"/></svg>';
-        } else if (agentKey === 'C') {
-            iconSvg = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>';
-        }
-    } else {
-        iconSvg = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
-    }
+    // Use icon from agentConfig (now contains img tags for PNG files)
+    const iconHtml = config.icon || '';
     
     messageDiv.innerHTML = `
         <div class="message-bubble">
             <div class="message-header">
-                ${iconSvg}
+                ${iconHtml}
                 <span>${type === 'agent' ? config.name : config.name}</span>
                 <span class="message-time">${time}</span>
             </div>
@@ -245,11 +262,21 @@ function addMessage(agentKey, text, type) {
 
 // Format message text (preserve line breaks)
 function formatMessage(text) {
-    return text
-        .replace(/\n/g, '<br>')
+    // First, escape HTML special characters
+    let formatted = text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
+    
+    // Then convert newlines to <br> (won't be escaped)
+    formatted = formatted.replace(/\n/g, '<br>');
+    
+    // Convert escaped <br> tags back to actual <br> (for backend-generated <br>)
+    formatted = formatted.replace(/&lt;br&gt;/gi, '<br>');
+    formatted = formatted.replace(/&lt;br\/&gt;/gi, '<br>');
+    formatted = formatted.replace(/&lt;br\s*\/&gt;/gi, '<br>');
+    
+    return formatted;
 }
 
 // Add welcome message
@@ -257,21 +284,34 @@ function addWelcomeMessage() {
     const welcomeDiv = document.createElement('div');
     welcomeDiv.className = 'welcome-message';
     welcomeDiv.innerHTML = `
-        <h2>对话已开始！</h2>
-        <p>请描述您的需求，三个AI代理将为您提供建议。</p>
+        <h2>Chat Started!</h2>
+        <p>Describe your needs, and three AI agents will provide advice.</p>
     `;
     chatMessages.appendChild(welcomeDiv);
 }
 
 // Clear chat
 function clearChat() {
-    if (confirm('确定要清空当前对话吗？')) {
+    if (confirm('Are you sure you want to clear the current conversation?')) {
         chatMessages.innerHTML = '';
         addWelcomeMessage();
         currentRoomId = null;
         sessionInfo.style.display = 'none';
+        
+        // Reset and show start button with animation
         startButton.style.display = 'inline-block';
+        anime({
+            targets: startButton,
+            scale: [0.8, 1],
+            opacity: [0, 1],
+            duration: 400,
+            easing: 'spring(1, 80, 10, 0)'
+        });
+        
+        // Hide clear button
         clearButton.style.display = 'none';
+        
+        // Disable input
         messageInput.disabled = true;
         sendButton.disabled = true;
     }
@@ -282,7 +322,6 @@ async function loadHistory() {
     if (!currentRoomId) return;
     
     try {
-        showLoading();
         const response = await fetch(`${API_BASE}/history/${currentRoomId}`);
         const data = await response.json();
         
@@ -292,12 +331,9 @@ async function loadHistory() {
             const type = msg.character === 'user' ? 'user' : 'agent';
             addMessage(agentKey, msg.txt, type);
         });
-        
-        hideLoading();
     } catch (error) {
         console.error('Error loading history:', error);
-        alert('加载历史记录失败');
-        hideLoading();
+        alert('Failed to load chat history.');
     }
 }
 
@@ -347,27 +383,37 @@ function scrollToBottom() {
 }
 
 // Show/hide loading overlay with anime.js animation
-function showLoading() {
-    loadingOverlay.style.display = 'flex';
-    loadingOverlay.style.opacity = '0';
-    anime({
-        targets: loadingOverlay,
-        opacity: [0, 1],
-        duration: 300,
-        easing: 'easeOutQuad'
-    });
+function showTypingIndicator() {
+    const typingIndicator = document.getElementById('typingIndicator');
+    if (typingIndicator) {
+        typingIndicator.style.display = 'flex';
+        // Scroll to bottom to show typing indicator
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        
+        anime({
+            targets: typingIndicator,
+            opacity: [0, 1],
+            translateY: [10, 0],
+            duration: 300,
+            easing: 'easeOutQuad'
+        });
+    }
 }
 
-function hideLoading() {
-    anime({
-        targets: loadingOverlay,
-        opacity: [1, 0],
-        duration: 300,
-        easing: 'easeInQuad',
-        complete: function() {
-            loadingOverlay.style.display = 'none';
-        }
-    });
+function hideTypingIndicator() {
+    const typingIndicator = document.getElementById('typingIndicator');
+    if (typingIndicator) {
+        anime({
+            targets: typingIndicator,
+            opacity: [1, 0],
+            translateY: [0, -10],
+            duration: 300,
+            easing: 'easeInQuad',
+            complete: function() {
+                typingIndicator.style.display = 'none';
+            }
+        });
+    }
 }
 
 // Enter key to send message
@@ -411,7 +457,7 @@ async function checkHealth() {
         console.log('API Health:', data);
     } catch (error) {
         console.error('API not available:', error);
-        alert('无法连接到服务器，请确保后端服务正在运行 (http://localhost:5000)');
+        alert('Cannot connect to server. Please ensure the backend service is running.');
     }
 }
 
@@ -632,11 +678,11 @@ async function initStartupLoader() {
     // Simulate loading progress
     let progress = 0;
     const steps = [
-        { percent: 20, status: '正在加载配置...' },
-        { percent: 40, status: '正在初始化代理...' },
-        { percent: 60, status: '正在连接服务器...' },
-        { percent: 80, status: '正在准备界面...' },
-        { percent: 100, status: '加载完成！' }
+        { percent: 20, status: 'Loading configuration...' },
+        { percent: 40, status: 'Initializing agents...' },
+        { percent: 60, status: 'Connecting to server...' },
+        { percent: 80, status: 'Preparing interface...' },
+        { percent: 100, status: 'Complete!' }
     ];
     
     let currentStep = 0;
@@ -685,8 +731,8 @@ async function initStartupLoader() {
                             loader.classList.add('hidden');
                             document.body.classList.remove('loading');
                             
-                            // Start page animations
-                            initPageAnimations();
+                            // Show scene selector instead of going directly to chat
+                            showSceneSelector();
                         }
                     });
                 }, 500);
@@ -699,52 +745,174 @@ async function initStartupLoader() {
 }
 
 function initPageAnimations() {
-    // Animate header
+    // 页面初始化动画已移除 - 元素直接显示
+    // Page initialization animations removed - elements show directly
+    // ページ初期化アニメーションを削除 - 要素は直接表示
+}
+
+// Scene Selector Functions
+async function loadScenes() {
+    try {
+        const response = await fetch('/scenes_config.json');
+        if (!response.ok) {
+            throw new Error('Failed to load scenes');
+        }
+        scenesData = await response.json();
+        return scenesData;
+    } catch (error) {
+        console.error('Error loading scenes:', error);
+        // Fallback to default scene
+        return {
+            scenes: [{
+                id: 'laptop_purchase',
+                title: 'Laptop Purchase Advisory',
+                description: 'Professional advice for Black Friday laptop shopping',
+                icon: '💻',
+                color: '#667eea'
+            }]
+        };
+    }
+}
+
+function renderSceneCards(scenes) {
+    const grid = document.getElementById('sceneCardsGrid');
+    if (!grid) return;
+    
+    grid.innerHTML = '';
+    
+    scenes.forEach((scene, index) => {
+        const card = document.createElement('div');
+        card.className = 'scene-card';
+        card.style.setProperty('--scene-color', scene.color);
+        card.style.setProperty('--scene-color-alpha', scene.color + '33');
+        card.dataset.sceneId = scene.id;
+        
+        card.innerHTML = `
+            <div class="scene-icon">${scene.icon}</div>
+            <div class="scene-title">${scene.title}</div>
+            <div class="scene-description">${scene.description}</div>
+        `;
+        
+        card.addEventListener('click', () => selectScene(scene));
+        grid.appendChild(card);
+    });
+}
+
+async function showSceneSelector() {
+    // Load scenes first
+    const data = await loadScenes();
+    renderSceneCards(data.scenes);
+    
+    const sceneSelector = document.getElementById('sceneSelector');
+    if (!sceneSelector) return;
+    
+    sceneSelector.classList.add('active');
+    const cards = sceneSelector.querySelectorAll('.scene-card');
+    
+    // Fade in scene selector background
     anime({
-        targets: 'header h1',
-        translateY: [-30, 0],
+        targets: sceneSelector,
         opacity: [0, 1],
+        duration: 500,
+        easing: 'easeOutQuad'
+    });
+    
+    // Animate scene cards simultaneously with stagger - smoother!
+    anime({
+        targets: cards,
+        opacity: [0, 1],
+        translateY: [40, 0],
+        scale: [0.95, 1],
+        delay: anime.stagger(80, {start: 300}),
+        duration: 500,
+        easing: 'spring(1, 80, 10, 0)',
+        complete: () => {
+            // Enable hover transitions after animation
+            cards.forEach(card => card.classList.add('animated'));
+        }
+    });
+}
+
+function selectScene(scene) {
+    selectedScene = scene;
+    console.log('Selected scene:', scene);
+    
+    const sceneSelector = document.getElementById('sceneSelector');
+    const card = document.querySelector(`.scene-card[data-scene-id="${scene.id}"]`);
+    
+    if (card) {
+        // Mark card as selected
+        card.classList.add('selected');
+        
+        // Scale up and glow effect
+        anime({
+            targets: card,
+            scale: [1, 1.1],
+            duration: 300,
+            easing: 'easeOutQuad'
+        });
+    }
+    
+    // Wait a bit, then transition to chat interface
+    setTimeout(() => {
+        // Fade out all other cards
+        const allCards = document.querySelectorAll('.scene-card');
+        anime({
+            targets: Array.from(allCards).filter(c => c !== card),
+            opacity: [1, 0],
+            scale: [1, 0.9],
+            duration: 400,
+            easing: 'easeInQuad'
+        });
+        
+        // Fade out scene selector
+        anime({
+            targets: sceneSelector,
+            opacity: [1, 0],
+            duration: 600,
+            delay: 200,
+            easing: 'easeInQuad',
+            complete: () => {
+                sceneSelector.classList.remove('active');
+                sceneSelector.style.display = 'none';
+                
+                // Show chat interface with animation
+                showChatInterface();
+            }
+        });
+    }, 800);
+}
+
+function showChatInterface() {
+    const container = document.querySelector('.container');
+    const header = document.querySelector('header');
+    const sidebar = document.querySelector('.sidebar');
+    const chatMain = document.querySelector('.chat-main');
+    
+    document.body.style.overflow = 'hidden';
+    
+    // Set initial opacity for child elements
+    if (header) header.style.opacity = '0';
+    if (sidebar) sidebar.style.opacity = '0';
+    if (chatMain) chatMain.style.opacity = '0';
+    
+    // Animate container - fade in and slide up
+    anime({
+        targets: container,
+        opacity: [0, 1],
+        translateY: [50, 0],
         duration: 800,
-        easing: 'spring(1, 80, 10, 0)'
+        easing: 'easeOutCubic'
     });
     
+    // Animate child elements with delay - stagger effect
     anime({
-        targets: 'header .subtitle',
-        translateY: [-20, 0],
+        targets: [header, sidebar, chatMain],
         opacity: [0, 1],
-        duration: 800,
-        easing: 'spring(1, 80, 10, 0)',
-        delay: 200
-    });
-    
-    // Animate agent cards
-    anime({
-        targets: '.agent-card',
-        translateX: [-30, 0],
-        opacity: [0, 1],
-        duration: 600,
-        easing: 'spring(1, 80, 10, 0)',
-        delay: anime.stagger(100)
-    });
-    
-    // Animate welcome message
-    anime({
-        targets: '.welcome-message',
-        scale: [0.9, 1],
-        opacity: [0, 1],
-        duration: 600,
-        easing: 'spring(1, 80, 10, 0)',
-        delay: 500
-    });
-    
-    // Animate start button
-    anime({
-        targets: startButton,
-        scale: [0.8, 1],
-        opacity: [0, 1],
-        duration: 600,
-        easing: 'spring(1, 80, 10, 0)',
-        delay: 700
+        translateY: [30, 0],
+        delay: anime.stagger(150, {start: 400}),
+        duration: 700,
+        easing: 'easeOutCubic'
     });
 }
 

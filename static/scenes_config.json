@@ -1,0 +1,33 @@
+{
+  "scenes": [
+    {
+      "id": "laptop_purchase",
+      "title": "Laptop Purchase Advisory",
+      "description": "Professional advice for Black Friday laptop shopping. Three AI agents analyze from different perspectives.",
+      "icon": "💻",
+      "color": "#667eea"
+    },
+    {
+      "id": "phone_purchase",
+      "title": "Smartphone Purchase Advisory",
+      "description": "Recommend the best smartphone for you, considering performance, price and usage scenarios.",
+      "icon": "📱",
+      "color": "#f093fb"
+    },
+    {
+      "id": "gaming_setup",
+      "title": "Gaming Setup Advisory",
+      "description": "Build the perfect gaming experience with comprehensive advice from graphics cards to peripherals.",
+      "icon": "🎮",
+      "color": "#4ecdc4"
+    },
+    {
+      "id": "home_office",
+      "title": "Home Office Setup Advisory",
+      "description": "Boost remote work efficiency by choosing the ideal office equipment combination.",
+      "icon": "🏠",
+      "color": "#ffd93d"
+    }
+  ]
+}
+

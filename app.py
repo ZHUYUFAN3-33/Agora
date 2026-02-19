@@ -75,9 +75,18 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 
 ensure_dir(LOG_DIR)
 
-# Initialize OpenAI clients
-client_chat = OpenAI(api_key=API_KEY)
-client_admin = OpenAI(api_key=API_KEY)
+# Initialize OpenAI clients (will be initialized on first use)
+client_chat = None
+client_admin = None
+
+def get_openai_clients():
+    """Lazy initialization of OpenAI clients"""
+    global client_chat, client_admin
+    if client_chat is None:
+        client_chat = OpenAI(api_key=API_KEY)
+    if client_admin is None:
+        client_admin = OpenAI(api_key=API_KEY)
+    return client_chat, client_admin
 
 # Load scene and agent profiles
 scene = read_text(SCENE_FILE) if os.path.exists(SCENE_FILE) else ""
@@ -144,6 +153,12 @@ def script_js():
     """Serve JavaScript file"""
     return send_from_directory(STATIC_FOLDER, 'script.js', mimetype='application/javascript')
 
+@app.route('/Assets/<path:filename>')
+def serve_assets(filename):
+    """Serve files from Assets folder"""
+    assets_folder = os.path.join(BASE_DIR, 'Assets')
+    return send_from_directory(assets_folder, filename)
+
 @app.route('/api/start', methods=['POST'])
 def start_chat():
     """Start a new chat session"""
@@ -199,6 +214,9 @@ def send_message():
     
     session["bots_since_user"] = 0
     session["turn_idx"] += 1
+    
+    # Initialize OpenAI clients on first use
+    get_openai_clients()
     
     # Get agent responses
     responses = []

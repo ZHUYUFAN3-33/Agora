@@ -14,6 +14,10 @@ build/
 # Logs
 logs/
 *.log
+*.jsonl
+
+# Temp scripts
+git_commit.sh
 
 # IDE
 .vscode/

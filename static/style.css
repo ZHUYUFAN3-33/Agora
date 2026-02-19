@@ -322,12 +322,38 @@ header {
     color: #e0e0e0;
     padding: 20px 30px;
     border-bottom: 1px solid #2d2d2d;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 
 .header-content {
     display: flex;
     align-items: center;
     gap: 12px;
+}
+
+/* Settings (gear) button in header */
+.settings-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    color: rgba(255,255,255,0.55);
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.2s, color 0.2s, transform 0.3s;
+}
+
+.settings-btn:hover {
+    background: rgba(78,205,196,0.15);
+    color: #4ecdc4;
+    border-color: rgba(78,205,196,0.4);
+    transform: rotate(30deg);
 }
 
 .header-icon {
@@ -1072,6 +1098,149 @@ header h1 {
     header h1 {
         font-size: 1.8em;
     }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   NICKNAME SETTINGS MODAL
+═══════════════════════════════════════════════════════════════ */
+.nickname-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 900;
+    backdrop-filter: blur(3px);
+}
+
+.nickname-modal-overlay.open { display: block; }
+
+.nickname-modal {
+    position: fixed;
+    top: 72px;
+    right: 24px;
+    width: 320px;
+    background: #1e1e2e;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 16px;
+    z-index: 901;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    transform: translateY(-10px) scale(0.97);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+.nickname-modal.open {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+    pointer-events: all;
+}
+
+.nickname-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.nickname-modal-header h3 {
+    margin: 0;
+    font-size: 0.95em;
+    color: #fff;
+    font-weight: 600;
+}
+
+.nickname-close-btn {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.4);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+}
+
+.nickname-close-btn:hover {
+    color: #fff;
+    background: rgba(255,255,255,0.1);
+}
+
+.nickname-modal-body {
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.nickname-note {
+    font-size: 0.75em;
+    color: rgba(255,255,255,0.4);
+    margin: 0 0 4px;
+}
+
+.nickname-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.nickname-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    border: 1.5px solid;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.nickname-avatar img { border-radius: 6px; }
+
+.nickname-input {
+    flex: 1;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.88em;
+    padding: 8px 10px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.nickname-input:focus {
+    border-color: rgba(78,205,196,0.6);
+}
+
+.nickname-input::placeholder { color: rgba(255,255,255,0.25); }
+
+.nickname-reset-btn {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.3);
+    font-size: 1em;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+    flex-shrink: 0;
+}
+
+.nickname-reset-btn:hover {
+    color: #4ecdc4;
+    background: rgba(78,205,196,0.1);
+}
+
+.nickname-modal-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding: 12px 18px 16px;
+    border-top: 1px solid rgba(255,255,255,0.08);
 }
 
 /* ═══════════════════════════════════════════════════════════════

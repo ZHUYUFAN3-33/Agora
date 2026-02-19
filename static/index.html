@@ -78,6 +78,12 @@
                     <p class="subtitle">Intelligent Consultation Platform</p>
                 </div>
             </div>
+            <button class="settings-btn" onclick="openNicknameSettings()" title="Rename Agents">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+            </button>
         </header>
 
         <div class="chat-container">
@@ -89,7 +95,7 @@
                             <img src="/Assets/AgentA.png" alt="Agent A" width="40" height="40">
                         </div>
                         <div class="agent-details">
-                            <strong>ChatbotA</strong>
+                            <strong id="agentDisplayName-A">ChatbotA</strong>
                             <span>Enthusiastic Advisor</span>
                         </div>
                         <svg class="agent-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -101,7 +107,7 @@
                             <img src="/Assets/AgentB.png" alt="Agent B" width="40" height="40">
                         </div>
                         <div class="agent-details">
-                            <strong>ChatbotB</strong>
+                            <strong id="agentDisplayName-B">ChatbotB</strong>
                             <span>Analytical Consultant</span>
                         </div>
                         <svg class="agent-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -113,7 +119,7 @@
                             <img src="/Assets/AgentC.png" alt="Agent C" width="40" height="40">
                         </div>
                         <div class="agent-details">
-                            <strong>ChatbotC</strong>
+                            <strong id="agentDisplayName-C">ChatbotC</strong>
                             <span>Skeptical Risk Guard</span>
                         </div>
                         <svg class="agent-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -151,10 +157,10 @@
                         <div class="emotion-target-selector">
                             <label class="emotion-target-label">Apply to</label>
                             <select id="emotionTargetSelect" onchange="onTargetChange()">
-                                <option value="all">🤖 All Agents</option>
-                                <option value="A">🔴 ChatbotA – Enthusiastic</option>
-                                <option value="B">🟢 ChatbotB – Analytical</option>
-                                <option value="C">🟡 ChatbotC – Skeptical</option>
+                                <option value="all">All Agents</option>
+                                <option value="A" id="emotionOption-A">ChatbotA</option>
+                                <option value="B" id="emotionOption-B">ChatbotB</option>
+                                <option value="C" id="emotionOption-C">ChatbotC</option>
                             </select>
                         </div>
 
@@ -339,6 +345,52 @@
                 <button class="btn-secondary" onclick="closeAgentConfig()">Cancel</button>
                 <button class="btn-primary" onclick="saveAgentConfig()">Save Config</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Nickname Settings Modal -->
+    <div class="nickname-modal-overlay" id="nicknameModalOverlay" onclick="closeNicknameSettings()"></div>
+    <div class="nickname-modal" id="nicknameModal">
+        <div class="nickname-modal-header">
+            <h3>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px; margin-right:6px;">
+                    <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                </svg>
+                Rename Agents
+            </h3>
+            <button class="nickname-close-btn" onclick="closeNicknameSettings()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+        <div class="nickname-modal-body">
+            <p class="nickname-note">Changes display names only — does not affect AI behavior.</p>
+            <div class="nickname-row">
+                <div class="nickname-avatar" style="background: rgba(255,107,107,0.15); border-color: #ff6b6b;">
+                    <img src="/Assets/AgentA.png" width="32" height="32">
+                </div>
+                <input type="text" id="nicknameA" class="nickname-input" placeholder="ChatbotA" maxlength="20">
+                <button class="nickname-reset-btn" onclick="resetNickname('A')" title="Reset to default">↩</button>
+            </div>
+            <div class="nickname-row">
+                <div class="nickname-avatar" style="background: rgba(78,205,196,0.15); border-color: #4ecdc4;">
+                    <img src="/Assets/AgentB.png" width="32" height="32">
+                </div>
+                <input type="text" id="nicknameB" class="nickname-input" placeholder="ChatbotB" maxlength="20">
+                <button class="nickname-reset-btn" onclick="resetNickname('B')" title="Reset to default">↩</button>
+            </div>
+            <div class="nickname-row">
+                <div class="nickname-avatar" style="background: rgba(255,217,61,0.15); border-color: #ffd93d;">
+                    <img src="/Assets/AgentC.png" width="32" height="32">
+                </div>
+                <input type="text" id="nicknameC" class="nickname-input" placeholder="ChatbotC" maxlength="20">
+                <button class="nickname-reset-btn" onclick="resetNickname('C')" title="Reset to default">↩</button>
+            </div>
+        </div>
+        <div class="nickname-modal-footer">
+            <button class="btn-secondary" onclick="closeNicknameSettings()">Cancel</button>
+            <button class="btn-primary" onclick="saveNicknameSettings()">Save</button>
         </div>
     </div>
 

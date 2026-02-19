@@ -47,13 +47,6 @@ function toggleEmotionMode() {
 
 function onTargetChange() {
     emotionTarget = document.getElementById('emotionTargetSelect').value;
-
-    // Update badge header to reflect which agent is targeted
-    const badge = document.getElementById('emotionBadge');
-    const targetColors = { all: null, A: '#ff6b6b', B: '#4ecdc4', C: '#ffd93d' };
-    const tc = targetColors[emotionTarget];
-    badge.style.outlineColor = tc || 'transparent';
-    badge.style.outline = tc ? `2px solid ${tc}` : 'none';
 }
 
 function resetEmotionBadge() {
@@ -141,6 +134,59 @@ function handleScroll(element) {
         element.classList.remove('scrolling');
     }, 1000);
 }
+
+// ─── Agent Display Names (user-editable) ──────────────────────────────────
+const DEFAULT_AGENT_NAMES = { A: 'ChatbotA', B: 'ChatbotB', C: 'ChatbotC' };
+let agentDisplayNames = { ...DEFAULT_AGENT_NAMES };
+
+function openNicknameSettings() {
+    document.getElementById('nicknameA').value = agentDisplayNames.A;
+    document.getElementById('nicknameB').value = agentDisplayNames.B;
+    document.getElementById('nicknameC').value = agentDisplayNames.C;
+    document.getElementById('nicknameModal').classList.add('open');
+    document.getElementById('nicknameModalOverlay').classList.add('open');
+}
+
+function closeNicknameSettings() {
+    document.getElementById('nicknameModal').classList.remove('open');
+    document.getElementById('nicknameModalOverlay').classList.remove('open');
+}
+
+function resetNickname(key) {
+    document.getElementById(`nickname${key}`).value = DEFAULT_AGENT_NAMES[key];
+}
+
+function saveNicknameSettings() {
+    const newA = document.getElementById('nicknameA').value.trim() || DEFAULT_AGENT_NAMES.A;
+    const newB = document.getElementById('nicknameB').value.trim() || DEFAULT_AGENT_NAMES.B;
+    const newC = document.getElementById('nicknameC').value.trim() || DEFAULT_AGENT_NAMES.C;
+
+    agentDisplayNames = { A: newA, B: newB, C: newC };
+
+    // 1. Sidebar agent cards
+    document.getElementById('agentDisplayName-A').textContent = newA;
+    document.getElementById('agentDisplayName-B').textContent = newB;
+    document.getElementById('agentDisplayName-C').textContent = newC;
+
+    // 2. Emotion dropdown options
+    document.getElementById('emotionOption-A').textContent = newA;
+    document.getElementById('emotionOption-B').textContent = newB;
+    document.getElementById('emotionOption-C').textContent = newC;
+
+    // 3. agentConfig (used in chat bubbles)
+    agentConfig.A.name = newA;
+    agentConfig.B.name = newB;
+    agentConfig.C.name = newC;
+
+    // 4. Update existing chat bubbles already on screen
+    document.querySelectorAll('.message-agent-name[data-agent-key]').forEach(el => {
+        const key = el.dataset.agentKey;
+        if (agentDisplayNames[key]) el.textContent = agentDisplayNames[key];
+    });
+
+    closeNicknameSettings();
+}
+// ──────────────────────────────────────────────────────────────────────────────
 
 // Agent colors and icons
 const agentConfig = {
@@ -366,11 +412,12 @@ function addMessage(agentKey, text, type) {
     // Use icon from agentConfig (now contains img tags for PNG files)
     const iconHtml = config.icon || '';
     
+    const nameAttr = type === 'agent' ? `class="message-agent-name" data-agent-key="${agentKey}"` : '';
     messageDiv.innerHTML = `
         <div class="message-bubble">
             <div class="message-header">
                 ${iconHtml}
-                <span>${type === 'agent' ? config.name : config.name}</span>
+                <span ${nameAttr}>${config.name}</span>
                 <span class="message-time">${time}</span>
             </div>
             <div class="message-content">${formatMessage(text)}</div>

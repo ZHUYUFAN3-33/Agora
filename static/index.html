@@ -147,6 +147,17 @@
                     </div>
 
                     <div class="emotion-controls" id="emotionControls">
+                        <!-- Agent target selector -->
+                        <div class="emotion-target-selector">
+                            <label class="emotion-target-label">Apply to</label>
+                            <select id="emotionTargetSelect" onchange="onTargetChange()">
+                                <option value="all">🤖 All Agents</option>
+                                <option value="A">🔴 ChatbotA – Enthusiastic</option>
+                                <option value="B">🟢 ChatbotB – Analytical</option>
+                                <option value="C">🟡 ChatbotC – Skeptical</option>
+                            </select>
+                        </div>
+
                         <!-- Current emotion badge -->
                         <div class="emotion-badge" id="emotionBadge">
                             <span class="emotion-emoji" id="emotionEmoji">😐</span>

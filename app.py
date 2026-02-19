@@ -213,8 +213,11 @@ def send_message():
     
     session = chat_sessions[room_id]
 
-    # Emotion mode: optional emotion_tag from frontend
-    emotion_tag = data.get("emotion_tag")  # e.g. "joy", "anger", None
+    # Emotion mode: optional emotion_tag + emotion_target from frontend
+    emotion_tag    = data.get("emotion_tag")     # e.g. "joy", "anger", None
+    emotion_target = data.get("emotion_target")  # "all" | "A" | "B" | "C" | None
+
+    # Load emotion prompt text (shared)
     emotion_prompt = ""
     if emotion_tag and EMOTION_MODULE_LOADED:
         ep_path = os.path.join(BASE_DIR, "emotion block", "prompts", f"{emotion_tag}.txt")
@@ -222,18 +225,21 @@ def send_message():
             with open(ep_path, "r", encoding="utf-8") as _f:
                 emotion_prompt = _f.read()
 
-    # Effective scene: append emotion prompt if active
-    effective_scene = scene
-    if emotion_prompt:
-        effective_scene = (
-            scene
-            + "\n\n"
-            + "=" * 60
-            + "\nEMOTIONAL CONTEXT — apply to ALL agents this turn:\n"
-            + "=" * 60
-            + "\n"
-            + emotion_prompt
-        )
+    def get_scene_for_agent(agent_key: str) -> str:
+        """Return scene string with emotion prompt injected if this agent is targeted."""
+        if not emotion_prompt:
+            return scene
+        if emotion_target in (None, "all", agent_key):
+            return (
+                scene
+                + "\n\n"
+                + "=" * 60
+                + f"\nEMOTIONAL CONTEXT — {emotion_tag.upper()} (applied to this agent):\n"
+                + "=" * 60
+                + "\n"
+                + emotion_prompt
+            )
+        return scene
 
     # Add user message to history
     user_msg = {
@@ -279,7 +285,7 @@ def send_message():
             nxt, raw, err = call_admin_onepass(
                 client=client_admin,
                 model="gpt-4o",
-                scene=effective_scene,
+                scene=scene,  # admin sees base scene (no emotion bias in speaker selection)
                 agents=agent_list,
                 history=session["history"],
                 known_user_facts=session["known_user_facts"],
@@ -317,7 +323,7 @@ def send_message():
         txt = call_chat_agent(
             client=client_chat,
             model="gpt-4o",
-            scene=effective_scene,
+            scene=get_scene_for_agent(speaker),
             agent=agent,
             history=session["history"],
             known_user_facts=session["known_user_facts"],
@@ -358,7 +364,8 @@ def send_message():
         "user_message": user_message,
         "responses": responses,
         "known_facts": list(session["known_user_facts"].values()),
-        "emotion_tag": emotion_tag,
+        "emotion_tag":    emotion_tag,
+        "emotion_target": emotion_target,
     })
 
 

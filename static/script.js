@@ -8,6 +8,7 @@ const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
 // ─── Emotion Mode State ────────────────────────────────────────────────────
 let emotionModeOn = false;
 let currentEmotionTag = null;   // "joy" | "anger" | "fear" | "sadness" | "surprise" | "disgust"
+let emotionTarget = 'all';      // "all" | "A" | "B" | "C"
 let emotionSliderDebounce = null;
 
 const EMOTION_EMOJI = {
@@ -42,6 +43,17 @@ function toggleEmotionMode() {
         currentEmotionTag = null;
         resetEmotionBadge();
     }
+}
+
+function onTargetChange() {
+    emotionTarget = document.getElementById('emotionTargetSelect').value;
+
+    // Update badge header to reflect which agent is targeted
+    const badge = document.getElementById('emotionBadge');
+    const targetColors = { all: null, A: '#ff6b6b', B: '#4ecdc4', C: '#ffd93d' };
+    const tc = targetColors[emotionTarget];
+    badge.style.outlineColor = tc || 'transparent';
+    badge.style.outline = tc ? `2px solid ${tc}` : 'none';
 }
 
 function resetEmotionBadge() {
@@ -301,7 +313,8 @@ async function sendMessage() {
             body: JSON.stringify({
                 room_id: currentRoomId,
                 message: message,
-                emotion_tag: emotionModeOn ? currentEmotionTag : null,
+                emotion_tag:    emotionModeOn ? currentEmotionTag : null,
+                emotion_target: emotionModeOn ? emotionTarget : null,
             })
         });
         

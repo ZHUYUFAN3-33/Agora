@@ -380,14 +380,22 @@ header h1 {
     display: flex;
     flex: 1;
     overflow: hidden;
+    position: relative;
+}
+.chat-container.sidebar-hidden {
+    padding-left: 40px;
 }
 
 .sidebar {
     width: 280px;
+    min-width: 280px;
     background: #1e1e1e;
     border-right: 1px solid #2d2d2d;
     padding: 20px;
     overflow-y: auto;
+    position: relative;
+    transition: width 0.3s ease, min-width 0.3s ease, padding 0.3s ease, opacity 0.3s ease, border 0.3s ease;
+    flex-shrink: 0;
 }
 
 .agent-info h3 {
@@ -1504,4 +1512,363 @@ header h1 {
 .prob-bar-fill.sadness  { background: linear-gradient(90deg, #4ecdc4, #2980b9); }
 .prob-bar-fill.surprise { background: linear-gradient(90deg, #f97316, #fb923c); }
 .prob-bar-fill.disgust  { background: linear-gradient(90deg, #84cc16, #4ade80); }
+
+/* ─────────────────────────────────────────────────────────────
+   Emotion Text Input
+───────────────────────────────────────────────────────────── */
+.emotion-text-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    color: #e0e0e0;
+    font-size: 12px;
+    padding: 8px 10px;
+    resize: none;
+    outline: none;
+    font-family: inherit;
+    line-height: 1.5;
+    transition: border-color 0.2s;
+    margin-bottom: 8px;
+}
+.emotion-text-input::placeholder { color: rgba(255,255,255,0.3); }
+.emotion-text-input:focus { border-color: rgba(255,255,255,0.3); }
+
+/* ─────────────────────────────────────────────────────────────
+   Emotion Example Utterances
+───────────────────────────────────────────────────────────── */
+.emotion-examples {
+    margin-top: 8px;
+    background: rgba(255,255,255,0.04);
+    border-left: 3px solid rgba(255,255,255,0.15);
+    border-radius: 0 8px 8px 0;
+    padding: 8px 10px;
+}
+.emotion-examples-label {
+    font-size: 11px;
+    color: rgba(255,255,255,0.45);
+    margin: 0 0 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.emotion-example-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.emotion-example-list li {
+    font-size: 11.5px;
+    color: rgba(255,255,255,0.65);
+    font-style: italic;
+    line-height: 1.4;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Sidebar Collapse Button
+───────────────────────────────────────────────────────────── */
+.sidebar-collapse-btn {
+    position: absolute;
+    top: 50%;
+    right: -14px;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #1e2030;
+    border: 1px solid rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 20;
+    transition: background 0.2s, color 0.2s, opacity 0.2s;
+    opacity: 0;
+}
+.sidebar:hover .sidebar-collapse-btn,
+.sidebar-collapse-btn:focus { opacity: 1; }
+.sidebar-collapse-btn:hover { background: #2a2d3e; color: #fff; }
+
+.sidebar.collapsed {
+    width: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden;
+    padding: 0 !important;
+    border: none !important;
+}
+
+.sidebar-expand-btn {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #1e2030;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: rgba(255,255,255,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 20;
+    transition: background 0.2s, color 0.2s;
+}
+.sidebar-expand-btn:hover { background: #2a2d3e; color: #fff; }
+
+/* ─────────────────────────────────────────────────────────────
+   Agent Customizer Screen
+───────────────────────────────────────────────────────────── */
+.agent-customizer-container {
+    position: fixed;
+    inset: 0;
+    background: #0d0f1a;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow-y: auto;
+    z-index: 900;
+    padding: 24px 16px 48px;
+}
+
+.agent-customizer-content {
+    width: 100%;
+    max-width: 960px;
+}
+
+.customizer-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+}
+
+.customizer-back-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.7);
+    padding: 8px 14px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s, color 0.2s;
+}
+.customizer-back-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+.customizer-title-wrap {
+    flex: 1;
+}
+.customizer-title-wrap h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0 0 2px;
+}
+.customizer-title-wrap p {
+    font-size: 13px;
+    color: rgba(255,255,255,0.45);
+    margin: 0;
+}
+
+.customizer-start-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 22px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.15s;
+}
+.customizer-start-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+
+/* Cards grid */
+.customizer-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.customizer-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+}
+.customizer-card:hover { border-color: rgba(255,255,255,0.16); }
+
+.cust-card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    cursor: pointer;
+    user-select: none;
+}
+.cust-card-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 2px solid;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+.cust-card-info {
+    flex: 1;
+    min-width: 0;
+}
+.cust-card-info strong {
+    display: block;
+    font-size: 14px;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cust-card-info span {
+    font-size: 11px;
+    color: rgba(255,255,255,0.4);
+}
+.cust-card-chevron {
+    color: rgba(255,255,255,0.35);
+    flex-shrink: 0;
+    transition: transform 0.25s ease;
+}
+
+/* Card body */
+.cust-card-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.35s ease, padding 0.25s ease;
+    border-top: 0 solid rgba(255,255,255,0.08);
+    padding: 0 16px;
+}
+.cust-card-body.open {
+    max-height: 1200px;
+    padding: 0 16px 16px;
+    border-top-width: 1px;
+}
+
+.cust-section {
+    margin-top: 14px;
+}
+.cust-section:first-child { margin-top: 14px; }
+
+.cust-label {
+    display: block;
+    font-size: 11.5px;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+.cust-name-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: #e0e0e0;
+    font-size: 13px;
+    padding: 7px 10px;
+    outline: none;
+    font-family: inherit;
+    transition: border-color 0.2s;
+}
+.cust-name-input:focus { border-color: rgba(255,255,255,0.3); }
+
+.cust-section-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+.cust-section-toggle-row .cust-label { margin-bottom: 0; }
+
+/* Collapsible sub-bodies (emotion + decision in customizer) */
+.cust-emotion-body,
+.cust-decision-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+}
+.cust-emotion-body.active,
+.cust-decision-body.active {
+    max-height: 800px;
+}
+
+.cust-prompt-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    color: #e0e0e0;
+    font-size: 12px;
+    padding: 8px 10px;
+    resize: vertical;
+    min-height: 72px;
+    outline: none;
+    font-family: inherit;
+    line-height: 1.5;
+    transition: border-color 0.2s;
+}
+.cust-prompt-textarea::placeholder { color: rgba(255,255,255,0.25); }
+.cust-prompt-textarea:focus { border-color: rgba(255,255,255,0.3); }
+
+/* Add Agent card */
+.customizer-add-card {
+    border-style: dashed !important;
+    border-color: rgba(255,255,255,0.12) !important;
+    min-height: 130px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+}
+.cust-add-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    color: rgba(255,255,255,0.25);
+    padding: 24px;
+    text-align: center;
+}
+.cust-add-inner span { font-size: 13px; font-weight: 500; }
+.cust-add-inner p { font-size: 11px; margin: 0; color: rgba(255,255,255,0.2); }
+
+/* Decision controls collapse (same as emotion-controls) */
+#decisionControls {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s ease, opacity 0.3s ease, margin-top 0.3s ease;
+    opacity: 0;
+    margin-top: 0;
+}
+#decisionControls.active {
+    max-height: 400px;
+    opacity: 1;
+    margin-top: 14px;
+}
 

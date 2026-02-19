@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>多智能体聊天机器人 - Multi-Agent Chatbot</title>
-    <link rel="stylesheet" href="/style.css?v=3">
+    <link rel="stylesheet" href="/style.css?v=4">
     <script src="https://cdn.jsdelivr.net/npm/animejs@3.2.2/lib/anime.min.js"></script>
     <script type="module">
         import { animate, svg, stagger } from 'https://esm.sh/animejs';
@@ -67,6 +67,131 @@
         </div>
     </div>
 
+    <!-- Agent Customizer Screen -->
+    <div class="agent-customizer-container" id="agentCustomizer" style="display:none;">
+        <div class="agent-customizer-content">
+            <div class="customizer-header">
+                <button class="customizer-back-btn" onclick="backToScenes()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                    Back
+                </button>
+                <div class="customizer-title-wrap">
+                    <h2>Customize Agents</h2>
+                    <p>Configure agents before starting the conversation</p>
+                </div>
+                <button class="btn-primary customizer-start-btn" onclick="startChatFromCustomizer()">
+                    Start Chat
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+            </div>
+
+            <div class="customizer-cards" id="customizerCards">
+                <!-- Agent A Card -->
+                <div class="customizer-card" id="custCard-A">
+                    <div class="cust-card-header" onclick="toggleCustCard('A')">
+                        <div class="cust-card-avatar" style="border-color:#ff6b6b; background:rgba(255,107,107,0.1)">
+                            <img src="/Assets/AgentA.png" width="36" height="36">
+                        </div>
+                        <div class="cust-card-info">
+                            <strong id="custCardName-A">ChatbotA</strong>
+                            <span>Enthusiastic Advisor</span>
+                        </div>
+                        <svg class="cust-card-chevron" id="custChevron-A" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="cust-card-body" id="custBody-A">
+                        <!-- Display Name -->
+                        <div class="cust-section">
+                            <label class="cust-label">Display Name</label>
+                            <input type="text" class="cust-name-input" id="custName-A" value="ChatbotA" maxlength="20" oninput="onCustNameChange('A')">
+                        </div>
+                        <!-- Emotion -->
+                        <div class="cust-section">
+                            <div class="cust-section-toggle-row">
+                                <label class="cust-label">🎭 Emotion Mode</label>
+                                <label class="toggle-switch"><input type="checkbox" id="custEmotionToggle-A" onchange="toggleCustEmotion('A')"><span class="toggle-slider"></span></label>
+                            </div>
+                            <div class="cust-emotion-body" id="custEmotionBody-A">
+                                <textarea class="emotion-text-input" id="custEmotionText-A" placeholder="Describe the emotion context..." rows="2" oninput="onCustEmotionTextChange('A')"></textarea>
+                                <div class="emotion-badge" id="custEmotionBadge-A"><span class="emotion-emoji" id="custEmotionEmoji-A">😐</span><div class="emotion-label-wrap"><span class="emotion-name" id="custEmotionName-A">Neutral</span><span class="emotion-confidence" id="custEmotionConf-A">–</span></div></div>
+                                <div class="emotion-sliders">
+                                    <div class="slider-row"><span class="slider-label">😊 Valence</span><input type="range" class="emotion-slider" id="custValence-A" min="0" max="100" value="50" oninput="onCustSliderChange('A')"><span class="slider-val" id="custValenceVal-A">0.5</span></div>
+                                    <div class="slider-row"><span class="slider-label">⚡ Arousal</span><input type="range" class="emotion-slider" id="custArousal-A" min="0" max="100" value="50" oninput="onCustSliderChange('A')"><span class="slider-val" id="custArousalVal-A">0.5</span></div>
+                                    <div class="slider-row"><span class="slider-label">🎯 Control</span><input type="range" class="emotion-slider" id="custControl-A" min="0" max="100" value="50" oninput="onCustSliderChange('A')"><span class="slider-val" id="custControlVal-A">0.5</span></div>
+                                </div>
+                                <div class="emotion-examples" id="custEmotionExamples-A" style="display:none;"><p class="emotion-examples-label">Example phrases:</p><ul class="emotion-example-list" id="custEmotionExampleList-A"></ul></div>
+                            </div>
+                        </div>
+                        <!-- Additional Prompt -->
+                        <div class="cust-section">
+                            <label class="cust-label">📝 Additional Prompt</label>
+                            <textarea class="cust-prompt-textarea" id="custPrompt-A" rows="4" placeholder="Add extra rules or instructions for this agent..."></textarea>
+                        </div>
+                        <!-- Decision Params -->
+                        <div class="cust-section">
+                            <div class="cust-section-toggle-row">
+                                <label class="cust-label">🧠 Decision Summary</label>
+                                <label class="toggle-switch"><input type="checkbox" id="custDecisionToggle-A" onchange="toggleCustDecision('A')"><span class="toggle-slider"></span></label>
+                            </div>
+                            <div class="cust-decision-body" id="custDecisionBody-A">
+                                <div class="slider-row"><span class="slider-label">Trigger after</span><input type="range" class="emotion-slider" id="custDecisionTrigger-A" min="2" max="15" value="5" oninput="onCustDecisionChange('A')"><span class="slider-val" id="custDecisionTriggerVal-A">5 turns</span></div>
+                                <div class="emotion-target-selector" style="margin-top:8px;"><label class="emotion-target-label">Style</label><select id="custDecisionStyle-A"><option value="brief">Brief</option><option value="detailed">Detailed</option><option value="structured">Structured</option></select></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Agent B Card -->
+                <div class="customizer-card" id="custCard-B">
+                    <div class="cust-card-header" onclick="toggleCustCard('B')">
+                        <div class="cust-card-avatar" style="border-color:#4ecdc4; background:rgba(78,205,196,0.1)">
+                            <img src="/Assets/AgentB.png" width="36" height="36">
+                        </div>
+                        <div class="cust-card-info">
+                            <strong id="custCardName-B">ChatbotB</strong>
+                            <span>Analytical Consultant</span>
+                        </div>
+                        <svg class="cust-card-chevron" id="custChevron-B" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="cust-card-body" id="custBody-B">
+                        <div class="cust-section"><label class="cust-label">Display Name</label><input type="text" class="cust-name-input" id="custName-B" value="ChatbotB" maxlength="20" oninput="onCustNameChange('B')"></div>
+                        <div class="cust-section"><div class="cust-section-toggle-row"><label class="cust-label">🎭 Emotion Mode</label><label class="toggle-switch"><input type="checkbox" id="custEmotionToggle-B" onchange="toggleCustEmotion('B')"><span class="toggle-slider"></span></label></div><div class="cust-emotion-body" id="custEmotionBody-B"><textarea class="emotion-text-input" id="custEmotionText-B" placeholder="Describe the emotion context..." rows="2" oninput="onCustEmotionTextChange('B')"></textarea><div class="emotion-badge" id="custEmotionBadge-B"><span class="emotion-emoji" id="custEmotionEmoji-B">😐</span><div class="emotion-label-wrap"><span class="emotion-name" id="custEmotionName-B">Neutral</span><span class="emotion-confidence" id="custEmotionConf-B">–</span></div></div><div class="emotion-sliders"><div class="slider-row"><span class="slider-label">😊 Valence</span><input type="range" class="emotion-slider" id="custValence-B" min="0" max="100" value="50" oninput="onCustSliderChange('B')"><span class="slider-val" id="custValenceVal-B">0.5</span></div><div class="slider-row"><span class="slider-label">⚡ Arousal</span><input type="range" class="emotion-slider" id="custArousal-B" min="0" max="100" value="50" oninput="onCustSliderChange('B')"><span class="slider-val" id="custArousalVal-B">0.5</span></div><div class="slider-row"><span class="slider-label">🎯 Control</span><input type="range" class="emotion-slider" id="custControl-B" min="0" max="100" value="50" oninput="onCustSliderChange('B')"><span class="slider-val" id="custControlVal-B">0.5</span></div></div><div class="emotion-examples" id="custEmotionExamples-B" style="display:none;"><p class="emotion-examples-label">Example phrases:</p><ul class="emotion-example-list" id="custEmotionExampleList-B"></ul></div></div></div>
+                        <div class="cust-section"><label class="cust-label">📝 Additional Prompt</label><textarea class="cust-prompt-textarea" id="custPrompt-B" rows="4" placeholder="Add extra rules or instructions for this agent..."></textarea></div>
+                        <div class="cust-section"><div class="cust-section-toggle-row"><label class="cust-label">🧠 Decision Summary</label><label class="toggle-switch"><input type="checkbox" id="custDecisionToggle-B" onchange="toggleCustDecision('B')"><span class="toggle-slider"></span></label></div><div class="cust-decision-body" id="custDecisionBody-B"><div class="slider-row"><span class="slider-label">Trigger after</span><input type="range" class="emotion-slider" id="custDecisionTrigger-B" min="2" max="15" value="5" oninput="onCustDecisionChange('B')"><span class="slider-val" id="custDecisionTriggerVal-B">5 turns</span></div><div class="emotion-target-selector" style="margin-top:8px;"><label class="emotion-target-label">Style</label><select id="custDecisionStyle-B"><option value="brief">Brief</option><option value="detailed">Detailed</option><option value="structured">Structured</option></select></div></div></div>
+                    </div>
+                </div>
+
+                <!-- Agent C Card -->
+                <div class="customizer-card" id="custCard-C">
+                    <div class="cust-card-header" onclick="toggleCustCard('C')">
+                        <div class="cust-card-avatar" style="border-color:#ffd93d; background:rgba(255,217,61,0.1)">
+                            <img src="/Assets/AgentC.png" width="36" height="36">
+                        </div>
+                        <div class="cust-card-info">
+                            <strong id="custCardName-C">ChatbotC</strong>
+                            <span>Skeptical Risk Guard</span>
+                        </div>
+                        <svg class="cust-card-chevron" id="custChevron-C" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="cust-card-body" id="custBody-C">
+                        <div class="cust-section"><label class="cust-label">Display Name</label><input type="text" class="cust-name-input" id="custName-C" value="ChatbotC" maxlength="20" oninput="onCustNameChange('C')"></div>
+                        <div class="cust-section"><div class="cust-section-toggle-row"><label class="cust-label">🎭 Emotion Mode</label><label class="toggle-switch"><input type="checkbox" id="custEmotionToggle-C" onchange="toggleCustEmotion('C')"><span class="toggle-slider"></span></label></div><div class="cust-emotion-body" id="custEmotionBody-C"><textarea class="emotion-text-input" id="custEmotionText-C" placeholder="Describe the emotion context..." rows="2" oninput="onCustEmotionTextChange('C')"></textarea><div class="emotion-badge" id="custEmotionBadge-C"><span class="emotion-emoji" id="custEmotionEmoji-C">😐</span><div class="emotion-label-wrap"><span class="emotion-name" id="custEmotionName-C">Neutral</span><span class="emotion-confidence" id="custEmotionConf-C">–</span></div></div><div class="emotion-sliders"><div class="slider-row"><span class="slider-label">😊 Valence</span><input type="range" class="emotion-slider" id="custValence-C" min="0" max="100" value="50" oninput="onCustSliderChange('C')"><span class="slider-val" id="custValenceVal-C">0.5</span></div><div class="slider-row"><span class="slider-label">⚡ Arousal</span><input type="range" class="emotion-slider" id="custArousal-C" min="0" max="100" value="50" oninput="onCustSliderChange('C')"><span class="slider-val" id="custArousalVal-C">0.5</span></div><div class="slider-row"><span class="slider-label">🎯 Control</span><input type="range" class="emotion-slider" id="custControl-C" min="0" max="100" value="50" oninput="onCustSliderChange('C')"><span class="slider-val" id="custControlVal-C">0.5</span></div></div><div class="emotion-examples" id="custEmotionExamples-C" style="display:none;"><p class="emotion-examples-label">Example phrases:</p><ul class="emotion-example-list" id="custEmotionExampleList-C"></ul></div></div></div>
+                        <div class="cust-section"><label class="cust-label">📝 Additional Prompt</label><textarea class="cust-prompt-textarea" id="custPrompt-C" rows="4" placeholder="Add extra rules or instructions for this agent..."></textarea></div>
+                        <div class="cust-section"><div class="cust-section-toggle-row"><label class="cust-label">🧠 Decision Summary</label><label class="toggle-switch"><input type="checkbox" id="custDecisionToggle-C" onchange="toggleCustDecision('C')"><span class="toggle-slider"></span></label></div><div class="cust-decision-body" id="custDecisionBody-C"><div class="slider-row"><span class="slider-label">Trigger after</span><input type="range" class="emotion-slider" id="custDecisionTrigger-C" min="2" max="15" value="5" oninput="onCustDecisionChange('C')"><span class="slider-val" id="custDecisionTriggerVal-C">5 turns</span></div><div class="emotion-target-selector" style="margin-top:8px;"><label class="emotion-target-label">Style</label><select id="custDecisionStyle-C"><option value="brief">Brief</option><option value="detailed">Detailed</option><option value="structured">Structured</option></select></div></div></div>
+                    </div>
+                </div>
+
+                <!-- Add Custom Agent Card -->
+                <div class="customizer-card customizer-add-card">
+                    <div class="cust-add-inner">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                        <span>Add Custom Agent</span>
+                        <p>Coming soon</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="container">
         <header>
             <div class="header-content">
@@ -86,8 +211,13 @@
             </button>
         </header>
 
-        <div class="chat-container">
-            <div class="sidebar">
+        <div class="chat-container" id="chatContainer">
+            <div class="sidebar" id="sidebar">
+                <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebar()" title="Hide sidebar">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <polyline points="15 18 9 12 15 6"/>
+                    </svg>
+                </button>
                 <div class="agent-info">
                     <h3>AI Agents</h3>
                     <div class="agent-card" data-agent="A" onclick="openAgentConfig('A')">
@@ -164,6 +294,11 @@
                             </select>
                         </div>
 
+                        <!-- Emotion text input -->
+                        <textarea id="emotionTextInput" class="emotion-text-input"
+                            placeholder="Describe how you feel... (used to detect emotion)"
+                            rows="2" oninput="onEmotionTextChange()"></textarea>
+
                         <!-- Current emotion badge -->
                         <div class="emotion-badge" id="emotionBadge">
                             <span class="emotion-emoji" id="emotionEmoji">😐</span>
@@ -219,9 +354,63 @@
                                 <div class="prob-bar-track"><div class="prob-bar-fill disgust"></div></div>
                             </div>
                         </div>
+
+                        <!-- Example utterances -->
+                        <div class="emotion-examples" id="emotionExamples" style="display:none;">
+                            <p class="emotion-examples-label">Example phrases:</p>
+                            <ul class="emotion-example-list" id="emotionExampleList"></ul>
+                        </div>
                     </div>
                 </div>
+
+                <!-- Decision Summary Panel -->
+                <div class="emotion-mode-section" id="decisionSection">
+                    <div class="emotion-header">
+                        <h3>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px; margin-right:6px;">
+                                <circle cx="12" cy="12" r="10"/>
+                                <polyline points="12 6 12 12 16 14"/>
+                            </svg>
+                            Decision Summary
+                        </h3>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="decisionModeToggle" onchange="toggleDecisionMode()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="emotion-controls" id="decisionControls">
+                        <div class="slider-row">
+                            <span class="slider-label">Trigger after</span>
+                            <input type="range" class="emotion-slider" id="decisionTriggerSlider" min="2" max="15" value="5" oninput="onDecisionTriggerChange()">
+                            <span class="slider-val" id="decisionTriggerVal">5 turns</span>
+                        </div>
+                        <div class="emotion-target-selector" style="margin-top:8px;">
+                            <label class="emotion-target-label">Style</label>
+                            <select id="decisionStyleSelect">
+                                <option value="brief">Brief</option>
+                                <option value="detailed">Detailed</option>
+                                <option value="structured">Structured</option>
+                            </select>
+                        </div>
+                        <div class="emotion-target-selector" style="margin-top:8px;">
+                            <label class="emotion-target-label">Summarizer</label>
+                            <select id="decisionAgentSelect">
+                                <option value="auto">Auto</option>
+                                <option value="A" id="decisionOption-A">ChatbotA</option>
+                                <option value="B" id="decisionOption-B">ChatbotB</option>
+                                <option value="C" id="decisionOption-C">ChatbotC</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
             </div>
+            <!-- Sidebar expand button (shows when collapsed) -->
+            <button class="sidebar-expand-btn" id="sidebarExpandBtn" onclick="toggleSidebar()" title="Show sidebar" style="display:none;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <polyline points="9 18 15 12 9 6"/>
+                </svg>
+            </button>
 
             <div class="chat-main">
                 <div class="chat-messages" id="chatMessages">
@@ -394,7 +583,7 @@
         </div>
     </div>
 
-    <script src="/script.js?v=3"></script>
+    <script src="/script.js?v=4"></script>
 </body>
 </html>
 

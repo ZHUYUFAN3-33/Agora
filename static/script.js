@@ -72,7 +72,8 @@ function onSliderChange() {
     // Debounce API call
     clearTimeout(emotionSliderDebounce);
     emotionSliderDebounce = setTimeout(() => {
-        fetchEmotionAnalysis('', v, a, c);
+        const text = (document.getElementById('emotionTextInput') || {}).value || '';
+        fetchEmotionAnalysis(text, v, a, c);
     }, 120);
 }
 
@@ -104,15 +105,18 @@ function updateEmotionUI(data) {
     badge.style.borderColor = color;
     badge.style.background  = color + '18';
 
-    // Update prob bars
+    // Update prob bars (only in sidebar emotion section, not customizer)
     const probs = data.probabilities || {};
-    document.querySelectorAll('.prob-bar-row').forEach(row => {
+    document.querySelectorAll('#emotionProbBars .prob-bar-row').forEach(row => {
         const em   = row.dataset.emotion;
         const fill = row.querySelector('.prob-bar-fill');
         const pct  = Math.round((probs[em] || 0) * 100);
         fill.style.width = pct + '%';
         row.classList.toggle('active-emotion', em === currentEmotionTag);
     });
+
+    // Show example utterances
+    showEmotionExamples(currentEmotionTag);
 }
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -157,34 +161,49 @@ function resetNickname(key) {
 }
 
 function saveNicknameSettings() {
-    const newA = document.getElementById('nicknameA').value.trim() || DEFAULT_AGENT_NAMES.A;
-    const newB = document.getElementById('nicknameB').value.trim() || DEFAULT_AGENT_NAMES.B;
-    const newC = document.getElementById('nicknameC').value.trim() || DEFAULT_AGENT_NAMES.C;
+    agentDisplayNames.A = document.getElementById('nicknameA').value.trim() || DEFAULT_AGENT_NAMES.A;
+    agentDisplayNames.B = document.getElementById('nicknameB').value.trim() || DEFAULT_AGENT_NAMES.B;
+    agentDisplayNames.C = document.getElementById('nicknameC').value.trim() || DEFAULT_AGENT_NAMES.C;
+    updateAllDisplayNames();
+    closeNicknameSettings();
+}
 
-    agentDisplayNames = { A: newA, B: newB, C: newC };
-
+function updateAllDisplayNames() {
+    const { A, B, C } = agentDisplayNames;
     // 1. Sidebar agent cards
-    document.getElementById('agentDisplayName-A').textContent = newA;
-    document.getElementById('agentDisplayName-B').textContent = newB;
-    document.getElementById('agentDisplayName-C').textContent = newC;
+    const elA = document.getElementById('agentDisplayName-A');
+    const elB = document.getElementById('agentDisplayName-B');
+    const elC = document.getElementById('agentDisplayName-C');
+    if (elA) elA.textContent = A;
+    if (elB) elB.textContent = B;
+    if (elC) elC.textContent = C;
 
     // 2. Emotion dropdown options
-    document.getElementById('emotionOption-A').textContent = newA;
-    document.getElementById('emotionOption-B').textContent = newB;
-    document.getElementById('emotionOption-C').textContent = newC;
+    const optEA = document.getElementById('emotionOption-A');
+    const optEB = document.getElementById('emotionOption-B');
+    const optEC = document.getElementById('emotionOption-C');
+    if (optEA) optEA.textContent = A;
+    if (optEB) optEB.textContent = B;
+    if (optEC) optEC.textContent = C;
 
-    // 3. agentConfig (used in chat bubbles)
-    agentConfig.A.name = newA;
-    agentConfig.B.name = newB;
-    agentConfig.C.name = newC;
+    // 3. Decision dropdown options
+    const optDA = document.getElementById('decisionOption-A');
+    const optDB = document.getElementById('decisionOption-B');
+    const optDC = document.getElementById('decisionOption-C');
+    if (optDA) optDA.textContent = A;
+    if (optDB) optDB.textContent = B;
+    if (optDC) optDC.textContent = C;
 
-    // 4. Update existing chat bubbles already on screen
+    // 4. agentConfig (used in chat bubbles)
+    if (agentConfig.A) agentConfig.A.name = A;
+    if (agentConfig.B) agentConfig.B.name = B;
+    if (agentConfig.C) agentConfig.C.name = C;
+
+    // 5. Update existing chat bubbles on screen
     document.querySelectorAll('.message-agent-name[data-agent-key]').forEach(el => {
         const key = el.dataset.agentKey;
         if (agentDisplayNames[key]) el.textContent = agentDisplayNames[key];
     });
-
-    closeNicknameSettings();
 }
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -351,6 +370,19 @@ async function sendMessage() {
             } catch (_) {}
         }
 
+        // Build per-agent emotion overrides from customizer settings
+        const agentEmotionOverrides = {};
+        ['A','B','C'].forEach(k => {
+            const s = agentCustomSettings[k];
+            if (s.emotionOn && s.emotionTag) {
+                agentEmotionOverrides[k] = s.emotionTag;
+            }
+        });
+
+        // Sidebar emotion takes precedence if enabled (applies to target)
+        let finalEmotionTag    = emotionModeOn ? currentEmotionTag : null;
+        let finalEmotionTarget = emotionModeOn ? emotionTarget : null;
+
         const response = await fetch(`${API_BASE}/message`, {
             method: 'POST',
             headers: {
@@ -359,8 +391,14 @@ async function sendMessage() {
             body: JSON.stringify({
                 room_id: currentRoomId,
                 message: message,
-                emotion_tag:    emotionModeOn ? currentEmotionTag : null,
-                emotion_target: emotionModeOn ? emotionTarget : null,
+                emotion_tag:           finalEmotionTag,
+                emotion_target:        finalEmotionTarget,
+                agent_emotion_overrides: agentEmotionOverrides,
+                additional_rules: {
+                    A: agentCustomSettings.A.additionalPrompt,
+                    B: agentCustomSettings.B.additionalPrompt,
+                    C: agentCustomSettings.C.additionalPrompt,
+                },
             })
         });
         
@@ -1061,11 +1099,263 @@ function selectScene(scene) {
                 sceneSelector.classList.remove('active');
                 sceneSelector.style.display = 'none';
                 
-                // Show chat interface with animation
-                showChatInterface();
+                // Show agent customizer instead of chat directly
+                showAgentCustomizer();
             }
         });
     }, 800);
+}
+
+// ─── Emotion Text Input (debounce) ────────────────────────────────────────────
+let emotionTextDebounce = null;
+
+function onEmotionTextChange() {
+    clearTimeout(emotionTextDebounce);
+    emotionTextDebounce = setTimeout(() => {
+        if (!emotionModeOn) return;
+        const text = document.getElementById('emotionTextInput').value;
+        const v = document.getElementById('valenceSlider').value / 100;
+        const a = document.getElementById('arousalSlider').value / 100;
+        const c = document.getElementById('controlSlider').value / 100;
+        fetchEmotionAnalysis(text, v, a, c);
+    }, 400);
+}
+
+function showEmotionExamples(tag) {
+    const examples = EMOTION_EXAMPLES[tag] || [];
+    const container = document.getElementById('emotionExamples');
+    const list = document.getElementById('emotionExampleList');
+    if (!container || !list) return;
+    if (examples.length === 0) { container.style.display = 'none'; return; }
+    list.innerHTML = examples.map(e => `<li>"${e}"</li>`).join('');
+    container.style.display = 'block';
+}
+
+// ─── Sidebar Collapse ──────────────────────────────────────────────────────────
+let sidebarCollapsed = false;
+
+function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    const sidebar = document.getElementById('sidebar');
+    const expandBtn = document.getElementById('sidebarExpandBtn');
+    const container = document.getElementById('chatContainer');
+    if (sidebarCollapsed) {
+        sidebar.classList.add('collapsed');
+        expandBtn.style.display = 'flex';
+        container.classList.add('sidebar-hidden');
+    } else {
+        sidebar.classList.remove('collapsed');
+        expandBtn.style.display = 'none';
+        container.classList.remove('sidebar-hidden');
+    }
+}
+
+// ─── Decision Mode ─────────────────────────────────────────────────────────────
+let decisionModeOn = false;
+let decisionTriggerTurns = 5;
+let decisionStyle = 'brief';
+let decisionAgent = 'auto';
+let chatTurnsSinceDecision = 0;
+
+function toggleDecisionMode() {
+    decisionModeOn = document.getElementById('decisionModeToggle').checked;
+    const controls = document.getElementById('decisionControls');
+    if (decisionModeOn) {
+        controls.classList.add('active');
+    } else {
+        controls.classList.remove('active');
+    }
+}
+
+function onDecisionTriggerChange() {
+    const v = document.getElementById('decisionTriggerSlider').value;
+    document.getElementById('decisionTriggerVal').textContent = `${v} turns`;
+    decisionTriggerTurns = parseInt(v);
+}
+
+// ─── Agent Customizer ──────────────────────────────────────────────────────────
+const EMOTION_EXAMPLES = {
+    joy:      ["Nice! I love that direction.", "This could turn out really well.", "Awesome—let's build on that.", "That sounds exciting!", "Yes! That's the energy."],
+    anger:    ["No. That's not the right move.", "Stop hesitating and act.", "This is inefficient—fix it now.", "You already know what needs to happen.", "Act. Don't overthink it."],
+    fear:     ["I'm not fully comfortable with that yet.", "What if this goes wrong?", "Maybe we should double-check first.", "There's uncertainty here.", "Can we reduce the risk?"],
+    sadness:  ["That feels heavy…", "Let's slow down.", "We don't need to rush.", "One small step at a time.", "It's okay to move gently."],
+    surprise: ["Wait—really?", "That wasn't expected.", "Wow, that changes things.", "Interesting twist.", "Okay, that's new."],
+    disgust:  ["That doesn't feel right.", "I wouldn't go near that.", "This feels off.", "Let's not entertain that.", "No. Drop it."],
+};
+
+// Per-agent settings set in the customizer
+let agentCustomSettings = {
+    A: { emotionOn: false, emotionTag: null, valence: 0.5, arousal: 0.5, control: 0.5, additionalPrompt: '', decisionOn: false, decisionTrigger: 5, decisionStyle: 'brief' },
+    B: { emotionOn: false, emotionTag: null, valence: 0.5, arousal: 0.5, control: 0.5, additionalPrompt: '', decisionOn: false, decisionTrigger: 5, decisionStyle: 'brief' },
+    C: { emotionOn: false, emotionTag: null, valence: 0.5, arousal: 0.5, control: 0.5, additionalPrompt: '', decisionOn: false, decisionTrigger: 5, decisionStyle: 'brief' },
+};
+let custDebounces = { A: null, B: null, C: null };
+let custCardOpen = { A: false, B: false, C: false };
+
+function showAgentCustomizer() {
+    const customizer = document.getElementById('agentCustomizer');
+    customizer.style.display = 'flex';
+    // Sync display names
+    ['A','B','C'].forEach(k => {
+        document.getElementById(`custName-${k}`).value = agentDisplayNames[k];
+        document.getElementById(`custCardName-${k}`).textContent = agentDisplayNames[k];
+    });
+    anime({
+        targets: customizer,
+        opacity: [0, 1],
+        translateY: [30, 0],
+        duration: 600,
+        easing: 'easeOutCubic'
+    });
+}
+
+function backToScenes() {
+    const customizer = document.getElementById('agentCustomizer');
+    const sceneSelector = document.getElementById('sceneSelector');
+    anime({
+        targets: customizer,
+        opacity: [1, 0],
+        duration: 400,
+        easing: 'easeInQuad',
+        complete: () => {
+            customizer.style.display = 'none';
+            sceneSelector.style.display = '';
+            sceneSelector.classList.add('active');
+            anime({ targets: sceneSelector, opacity: [0, 1], duration: 400, easing: 'easeOutQuad' });
+        }
+    });
+}
+
+function startChatFromCustomizer() {
+    // Save customizer settings
+    ['A','B','C'].forEach(k => {
+        const name = document.getElementById(`custName-${k}`).value.trim();
+        if (name) agentDisplayNames[k] = name;
+        agentCustomSettings[k].additionalPrompt = document.getElementById(`custPrompt-${k}`).value.trim();
+        agentCustomSettings[k].decisionStyle = document.getElementById(`custDecisionStyle-${k}`).value;
+    });
+    updateAllDisplayNames();
+
+    const customizer = document.getElementById('agentCustomizer');
+    anime({
+        targets: customizer,
+        opacity: [1, 0],
+        duration: 400,
+        easing: 'easeInQuad',
+        complete: () => {
+            customizer.style.display = 'none';
+            showChatInterface();
+        }
+    });
+}
+
+function toggleCustCard(key) {
+    const body = document.getElementById(`custBody-${key}`);
+    const chevron = document.getElementById(`custChevron-${key}`);
+    custCardOpen[key] = !custCardOpen[key];
+    if (custCardOpen[key]) {
+        body.classList.add('open');
+        chevron.style.transform = 'rotate(180deg)';
+    } else {
+        body.classList.remove('open');
+        chevron.style.transform = 'rotate(0deg)';
+    }
+}
+
+function onCustNameChange(key) {
+    const name = document.getElementById(`custName-${key}`).value;
+    document.getElementById(`custCardName-${key}`).textContent = name || `Chatbot${key}`;
+}
+
+function toggleCustEmotion(key) {
+    const on = document.getElementById(`custEmotionToggle-${key}`).checked;
+    agentCustomSettings[key].emotionOn = on;
+    const body = document.getElementById(`custEmotionBody-${key}`);
+    if (on) {
+        body.classList.add('active');
+        onCustSliderChange(key);
+    } else {
+        body.classList.remove('active');
+        agentCustomSettings[key].emotionTag = null;
+    }
+}
+
+function onCustEmotionTextChange(key) {
+    clearTimeout(custDebounces[key]);
+    custDebounces[key] = setTimeout(() => {
+        if (!agentCustomSettings[key].emotionOn) return;
+        const text = document.getElementById(`custEmotionText-${key}`).value;
+        const v = document.getElementById(`custValence-${key}`).value / 100;
+        const a = document.getElementById(`custArousal-${key}`).value / 100;
+        const c = document.getElementById(`custControl-${key}`).value / 100;
+        fetchCustEmotionAnalysis(key, text, v, a, c);
+    }, 400);
+}
+
+function onCustSliderChange(key) {
+    const v = document.getElementById(`custValence-${key}`).value / 100;
+    const a = document.getElementById(`custArousal-${key}`).value / 100;
+    const c = document.getElementById(`custControl-${key}`).value / 100;
+    document.getElementById(`custValenceVal-${key}`).textContent = v.toFixed(2);
+    document.getElementById(`custArousalVal-${key}`).textContent = a.toFixed(2);
+    document.getElementById(`custControlVal-${key}`).textContent = c.toFixed(2);
+    agentCustomSettings[key].valence = v;
+    agentCustomSettings[key].arousal = a;
+    agentCustomSettings[key].control = c;
+    if (!agentCustomSettings[key].emotionOn) return;
+    clearTimeout(custDebounces[key]);
+    custDebounces[key] = setTimeout(() => {
+        const text = document.getElementById(`custEmotionText-${key}`).value;
+        fetchCustEmotionAnalysis(key, text, v, a, c);
+    }, 120);
+}
+
+async function fetchCustEmotionAnalysis(key, text, v, a, c) {
+    try {
+        const res = await fetch(`${API_BASE}/emotion/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, valence: v, arousal: a, control: c }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        agentCustomSettings[key].emotionTag = data.emotion_tag;
+        // Update badge
+        const emoji = EMOTION_EMOJI[data.emotion_tag] || '😐';
+        document.getElementById(`custEmotionEmoji-${key}`).textContent = emoji;
+        document.getElementById(`custEmotionName-${key}`).textContent =
+            data.emotion_tag.charAt(0).toUpperCase() + data.emotion_tag.slice(1);
+        const conf = Math.round(data.confidence * 100);
+        document.getElementById(`custEmotionConf-${key}`).textContent = `${conf}%`;
+        const color = EMOTION_COLORS[data.emotion_tag] || '#888';
+        const badge = document.getElementById(`custEmotionBadge-${key}`);
+        badge.style.borderColor = color;
+        badge.style.background = color + '18';
+        // Show examples
+        const examples = EMOTION_EXAMPLES[data.emotion_tag] || [];
+        const exContainer = document.getElementById(`custEmotionExamples-${key}`);
+        const exList = document.getElementById(`custEmotionExampleList-${key}`);
+        if (examples.length > 0) {
+            exList.innerHTML = examples.map(e => `<li>"${e}"</li>`).join('');
+            exContainer.style.display = 'block';
+        } else {
+            exContainer.style.display = 'none';
+        }
+    } catch (_) {}
+}
+
+function toggleCustDecision(key) {
+    const on = document.getElementById(`custDecisionToggle-${key}`).checked;
+    agentCustomSettings[key].decisionOn = on;
+    const body = document.getElementById(`custDecisionBody-${key}`);
+    if (on) { body.classList.add('active'); }
+    else { body.classList.remove('active'); }
+}
+
+function onCustDecisionChange(key) {
+    const v = document.getElementById(`custDecisionTrigger-${key}`).value;
+    document.getElementById(`custDecisionTriggerVal-${key}`).textContent = `${v} turns`;
+    agentCustomSettings[key].decisionTrigger = parseInt(v);
 }
 
 function showChatInterface() {

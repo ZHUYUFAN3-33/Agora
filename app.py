@@ -217,29 +217,57 @@ def send_message():
     emotion_tag    = data.get("emotion_tag")     # e.g. "joy", "anger", None
     emotion_target = data.get("emotion_target")  # "all" | "A" | "B" | "C" | None
 
-    # Load emotion prompt text (shared)
-    emotion_prompt = ""
-    if emotion_tag and EMOTION_MODULE_LOADED:
-        ep_path = os.path.join(BASE_DIR, "emotion block", "prompts", f"{emotion_tag}.txt")
+    # Per-agent emotion overrides from customizer (key→emotion_tag)
+    agent_emotion_overrides = data.get("agent_emotion_overrides") or {}  # {"A": "joy", ...}
+
+    # Per-agent additional rules from customizer
+    additional_rules = data.get("additional_rules") or {}  # {"A": "...", ...}
+
+    def _load_emotion_prompt(tag: str) -> str:
+        """Load emotion prompt text for a given tag."""
+        if not tag or not EMOTION_MODULE_LOADED:
+            return ""
+        ep_path = os.path.join(BASE_DIR, "emotion block", "prompts", f"{tag}.txt")
         if os.path.exists(ep_path):
             with open(ep_path, "r", encoding="utf-8") as _f:
-                emotion_prompt = _f.read()
+                return _f.read()
+        return ""
+
+    # Load sidebar emotion prompt (shared)
+    sidebar_emotion_prompt = _load_emotion_prompt(emotion_tag)
 
     def get_scene_for_agent(agent_key: str) -> str:
-        """Return scene string with emotion prompt injected if this agent is targeted."""
-        if not emotion_prompt:
-            return scene
-        if emotion_target in (None, "all", agent_key):
-            return (
-                scene
-                + "\n\n"
-                + "=" * 60
+        """Return scene string with emotion prompt + additional rules injected."""
+        result = scene
+
+        # 1. Per-agent emotion override (from customizer) takes priority
+        override_tag = agent_emotion_overrides.get(agent_key)
+        if override_tag:
+            ep = _load_emotion_prompt(override_tag)
+            if ep:
+                result += (
+                    "\n\n" + "=" * 60
+                    + f"\nEMOTIONAL CONTEXT — {override_tag.upper()} (agent-specific):\n"
+                    + "=" * 60 + "\n" + ep
+                )
+        elif sidebar_emotion_prompt and emotion_target in (None, "all", agent_key):
+            # 2. Sidebar emotion (global or targeted)
+            result += (
+                "\n\n" + "=" * 60
                 + f"\nEMOTIONAL CONTEXT — {emotion_tag.upper()} (applied to this agent):\n"
-                + "=" * 60
-                + "\n"
-                + emotion_prompt
+                + "=" * 60 + "\n" + sidebar_emotion_prompt
             )
-        return scene
+
+        # 3. Additional rules from customizer
+        extra = (additional_rules.get(agent_key) or "").strip()
+        if extra:
+            result += (
+                "\n\n" + "=" * 60
+                + "\nADDITIONAL INSTRUCTIONS (user-defined):\n"
+                + "=" * 60 + "\n" + extra
+            )
+
+        return result
 
     # Add user message to history
     user_msg = {

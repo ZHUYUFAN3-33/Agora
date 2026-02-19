@@ -387,15 +387,17 @@ header h1 {
 }
 
 .sidebar {
-    width: 280px;
-    min-width: 280px;
+    width: 310px;
+    min-width: 310px;
     background: #1e1e1e;
     border-right: 1px solid #2d2d2d;
-    padding: 20px;
+    padding: 44px 16px 16px 16px;
     overflow-y: auto;
+    overflow-x: hidden;
     position: relative;
     transition: width 0.3s ease, min-width 0.3s ease, padding 0.3s ease, opacity 0.3s ease, border 0.3s ease;
     flex-shrink: 0;
+    box-sizing: border-box;
 }
 
 .agent-info h3 {
@@ -963,6 +965,7 @@ header h1 {
     background: #2d2d2d;
     border-radius: 3px;
     outline: none;
+    appearance: none;
     -webkit-appearance: none;
 }
 
@@ -1346,7 +1349,10 @@ header h1 {
     white-space: nowrap;
 }
 
-#emotionTargetSelect {
+/* ── Unified sidebar / customizer select style ── */
+.emotion-target-selector select,
+.cust-decision-body select,
+.cust-section select {
     flex: 1;
     background: rgba(255,255,255,0.07);
     border: 1px solid rgba(255,255,255,0.15);
@@ -1365,13 +1371,19 @@ header h1 {
     padding-right: 26px;
 }
 
-#emotionTargetSelect:hover,
-#emotionTargetSelect:focus {
+.emotion-target-selector select:hover,
+.emotion-target-selector select:focus,
+.cust-decision-body select:hover,
+.cust-decision-body select:focus,
+.cust-section select:hover,
+.cust-section select:focus {
     border-color: rgba(78,205,196,0.5);
     background-color: rgba(255,255,255,0.1);
 }
 
-#emotionTargetSelect option {
+.emotion-target-selector select option,
+.cust-decision-body select option,
+.cust-section select option {
     background: #1e1e2e;
     color: #fff;
 }
@@ -1433,6 +1445,7 @@ header h1 {
 
 .emotion-slider {
     flex: 1;
+    appearance: none;
     -webkit-appearance: none;
     height: 4px;
     border-radius: 4px;
@@ -1570,28 +1583,30 @@ header h1 {
 /* ─────────────────────────────────────────────────────────────
    Sidebar Collapse Button
 ───────────────────────────────────────────────────────────── */
+/* Sidebar collapse button — lives INSIDE the sidebar, top-right corner */
 .sidebar-collapse-btn {
     position: absolute;
-    top: 50%;
-    right: -14px;
-    transform: translateY(-50%);
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #1e2030;
-    border: 1px solid rgba(255,255,255,0.12);
-    color: rgba(255,255,255,0.55);
+    top: 10px;
+    right: 10px;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.45);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     z-index: 20;
-    transition: background 0.2s, color 0.2s, opacity 0.2s;
-    opacity: 0;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+    flex-shrink: 0;
 }
-.sidebar:hover .sidebar-collapse-btn,
-.sidebar-collapse-btn:focus { opacity: 1; }
-.sidebar-collapse-btn:hover { background: #2a2d3e; color: #fff; }
+.sidebar-collapse-btn:hover {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.25);
+    color: #fff;
+}
 
 .sidebar.collapsed {
     width: 0 !important;
@@ -1601,15 +1616,16 @@ header h1 {
     border: none !important;
 }
 
+/* Expand button floats at the left edge of the chat area */
 .sidebar-expand-btn {
     position: absolute;
-    left: 12px;
+    left: 8px;
     top: 50%;
     transform: translateY(-50%);
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #1e2030;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: rgba(255,255,255,0.06);
     border: 1px solid rgba(255,255,255,0.15);
     color: rgba(255,255,255,0.6);
     display: flex;
@@ -1619,7 +1635,11 @@ header h1 {
     z-index: 20;
     transition: background 0.2s, color 0.2s;
 }
-.sidebar-expand-btn:hover { background: #2a2d3e; color: #fff; }
+.sidebar-expand-btn:hover {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.3);
+    color: #fff;
+}
 
 /* ─────────────────────────────────────────────────────────────
    Agent Customizer Screen

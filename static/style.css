@@ -1718,25 +1718,7 @@ header h1 {
     margin: 0;
 }
 
-.customizer-start-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 12px 24px;
-    font-size: 1em;
-    font-weight: 600;
-    border-radius: 8px;
-    background: #ff6b6b;
-    border: none;
-    color: #fff;
-    cursor: pointer;
-    transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
-}
-.customizer-start-btn:hover {
-    background: #ff5252;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(255, 107, 107, 0.4);
-}
+/* customizer-start-btn inherits all styles from .btn-primary */
 
 /* Cards grid */
 .customizer-cards {

@@ -1476,6 +1476,7 @@ header h1 {
 
 .emotion-slider {
     flex: 1;
+    min-width: 0;          /* prevent browser default min-width from overflowing */
     appearance: none;
     -webkit-appearance: none;
     height: 4px;
@@ -1498,10 +1499,9 @@ header h1 {
 .slider-val {
     font-size: 0.75em;
     color: rgba(255,255,255,0.5);
-    min-width: 54px;       /* wide enough for "15 turns" */
-    width: 54px;
-    text-align: right;
-    flex-shrink: 0;
+    flex: 0 0 auto;        /* auto-size to content, never shrink */
+    min-width: 32px;       /* baseline for "0.50" */
+    text-align: left;
     white-space: nowrap;
 }
 

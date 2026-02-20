@@ -14,9 +14,21 @@
     scrollbar-color: rgba(78, 205, 196, 0.3) transparent;
 }
 
+/* ── Scrollbars: always occupy space (no layout shift), invisible until used ── */
+
+/* Firefox */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+*:hover {
+    scrollbar-color: rgba(78, 205, 196, 0.3) transparent;
+}
+
+/* Webkit (Chrome / Safari / Edge) */
 *::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
 }
 
 *::-webkit-scrollbar-track {
@@ -26,11 +38,11 @@
 *::-webkit-scrollbar-thumb {
     background: transparent;
     border-radius: 4px;
-    transition: background 0.3s ease;
+    transition: background 0.25s ease;
 }
 
 *:hover::-webkit-scrollbar-thumb {
-    background: rgba(78, 205, 196, 0.3);
+    background: rgba(78, 205, 196, 0.25);
 }
 
 *::-webkit-scrollbar-thumb:hover {
@@ -41,9 +53,12 @@
     background: rgba(78, 205, 196, 0.7);
 }
 
-/* Scrollbar appears when scrolling */
+/* .scrolling class: triggered by JS on scroll event */
 .scrolling::-webkit-scrollbar-thumb {
-    background: rgba(78, 205, 196, 0.3);
+    background: rgba(78, 205, 196, 0.35);
+}
+.scrolling {
+    scrollbar-color: rgba(78, 205, 196, 0.35) transparent;
 }
 
 body {
@@ -405,8 +420,9 @@ header h1 {
     min-width: 310px;
     box-sizing: border-box;
     padding: 44px 16px 16px 16px;
-    overflow-y: auto;
+    overflow-y: scroll;        /* always reserve scrollbar space */
     overflow-x: hidden;
+    scrollbar-gutter: stable;  /* modern browsers: reserve space without showing thumb */
     height: 100%;
     opacity: 1;
     transition: opacity 0.15s ease;
@@ -519,7 +535,8 @@ header h1 {
 
 .chat-messages {
     flex: 1;
-    overflow-y: auto;
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
     padding: 20px;
     background: #1a1a1a;
     background-image: 
@@ -906,7 +923,8 @@ header h1 {
 
 .agent-modal-body {
     padding: 30px;
-    overflow-y: auto;
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
     flex: 1;
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
@@ -1670,7 +1688,8 @@ header h1 {
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    overflow-y: auto;
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
     z-index: 900;
     padding: 24px 16px 48px;
 }

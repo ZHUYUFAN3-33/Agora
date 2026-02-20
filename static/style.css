@@ -1469,8 +1469,9 @@ header h1 {
 .slider-label {
     font-size: 0.78em;
     color: rgba(255,255,255,0.6);
-    width: 76px;
+    width: 80px;
     flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .emotion-slider {
@@ -1497,11 +1498,11 @@ header h1 {
 .slider-val {
     font-size: 0.75em;
     color: rgba(255,255,255,0.5);
-    min-width: 38px;
-    width: 38px;
+    min-width: 54px;       /* wide enough for "15 turns" */
+    width: 54px;
     text-align: right;
     flex-shrink: 0;
-    overflow: visible;
+    white-space: nowrap;
 }
 
 /* Probability bars */

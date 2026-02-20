@@ -419,7 +419,7 @@ header h1 {
     width: 310px;
     min-width: 310px;
     box-sizing: border-box;
-    padding: 44px 16px 16px 16px;
+    padding: 44px 10px 16px 16px; /* right: 10px — scrollbar takes ~6px, keeps content clear */
     overflow-y: scroll;        /* always reserve scrollbar space */
     overflow-x: hidden;
     scrollbar-gutter: stable;  /* modern browsers: reserve space without showing thumb */
@@ -1497,9 +1497,11 @@ header h1 {
 .slider-val {
     font-size: 0.75em;
     color: rgba(255,255,255,0.5);
-    width: 30px;
+    min-width: 38px;
+    width: 38px;
     text-align: right;
     flex-shrink: 0;
+    overflow: visible;
 }
 
 /* Probability bars */

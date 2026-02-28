@@ -80,6 +80,7 @@ CORS(app)
 # Configuration
 TZ = ZoneInfo("Asia/Tokyo")
 Speaker = Literal["A", "B", "C", "U"]
+PREFER_AGENTS = 0.85  # When admin chooses U, override to random agent with this probability
 
 # Load API key from environment or use default (should be set in .env)
 API_KEY = os.getenv("OPENAI_API_KEY", "sk-tnIxDvUFzbMtFbnGpiLC5FXqep9dRMRdsdvUWs2g9hT3BlbkFJmfl6UE3khKvUqT_xeZpq66twaUika-kvxbrc-srSQA")
@@ -89,6 +90,12 @@ chat_sessions: Dict[str, dict] = {}
 
 # Load scene and agent profiles
 SCENE_FILE = os.path.join(BASE_DIR, "scene.txt")
+SCENE_DIR = os.path.join(BASE_DIR, "new_module", "new")
+SCENES: Dict[str, str] = {}
+for i in range(1, 4):
+    p = os.path.join(SCENE_DIR, f"scene{i}.txt")
+    if os.path.exists(p):
+        SCENES[f"scene{i}"] = read_text(p)
 BOT1_FILE = os.path.join(BASE_DIR, "chatbot1.txt")
 BOT2_FILE = os.path.join(BASE_DIR, "chatbot2.txt")
 BOT3_FILE = os.path.join(BASE_DIR, "chatbot3.txt")
@@ -109,7 +116,7 @@ def get_openai_clients():
         client_admin = OpenAI(api_key=API_KEY)
     return client_chat, client_admin
 
-# Load scene and agent profiles
+# Load scene and agent profiles (legacy single scene; prefer SCENES)
 scene = read_text(SCENE_FILE) if os.path.exists(SCENE_FILE) else ""
 bot1 = read_text(BOT1_FILE) if os.path.exists(BOT1_FILE) else ""
 bot2 = read_text(BOT2_FILE) if os.path.exists(BOT2_FILE) else ""
@@ -135,6 +142,7 @@ def init_session(room_id: str) -> dict:
     
     session = {
         "room_id": room_id,
+        "scene_id": "scene1",
         "history": [],
         "known_user_facts": {},
         "bots_since_user": 0,
@@ -183,10 +191,15 @@ def serve_assets(filename):
 @app.route('/api/start', methods=['POST'])
 def start_chat():
     """Start a new chat session"""
+    data = request.json or {}
+    scene_id = (data.get("scene_id") or "scene1").strip()
+    if scene_id not in SCENES:
+        scene_id = "scene1" if SCENES else ""
     room_id = make_room_id_6()
     session = init_session(room_id)
+    session["scene_id"] = scene_id
     chat_sessions[room_id] = session
-    
+
     return jsonify({
         "room_id": room_id,
         "message": "Chat session started",
@@ -223,6 +236,21 @@ def send_message():
     # Per-agent additional rules from customizer
     additional_rules = data.get("additional_rules") or {}  # {"A": "...", ...}
 
+    # Per-agent decision block (Rational, Intuitive, etc.)
+    agent_decision_block = data.get("agent_decision_block") or {}  # {"A": "Rational", ...}
+
+    # Global pacing: when to let user speak (NOT per-agent)
+    max_agent_turns_before_user = int(data.get("max_agent_turns_before_user") or 5)
+    max_user_gap = int(data.get("max_user_gap") or 12)
+
+    # Scene: update session if scene_id provided
+    req_scene_id = (data.get("scene_id") or "").strip()
+    if req_scene_id and req_scene_id in SCENES:
+        session["scene_id"] = req_scene_id
+    base_scene = SCENES.get(session.get("scene_id", "scene1"), scene)
+
+    DECISION_BLOCK_DIR = os.path.join(BASE_DIR, "new_module", "new", "decision block")
+
     def _load_emotion_prompt(tag: str) -> str:
         """Load emotion prompt text for a given tag."""
         if not tag or not EMOTION_MODULE_LOADED:
@@ -233,12 +261,22 @@ def send_message():
                 return _f.read()
         return ""
 
+    def _load_decision_block(name: str) -> str:
+        """Load decision block prompt (Rational, Intuitive, Dependent, Avoidant, Spontaneous)."""
+        if not name or not os.path.isdir(DECISION_BLOCK_DIR):
+            return ""
+        path = os.path.join(DECISION_BLOCK_DIR, f"{name}.txt")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as _f:
+                return _f.read()
+        return ""
+
     # Load sidebar emotion prompt (shared)
     sidebar_emotion_prompt = _load_emotion_prompt(emotion_tag)
 
     def get_scene_for_agent(agent_key: str) -> str:
-        """Return scene string with emotion prompt + additional rules injected."""
-        result = scene
+        """Return scene string with emotion prompt + decision block + additional rules injected."""
+        result = base_scene
 
         # 1. Per-agent emotion override (from customizer) takes priority
         override_tag = agent_emotion_overrides.get(agent_key)
@@ -258,7 +296,17 @@ def send_message():
                 + "=" * 60 + "\n" + sidebar_emotion_prompt
             )
 
-        # 3. Additional rules from customizer
+        # 3. Decision block (reasoning style: Rational, Intuitive, etc.)
+        block_name = agent_decision_block.get(agent_key) or "Rational"
+        block_prompt = _load_decision_block(block_name)
+        if block_prompt:
+            result += (
+                "\n\n" + "=" * 60
+                + f"\nDECISION ARCHITECTURE — {block_name}:\n"
+                + "=" * 60 + "\n" + block_prompt
+            )
+
+        # 4. Additional rules from customizer
         extra = (additional_rules.get(agent_key) or "").strip()
         if extra:
             result += (
@@ -299,10 +347,17 @@ def send_message():
     responses = []
     
     # Determine next speaker using admin
-    for _ in range(5):  # Max 5 agent turns before forcing user
-        if session["bots_since_user"] >= 5:
-            break
-        
+    def _user_gap(hist):
+        """Number of messages since last user message."""
+        li = next((i for i in range(len(hist) - 1, -1, -1) if hist[i].get("character") == "user"), None)
+        return (len(hist) - 1) - li if li is not None else len(hist)
+
+    for _ in range(max_agent_turns_before_user + 2):  # Cap iterations
+        if session["bots_since_user"] >= max_agent_turns_before_user:
+            break  # Let user speak (global pacing)
+        if _user_gap(session["history"]) >= max_user_gap:
+            break  # User has been silent too long (global pacing)
+
         # Check fallback queue first
         if session["fallback_queue"]:
             speaker = session["fallback_queue"].pop(0)
@@ -313,13 +368,14 @@ def send_message():
             nxt, raw, err = call_admin_onepass(
                 client=client_admin,
                 model="gpt-4o",
-                scene=scene,  # admin sees base scene (no emotion bias in speaker selection)
+                scene=base_scene,  # admin sees base scene (no emotion bias in speaker selection)
                 agents=agent_list,
                 history=session["history"],
                 known_user_facts=session["known_user_facts"],
                 bots_since_user=session["bots_since_user"],
                 last_speaker_label=session["last_speaker_label"] or "(none)",
                 consecutive_count=session["consecutive_count"],
+                max_agent_turns_before_user=max_agent_turns_before_user,
                 debug=False,
             )
             
@@ -342,9 +398,13 @@ def send_message():
             "next": speaker,
             "thinking": thinking,
         })
-        
+
+        # prefer_agents: when admin chose U, override to random agent with probability
         if speaker == "U":
-            break
+            if random.random() < PREFER_AGENTS:
+                speaker = random.choice(["A", "B", "C"])
+            else:
+                break
         
         # Get agent response
         agent = agents[speaker]
@@ -471,7 +531,7 @@ if __name__ == '__main__':
     print("🚀 多智能体聊天机器人系统启动中...")
     print("🚀 Starting Multi-Agent Chatbot System...")
     print("=" * 60)
-    print(f"✓ Scene loaded: {len(scene)} characters")
+    print(f"✓ Scenes loaded: {list(SCENES.keys())} ({sum(len(v) for v in SCENES.values())} chars total)")
     print(f"✓ Agents: {', '.join(all_agent_names)}")
     print(f"✓ Static folder: {STATIC_FOLDER}")
     print(f"✓ Static files exist: {os.path.exists(os.path.join(STATIC_FOLDER, 'index.html'))}")

@@ -1,8 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
-import { AgoraLogo } from "../components/AgoraLogo";
+import { motion, AnimatePresence } from "motion/react";
+import { LandingLogoSection, DEFAULT_LOGO_GAP, DEFAULT_TEXT_LOGO_OFFSET_X } from "../components/AgoraLogo";
 import svgPaths from "../../imports/svg-czrgecjots";
 
+const LOGO_MARK_URL = "/Assets/logo.png";
+const LOGO_GAP_KEY = "agora_logo_gap";
+const TEXT_LOGO_OFFSET_KEY = "agora_text_logo_offset_x";
 const monoFont = { fontFamily: "'Share Tech Mono', monospace" };
 const condensedFont = { fontFamily: "'Barlow Condensed', sans-serif" };
 
@@ -32,6 +36,48 @@ export default function Landing() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [mode, setMode] = useState<"landing" | "signin">("landing");
+  const [splashVisible, setSplashVisible] = useState(true);
+  const [logoGap, setLogoGap] = useState(DEFAULT_LOGO_GAP);
+  const [textLogoOffsetX, setTextLogoOffsetX] = useState(DEFAULT_TEXT_LOGO_OFFSET_X);
+  const [controlVisible, setControlVisible] = useState(false);
+
+  useEffect(() => {
+    const v1 = localStorage.getItem(LOGO_GAP_KEY);
+    const v2 = localStorage.getItem(TEXT_LOGO_OFFSET_KEY);
+    if (v1) setLogoGap(Math.min(48, Math.max(0, parseInt(v1, 10))));
+    if (v2) setTextLogoOffsetX(Math.min(40, Math.max(-40, parseInt(v2, 10))));
+  }, []);
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setSplashVisible(false), 1800);
+    return () => clearTimeout(t1);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === " " && !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement)?.tagName)) {
+        e.preventDefault();
+        setControlVisible((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const handleLogoGapChange = (px: number) => {
+    setLogoGap(px);
+    localStorage.setItem(LOGO_GAP_KEY, String(px));
+  };
+  const handleTextLogoOffsetChange = (px: number) => {
+    setTextLogoOffsetX(px);
+    localStorage.setItem(TEXT_LOGO_OFFSET_KEY, String(px));
+  };
+  const handleResetToDefault = () => {
+    setLogoGap(DEFAULT_LOGO_GAP);
+    setTextLogoOffsetX(DEFAULT_TEXT_LOGO_OFFSET_X);
+    localStorage.removeItem(LOGO_GAP_KEY);
+    localStorage.removeItem(TEXT_LOGO_OFFSET_KEY);
+  };
 
   const handleContinueWithEmail = () => {
     if (email.trim()) setMode("signin");
@@ -45,13 +91,34 @@ export default function Landing() {
     navigate("/onboarding");
   };
 
+  const logoSection = (
+    <div className="flex justify-center mb-8">
+      <LandingLogoSection width={200} logoToTextGap={logoGap} textLogoOffsetX={textLogoOffsetX} />
+    </div>
+  );
+
+  const spacingControl = controlVisible && (
+    <div className="fixed bottom-4 right-4 bg-white/95 border border-black/10 rounded-[10px] shadow-lg px-3 py-2.5 flex flex-col gap-2 z-10">
+      <div className="flex items-center gap-3">
+        <span className="text-[10px] text-black/60 whitespace-nowrap w-20" style={monoFont}>logo–text gap</span>
+        <input type="range" min={0} max={48} value={logoGap} onChange={(e) => handleLogoGapChange(parseInt(e.target.value, 10))} className="w-20 h-1.5 accent-black" />
+        <span className="text-[10px] text-black/40 w-6" style={monoFont}>{logoGap}px</span>
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-[10px] text-black/60 whitespace-nowrap w-20" style={monoFont}>text logo X</span>
+        <input type="range" min={-40} max={40} value={textLogoOffsetX} onChange={(e) => handleTextLogoOffsetChange(parseInt(e.target.value, 10))} className="w-20 h-1.5 accent-black" />
+        <span className="text-[10px] text-black/40 w-8" style={monoFont}>{textLogoOffsetX}px</span>
+      </div>
+      <button onClick={handleResetToDefault} className="text-[9px] text-black/40 hover:text-black self-start mt-0.5" style={monoFont}>reset to default</button>
+    </div>
+  );
+
   if (mode === "signin") {
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 relative">
+        {spacingControl}
         <div className="w-full max-w-[320px] flex flex-col gap-6">
-          <div className="flex justify-center mb-8">
-            <AgoraLogo size={180} />
-          </div>
+          {logoSection}
           <div className="flex flex-col gap-3">
             <div className="h-[48px] bg-black rounded-[10px] flex items-center px-4">
               <input
@@ -93,73 +160,86 @@ export default function Landing() {
   }
 
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
-      <div className="w-full max-w-[320px] flex flex-col gap-0">
-        <div className="mb-10 flex justify-center">
-          <AgoraLogo size={42} />
-        </div>
-
-        <p
-          className="mb-16 text-black text-center"
-          style={{
-            ...monoFont,
-            fontSize: "28px",
-            lineHeight: "1.7",
-            letterSpacing: "0.07em",
-          }}
-        >
-          {"Refine your\njudgment\nthrough\ncontrolled\ndivergence_"}
-        </p>
-
-        <div className="flex flex-col gap-3">
-          <button
-            onClick={handleAuth}
-            className="h-[48px] bg-white border border-black/10 rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 cursor-pointer hover:bg-gray-50 transition-colors"
+    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 relative">
+      <AnimatePresence mode="wait">
+        {splashVisible ? (
+          <motion.div
+            key="splash"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6 }}
+            className="absolute inset-0 flex items-center justify-center bg-white"
           >
-            <GoogleIcon />
-            <span style={{ fontFamily: "'Roboto', sans-serif", fontSize: "14px", color: "rgba(0,0,0,0.54)" }}>
-              Continue with Google
-            </span>
-          </button>
-
-          <button
-            onClick={handleAuth}
-            className="h-[48px] bg-black rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 cursor-pointer hover:bg-neutral-800 transition-colors"
-          >
-            <AppleIcon />
-            <span className="text-white" style={{ fontFamily: "'SF Pro Display', sans-serif", fontSize: "14px" }}>
-              Continue with Apple
-            </span>
-          </button>
-
-          <div className="flex items-center gap-3 my-1">
-            <div className="flex-1 h-px bg-black" />
-            <span className="text-black" style={{ ...condensedFont, fontSize: "14px" }}>OR</span>
-            <div className="flex-1 h-px bg-black" />
-          </div>
-
-          <div className="h-[48px] bg-black rounded-[10px] flex items-center px-4">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleContinueWithEmail()}
-              placeholder="Enter your email..."
-              className="bg-transparent w-full outline-none text-[#828282] placeholder-[#828282]"
-              style={{ ...monoFont, fontSize: "13px" }}
+            <img
+              src={LOGO_MARK_URL}
+              alt=""
+              style={{ width: 120, height: 120, objectFit: "contain" }}
+              draggable={false}
             />
-          </div>
-
-          <button
-            onClick={handleContinueWithEmail}
-            className="h-[48px] bg-black rounded-[10px] flex items-center justify-center cursor-pointer hover:bg-neutral-800 transition-colors"
+          </motion.div>
+        ) : (
+          <motion.div
+            key="main"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.4 }}
+            className="w-full max-w-[320px] flex flex-col gap-0"
           >
-            <span className="text-white" style={{ ...monoFont, fontSize: "13px" }}>
-              Continue
-            </span>
-          </button>
-        </div>
-      </div>
+            {logoSection}
+            {spacingControl}
+
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={handleAuth}
+                className="h-[48px] bg-white border border-black/10 rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 cursor-pointer hover:bg-gray-50 transition-colors"
+              >
+                <GoogleIcon />
+                <span style={{ fontFamily: "'Roboto', sans-serif", fontSize: "14px", color: "rgba(0,0,0,0.54)" }}>
+                  Continue with Google
+                </span>
+              </button>
+
+              <button
+                onClick={handleAuth}
+                className="h-[48px] bg-black rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 cursor-pointer hover:bg-neutral-800 transition-colors"
+              >
+                <AppleIcon />
+                <span className="text-white" style={{ fontFamily: "'SF Pro Display', sans-serif", fontSize: "14px" }}>
+                  Continue with Apple
+                </span>
+              </button>
+
+              <div className="flex items-center gap-3 my-1">
+                <div className="flex-1 h-px bg-black" />
+                <span className="text-black" style={{ ...condensedFont, fontSize: "14px" }}>OR</span>
+                <div className="flex-1 h-px bg-black" />
+              </div>
+
+              <div className="h-[48px] bg-black rounded-[10px] flex items-center px-4">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleContinueWithEmail()}
+                  placeholder="Enter your email..."
+                  className="bg-transparent w-full outline-none text-[#828282] placeholder-[#828282]"
+                  style={{ ...monoFont, fontSize: "13px" }}
+                />
+              </div>
+
+              <button
+                onClick={handleContinueWithEmail}
+                className="h-[48px] bg-black rounded-[10px] flex items-center justify-center cursor-pointer hover:bg-neutral-800 transition-colors"
+              >
+                <span className="text-white" style={{ ...monoFont, fontSize: "13px" }}>
+                  Continue
+                </span>
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

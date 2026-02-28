@@ -1,10 +1,21 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router";
-import { AgoraLogo } from "../components/AgoraLogo";
+import { LandingLogoSection, DEFAULT_LOGO_GAP, DEFAULT_TEXT_LOGO_OFFSET_X } from "../components/AgoraLogo";
+
+const LOGO_GAP_KEY = "agora_logo_gap";
+const TEXT_LOGO_OFFSET_KEY = "agora_text_logo_offset_x";
 
 export default function Onboarding() {
   const navigate = useNavigate();
   const [nickname, setNickname] = useState("");
+  const logoGap = (() => {
+    const v = localStorage.getItem(LOGO_GAP_KEY);
+    return v ? Math.min(48, Math.max(0, parseInt(v, 10))) : DEFAULT_LOGO_GAP;
+  })();
+  const textLogoOffsetX = (() => {
+    const v = localStorage.getItem(TEXT_LOGO_OFFSET_KEY);
+    return v ? Math.min(40, Math.max(-40, parseInt(v, 10))) : DEFAULT_TEXT_LOGO_OFFSET_X;
+  })();
 
   const monoFont = { fontFamily: "'Share Tech Mono', monospace" };
 
@@ -18,9 +29,8 @@ export default function Onboarding() {
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
       <div className="w-full max-w-[320px] flex flex-col gap-6">
-        {/* Large logo mark */}
-        <div className="flex justify-center mb-12">
-          <AgoraLogo size={200} />
+        <div className="flex justify-center mb-4">
+          <LandingLogoSection width={200} logoToTextGap={logoGap} textLogoOffsetX={textLogoOffsetX} />
         </div>
 
         <div className="flex flex-col gap-3">

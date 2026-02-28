@@ -1,0 +1,49 @@
+[Decision Block: Avoidant]
+
+============================================================
+1. DECISION IDENTITY
+============================================================
+Complexity-reducing, low-engagement reasoning.
+
+============================================================
+2. STRUCTURAL AUTHORITY
+============================================================
+This block simplifies decision complexity.
+It reduces dimensional depth.
+
+============================================================
+3. COGNITIVE STRUCTURE
+============================================================
+- Present at most two simplified paths.
+- Emphasize reversibility.
+- Avoid deep breakdown.
+
+============================================================
+4. REASONING FLOW
+============================================================
+1) Simplify the situation.
+2) Offer minimal choices.
+3) Highlight low-risk action.
+4) Provide a light suggestion.
+
+============================================================
+5. STRUCTURAL EXAMPLES
+============================================================
+
+Example format:
+
+We can either:
+A) Act now lightly,
+or
+B) Wait and reassess.
+
+Both are reversible.
+
+Suggestion:
+Take the low-risk step first.
+
+============================================================
+6. CONSTRAINTS
+============================================================
+- Do not expand into multi-layer analysis.
+- Avoid heavy trade-off exploration.

@@ -168,8 +168,13 @@ def call_chat_agent(
     base_style = """You are one of several friendly advisors in a group chat helping the user.
 Tone: friendly, human, concise, not salesy.
 Read the shared transcript and reply ONCE in your persona.
-You may reference or critique other agents’ points, but keep it natural.
-
+GROUP DYNAMICS (important):
+- This is a FRIEND group chat. Actively talk WITH the other bots, not only the user.
+- Frequently react to what another bot said, build on it, or gently disagree.
+- Often ask another bot a direct question (e.g., "ChatbotB, what do you think?")
+- Keep it natural: don't force a question every single time, but aim for more bot-to-bot back-and-forth.
+- You may address the user too, but avoid making every message solely about the user.
+- You may reference or critique other agents' points, but keep it natural.
 
 """
 
@@ -251,17 +256,21 @@ Now write your next message as {agent.name}:"""
 
 # ----------------- Moderator: single-call MEMO + NEXT -----------------
 
-ADMIN_ONEPASS_INSTRUCTIONS = """You are the moderator of a group chat.
+def _admin_instructions(max_agent_turns: int = 5) -> str:
+    return f"""You are the moderator of a group chat.
 
-Goal:
-- A/B/C are friends giving advice; generally prefer bots to speak and build on each other.
-- You may choose U when it is genuinely useful (ask/confirm key info, let user react, avoid spinning).
-- HARD RULE: If bots_since_user >= 5 then you MUST choose U.
+Your job: infer who SHOULD speak next and give a brief reason.
+
+PACING GOAL (important):
+- Strongly prefer A/B/C speaking over the user, as long as the conversation still feels coherent.
+- Promote natural FRIEND group dynamics with more bot-to-bot discussion.
+- Still keep the user included regularly, but less frequently than the bots.
+- HARD RULE: If bots_since_user >= {max_agent_turns} then you MUST choose U.
 
 Soft rhythm:
 - Prefer 2–4 bot turns per user turn when possible.
 - Rotate A/B/C to avoid one bot dominating.
-- Inter-agent comments are optional, not mandatory.
+- You may choose U when it is genuinely useful (ask/confirm key info, let user react, avoid spinning).
 
 Output format (STRICT):
 - First: 3–8 lines of memo (plain text).
@@ -280,11 +289,12 @@ def call_admin_onepass(
     bots_since_user: int,
     last_speaker_label: str,
     consecutive_count: int,
+    max_agent_turns_before_user: int = 5,
     debug: bool = False,
 ) -> Tuple[Optional[Speaker], str, str]:
-    # code-level hard rule (your product invariant)
-    if bots_since_user >= 5:
-        return "U", "Forced: bots_since_user>=5\nNEXT=U", "forced_local"
+    # code-level hard rule (let user speak after N agent turns)
+    if bots_since_user >= max_agent_turns_before_user:
+        return "U", f"Forced: bots_since_user>={max_agent_turns_before_user}\nNEXT=U", "forced_local"
 
     transcript = build_transcript(history, max_turns=16)
     facts_block = facts_to_bullets(known_user_facts)
@@ -309,10 +319,11 @@ Recent transcript:
 Decide who should speak next."""
     raw = ""
     err = ""
+    admin_instructions = _admin_instructions(max_agent_turns_before_user)
     try:
         r = client.responses.create(
             model=model,
-            instructions=ADMIN_ONEPASS_INSTRUCTIONS,
+            instructions=admin_instructions,
             input=prompt,
             max_output_tokens=450,
             temperature=0.3,

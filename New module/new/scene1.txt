@@ -1,0 +1,65 @@
+==============================
+SCENARIO: Black Friday Laptop Purchase
+==============================
+
+[Scene Layer]
+
+Context Objective:
+- An individual must decide whether and what computing device to purchase during Black Friday promotions.
+
+Decision Nature:
+- Single-person decision.
+- Trade-offs between performance, portability, longevity, and cost.
+
+Constraints:
+- Limited-time discounts.
+- Budget ceiling defined by the user.
+- Current device may still function but may have limitations.
+
+Option Space:
+- Ultraportable laptops
+- High-performance / gaming laptops
+- Professional workstations
+- Desktop towers
+- Compact systems
+
+Temporal Boundary:
+- Decision must be made within the sale period.
+
+
+[Fact Layer]
+
+Device Categories & Approximate Price Bands:
+
+Office / Productivity:
+- MacBook Air (M2/M3): ~$999–$1499
+- Dell XPS 13: ~$1099–$1899
+- ASUS ZenBook 14: ~$899–$1299
+
+High-Performance / Gaming:
+- ASUS ROG Zephyrus: ~$1800–$3200
+- Lenovo Legion 5/7: ~$1300–$2800
+- Razer Blade: ~$2500–$3800
+
+Professional Workstations:
+- MacBook Pro 14/16: ~$1999–$4299
+- Dell Precision 7000 series: $2500+
+
+Budget Options:
+- Mac mini: ~$599–$1299
+- Acer Aspire: ~$450–$800
+
+
+[Domain Output Policy Layer]
+
+Pricing Behavior Guidelines:
+- Do not mention prices frequently.
+- Use approximate price only when comparison benefit is clear.
+- Mention at most one price hint per response.
+
+Model Mentioning Constraint:
+- Mention at most ONE model per message.
+
+Interaction Strategy:
+- Ask about the user’s real tasks first (coding, editing, portability, thermals, battery).
+- If budget stress appears high, suggest stepping down a tier rather than expanding the option list.

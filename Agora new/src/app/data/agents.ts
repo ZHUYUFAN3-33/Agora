@@ -14,6 +14,12 @@ export const DEFAULT_AGENT_ROLES: Record<AgentKey, string> = {
   C: "Skeptical Risk Guard",
 };
 
+export const DEFAULT_AGENT_COLORS: Record<AgentKey, string> = {
+  A: "#000000",
+  B: "#000000",
+  C: "#000000",
+};
+
 export const API_BASE = "http://localhost:5001/api";
 
 export const BACKEND_NAME_TO_KEY: Record<string, AgentKey> = {
@@ -27,15 +33,43 @@ export const SUGGESTED_PROMPTS = [
   "What makes a life worth living?",
   "Can morality exist without religion?",
   "Is privacy possible in the digital age?",
-  "Should humans colonize other planets?",
 ];
 
 export const EMOTION_EMOJI: Record<string, string> = {
   joy: "😄", anger: "😠", fear: "😨", sadness: "😢", surprise: "😲", disgust: "🤢", neutral: "😐",
 };
 
+// Emotion images in public/Assets/ (fallback to emoji if missing)
+export const EMOTION_IMAGES: Record<string, string> = {
+  joy: "/Assets/Joy.png",
+  anger: "/Assets/Mad.png",
+  fear: "/Assets/Fear.png",
+  sadness: "/Assets/Sad.png",
+  surprise: "/Assets/Suprise.png",
+  disgust: "/Assets/Disguted.png",
+};
+
 export const EMOTION_COLORS: Record<string, string> = {
   joy: "#f59e0b", anger: "#ef4444", fear: "#8b5cf6", sadness: "#3b82f6", surprise: "#f97316", disgust: "#22c55e",
+};
+
+export const DECISION_BLOCKS = ["Rational", "Intuitive", "Dependent", "Avoidant", "Spontaneous"] as const;
+export type DecisionBlock = (typeof DECISION_BLOCKS)[number];
+
+export const DECISION_BLOCK_DESCRIPTIONS: Record<DecisionBlock, string> = {
+  Rational: "Structured comparison: objective → criteria → trade-offs → conclusion",
+  Intuitive: "Fit-driven: anchor to context → pick aligned → light justification",
+  Dependent: "Guided support: validate uncertainty → narrow paths → recommend",
+  Avoidant: "Simplify: at most two paths → emphasize reversibility",
+  Spontaneous: "Fast action: choose quickly → minimal deliberation",
+};
+
+export const DECISION_BLOCK_EXAMPLES: Record<DecisionBlock, string[]> = {
+  Rational: ["Let's weigh the pros and cons first.", "Here are the main criteria to consider.", "Based on the trade-offs, I'd recommend...", "We need to compare options systematically.", "The objective is clear—now let's evaluate."],
+  Intuitive: ["This one just feels right.", "I'd go with that—it fits.", "Trust your gut on this.", "Something about this option clicks.", "It aligns with what you need."],
+  Dependent: ["What matters most to you?", "Let me help narrow it down.", "I can suggest a few solid paths.", "Let's focus on what you're comfortable with.", "I'd recommend option A or B."],
+  Avoidant: ["Keep it simple—two choices max.", "You can always change later.", "Let's not overcomplicate.", "Either way works—you can reverse.", "Stick to the basics."],
+  Spontaneous: ["Just pick one.", "Go for it.", "Don't overthink—decide.", "Quick call: take it.", "Act now."],
 };
 
 export const EMOTION_EXAMPLES: Record<string, string[]> = {
@@ -54,21 +88,21 @@ export interface AgentCustomSetting {
   arousal: number;
   control: number;
   additionalPrompt: string;
-  decisionOn: boolean;
-  decisionTrigger: number;
-  decisionStyle: "brief" | "detailed" | "structured";
+  decisionBlock: DecisionBlock;
+  roleDescription: string;
+  accentColor: string;
 }
 
-export const defaultSetting = (): AgentCustomSetting => ({
-  emotionOn: false,
+export const defaultSetting = (key?: AgentKey): AgentCustomSetting => ({
+  emotionOn: true,
   emotionTag: null,
   valence: 0.5,
   arousal: 0.5,
   control: 0.5,
   additionalPrompt: "",
-  decisionOn: false,
-  decisionTrigger: 5,
-  decisionStyle: "brief",
+  decisionBlock: "Rational",
+  roleDescription: key ? DEFAULT_AGENT_ROLES[key] : "",
+  accentColor: key ? DEFAULT_AGENT_COLORS[key] : "#000000",
 });
 
 export interface Scene {

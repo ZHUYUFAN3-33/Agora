@@ -6,10 +6,10 @@
 
 ## 一、当前状态概览 / Current State / 現状
 
-| 项目 Item | Agora old | Agora new |
-|-----------|-----------|-----------|
+| 项目 Item | backend | frontend |
+|-----------|---------|----------|
 | **技术栈** | 纯 HTML + CSS + JS，Flask 静态资源 | Vite + React + Tailwind + MUI + shadcn/ui + Emotion（Figma Make 脚手架） |
-| **前端入口** | `static/index.html` + `style.css` + `script.js` | 配置指向 `./src`，但 **src 下暂无前端源码** |
+| **前端入口** | `backend/static/index.html` + `style.css` + `script.js` | `frontend/src/` |
 | **UI 特点** | 深色主题、#4ecdc4 / #ff6b6b 强调色、启动加载、场景选择、Agent 定制、侧边栏、聊天界面 | 仅有依赖与构建配置，无实际页面可对照 |
 
 **结论：**  
@@ -32,7 +32,7 @@
 
 | # | 任务 Task | 说明 Description |
 |---|-----------|------------------|
-| 1.1 | **统一 CSS 变量（Design Tokens）** | 在 `Agora old/static/style.css` 顶部用 `:root` 定义颜色、间距、圆角、阴影等，替换当前散落的硬编码值（如 #1a1a1a、#4ecdc4、#ff6b6b 等）。 |
+| 1.1 | **统一 CSS 变量（Design Tokens）** | 在 `backend/static/style.css` 顶部用 `:root` 定义颜色、间距、圆角、阴影等，替换当前散落的硬编码值（如 #1a1a1a、#4ecdc4、#ff6b6b 等）。 |
 | 1.2 | **字体与排版** | 按新风格规范调整 `font-family`、标题/正文字号与行高，与 new 栈常见风格（如 system-ui + 清晰层级）对齐。 |
 | 1.3 | **配色与背景** | 若有新设计稿则严格按稿；若无，则保持深色主题并微调配色（背景、边框、强调色）使观感更统一，必要时区分“旧版色/新版色”两套变量便于对比。 |
 | 1.4 | **圆角、阴影、边框** | 统一按钮、卡片、输入框、弹窗的 `border-radius`、`box-shadow`、`border`，使其符合新风格规范。 |
@@ -79,7 +79,7 @@
 | # | 任务 Task | 说明 Description |
 |---|-----------|------------------|
 | 5.1 | **逐屏对比** | 启动加载 → 场景选择 → Agent 定制 → 主聊天界面 → 各弹窗，逐屏与设计稿或设计规范对照，查漏补缺。 |
-| 5.2 | **更新 README / 注释** | 在 `Agora old/README.md` 或代码注释中注明“已按 new 风格更新 UI”，并附设计 token 或设计稿链接（若有）。 |
+| 5.2 | **更新 README / 注释** | 在 `backend/README.md` 或代码注释中注明“已按 new 风格更新 UI”，并附设计 token 或设计稿链接（若有）。 |
 
 ---
 
@@ -94,7 +94,7 @@
 
 ## 四、若“New”后续补全了前端源码 / If "New" Gets UI Code Later
 
-若之后在 `Agora new/src` 下有了 React 组件与样式：
+若之后在 `frontend/src` 下有了 React 组件与样式：
 
 - 可增加任务：**从 new 提取颜色、间距、组件样式** 到一份共用的 token 文档或 CSS 变量文件，再在 old 中引用同一套变量，实现“风格一致、实现分离”（old 仍为 HTML/CSS/JS，new 为 React）。
 
@@ -108,4 +108,4 @@
 | 只有“想要更现代”的感觉 | Phase 0.2（写简短规范）→ Phase 1（tokens + 字体/配色/圆角）→ 2、3 |
 | 想先小范围试水 | 只做 1.1 + 1.3 + 3.2（变量 + 配色 + 按钮），看一屏效果再铺开 |
 
-如需我按上述某一 Phase 或某几条任务直接改 `Agora old` 的代码，可以说出 Phase 与任务编号（例如“先做 Phase 0.2 和 1.1”），我可以按该顺序具体改 CSS/HTML。
+如需我按上述某一 Phase 或某几条任务直接改 `backend` 的代码，可以说出 Phase 与任务编号（例如“先做 Phase 0.2 和 1.1”），我可以按该顺序具体改 CSS/HTML。

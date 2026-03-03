@@ -22,7 +22,7 @@ import {
   DECISION_BLOCKS,
   DECISION_BLOCK_DESCRIPTIONS,
   DECISION_BLOCK_EXAMPLES,
-  SUGGESTED_PROMPTS,
+  SCENE_SUGGESTED_PROMPTS,
   EMOTION_EMOJI,
   EMOTION_COLORS,
   EMOTION_EXAMPLES,
@@ -32,6 +32,14 @@ import {
 
 const monoFont = { fontFamily: "'Share Tech Mono', monospace" };
 const condensedFont = { fontFamily: "'Barlow Condensed', sans-serif" };
+const LIMITED_POOL_ACCENT_MAP: Record<AgentPoolKey, string> = {
+  A: "#005f73",
+  B: "#e9d8a6",
+  C: "#ae2012",
+  D: "#94d2bd",
+  E: "#ee9b00",
+  F: "#bb3e03",
+};
 
 function EmotionIcon({ emotion, size = 20 }: { emotion: string; size?: number }) {
   const key = (emotion || "").toLowerCase();
@@ -64,6 +72,7 @@ interface Message {
 
 interface ConvSettings {
   agentNames: Record<AgentKey, string>;
+  agentBackendNames: Record<AgentKey, string>;
   agentSettings: Record<AgentKey, AgentCustomSetting>;
   limitedSelectedAgents: AgentPoolKey[];
   selectedScene: Scene | null;
@@ -93,11 +102,25 @@ function formatTime(ts: number): string {
 }
 
 // Replace backend names (ChatbotA/B/C) with user-defined display names; replace "User" with nickname
-function applyDisplayNames(content: string, names: Record<AgentKey, string>, nickname?: string): string {
+function applyDisplayNames(
+  content: string,
+  names: Record<AgentKey, string>,
+  nickname?: string,
+  mode: ExperimentMode = "full",
+  backendNames?: Record<AgentKey, string>,
+): string {
   let out = content
     .replace(/\bChatbotA\b/g, names.A)
     .replace(/\bChatbotB\b/g, names.B)
     .replace(/\bChatbotC\b/g, names.C);
+  if (mode === "limited" && backendNames) {
+    (["A", "B", "C"] as AgentKey[]).forEach((k) => {
+      const internalName = (backendNames[k] || "").trim();
+      if (!internalName) return;
+      const escaped = internalName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      out = out.replace(new RegExp(`\\b${escaped}\\b`, "g"), names[k]);
+    });
+  }
   if (nickname && nickname.trim()) {
     out = out.replace(/\bUser\b/g, nickname.trim());
   }
@@ -166,24 +189,32 @@ function TypingDots({ agentKey, agentNames }: { agentKey: AgentKey; agentNames: 
 function AgentMessage({
   message,
   agentNames,
+  agentBackendNames,
   agentSettings,
+  mode,
   nickname,
   onClickAgent,
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
+  agentBackendNames: Record<AgentKey, string>;
   agentSettings?: Record<AgentKey, AgentCustomSetting>;
+  mode: ExperimentMode;
   nickname?: string;
   onClickAgent?: (key: AgentKey) => void;
 }) {
   const name = message.agentKey ? agentNames[message.agentKey] : "Agent";
-  const role = message.agentKey ? DEFAULT_AGENT_ROLES[message.agentKey] : "";
+  const role = message.agentKey
+    ? (mode === "limited"
+      ? (agentSettings?.[message.agentKey]?.roleDescription || DEFAULT_AGENT_ROLES[message.agentKey])
+      : DEFAULT_AGENT_ROLES[message.agentKey])
+    : "";
   const isError = !message.agentKey;
   const accentColor = message.agentKey && agentSettings?.[message.agentKey]?.accentColor
     ? agentSettings[message.agentKey].accentColor
     : (message.agentKey ? DEFAULT_AGENT_COLORS[message.agentKey] : "#000");
   const displayContent = message.agentKey
-    ? applyDisplayNames(message.content, agentNames, nickname)
+    ? applyDisplayNames(message.content, agentNames, nickname, mode, agentBackendNames)
     : message.content;
 
   return (
@@ -760,6 +791,7 @@ export default function Chat() {
   const [currentPhase, setCurrentPhase] = useState<string | null>(null);
 
   const [agentNames, setAgentNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
+  const [agentBackendNames, setAgentBackendNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
   const [agentSettings, setAgentSettings] = useState<Record<AgentKey, AgentCustomSetting>>({ A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") });
   const [limitedSelectedAgents, setLimitedSelectedAgents] = useState<AgentPoolKey[]>([...LIMITED_DEFAULT_SELECTED]);
   const [scenes, setScenes] = useState<Scene[]>([]);
@@ -770,6 +802,8 @@ export default function Chat() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const currentConv = conversations.find((c) => c.id === currentConvId) || null;
   const appearance = useAppearanceContext();
+  const activeSceneId = selectedScene?.id || "scene1";
+  const suggestedPrompts = SCENE_SUGGESTED_PROMPTS[activeSceneId] || SCENE_SUGGESTED_PROMPTS.scene1;
 
   useEffect(() => { if (!localStorage.getItem("agora_auth")) navigate("/"); }, [navigate]);
 
@@ -824,6 +858,7 @@ export default function Chat() {
     let roomId = currentConv?.roomId || "";
     const isNewConv = !convId;
     let nextNamesForConv: Record<AgentKey, string> = { ...agentNames };
+    let nextBackendNamesForConv: Record<AgentKey, string> = { ...agentBackendNames };
     let nextSettingsForConv: Record<AgentKey, AgentCustomSetting> = { A: { ...agentSettings.A }, B: { ...agentSettings.B }, C: { ...agentSettings.C } };
 
     if (!convId) {
@@ -857,6 +892,7 @@ export default function Chat() {
           agentsFromApi.forEach((a: { key?: string; pool_key?: string; name?: string; decision?: string; emotion?: string; role?: string }) => {
             const k = a.key as AgentKey;
             if (k && (k === "A" || k === "B" || k === "C")) {
+              if (a.name) nextBackendNamesForConv[k] = a.name;
               if (experimentMode === "limited") {
                 const profile = LIMITED_AGENT_POOL.find((p) => p.key === (a.pool_key as AgentPoolKey));
                 nextNamesForConv[k] = profile?.defaultName || a.name || nextNamesForConv[k];
@@ -870,10 +906,14 @@ export default function Chat() {
                 roleDescription: experimentMode === "limited"
                   ? (LIMITED_AGENT_POOL.find((p) => p.key === (a.pool_key as AgentPoolKey))?.roleDescription || a.role || nextSettingsForConv[k].roleDescription)
                   : (a.role || nextSettingsForConv[k].roleDescription),
+                accentColor: experimentMode === "limited"
+                  ? (LIMITED_POOL_ACCENT_MAP[(a.pool_key as AgentPoolKey) || "A"] || nextSettingsForConv[k].accentColor)
+                  : nextSettingsForConv[k].accentColor,
               };
             }
           });
           setAgentNames(nextNamesForConv);
+          setAgentBackendNames(nextBackendNamesForConv);
           setAgentSettings(nextSettingsForConv);
         }
       } catch {
@@ -884,7 +924,7 @@ export default function Chat() {
       }
       const newConv: Conversation = {
         id: `conv-${Date.now()}`, roomId, title: text.length > 48 ? text.slice(0, 48) + "…" : text, preview: text, timestamp: "just now", messages: [userMsg],
-        settings: { agentNames: nextNamesForConv, agentSettings: nextSettingsForConv, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap, mode: experimentMode },
+        settings: { agentNames: nextNamesForConv, agentBackendNames: nextBackendNamesForConv, agentSettings: nextSettingsForConv, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap, mode: experimentMode },
       };
       setConversations((prev) => [newConv, ...prev]);
       convId = newConv.id;
@@ -940,16 +980,24 @@ export default function Chat() {
       if (!res.ok) return;
       const data = await res.json();
       const runtimeMap: Record<string, AgentKey> = {};
+      const runtimeBackendNames: Partial<Record<AgentKey, string>> = {};
       const runtimeNames: Partial<Record<AgentKey, string>> = {};
+      const modeForHistory: ExperimentMode = currentConv?.settings?.mode ?? experimentMode;
       (data.active_agents || []).forEach((a: { key?: string; name?: string }) => {
         const k = a.key as AgentKey;
         if ((k === "A" || k === "B" || k === "C") && a.name) {
           runtimeMap[a.name] = k;
-          runtimeNames[k] = a.name;
+          runtimeBackendNames[k] = a.name;
+          if (modeForHistory !== "limited") {
+            runtimeNames[k] = a.name;
+          }
         }
       });
       if (Object.keys(runtimeNames).length > 0) {
         setAgentNames((prev) => ({ ...prev, ...runtimeNames }));
+      }
+      if (Object.keys(runtimeBackendNames).length > 0) {
+        setAgentBackendNames((prev) => ({ ...prev, ...runtimeBackendNames }));
       }
       const messages: Message[] = (data.history || []).map((h: { character: string; txt: string }, i: number) => {
         if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (data.history.length - i) * 1000 };
@@ -977,6 +1025,7 @@ export default function Chat() {
 
   const defaultConvSettings = (mode: ExperimentMode = "full"): ConvSettings => ({
     agentNames: { ...DEFAULT_AGENT_NAMES },
+    agentBackendNames: { ...DEFAULT_AGENT_NAMES },
     agentSettings: { A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") },
     limitedSelectedAgents: [...LIMITED_DEFAULT_SELECTED],
     selectedScene: null,
@@ -994,13 +1043,14 @@ export default function Chat() {
   const saveCurrentConvSettings = useCallback(() => {
     if (!currentConvId) return;
     const existingMode = currentConv?.settings?.mode ?? "full";
-    const s: ConvSettings = { agentNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap, mode: existingMode };
+    const s: ConvSettings = { agentNames, agentBackendNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap, mode: existingMode };
     setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, settings: s } : c));
-  }, [currentConvId, currentConv?.settings?.mode, experimentMode, agentNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap]);
+  }, [currentConvId, currentConv?.settings?.mode, experimentMode, agentNames, agentBackendNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap]);
 
   const loadConvSettings = useCallback((conv: Conversation | null) => {
     const s = getConvSettings(conv);
     setAgentNames(s.agentNames);
+    setAgentBackendNames(s.agentBackendNames || { ...DEFAULT_AGENT_NAMES });
     const merged = (k: AgentKey) => ({ ...defaultSetting(k), ...s.agentSettings[k] });
     setAgentSettings({ A: merged("A"), B: merged("B"), C: merged("C") });
     setLimitedSelectedAgents(normalizeLimitedSelection(s.limitedSelectedAgents || LIMITED_DEFAULT_SELECTED));
@@ -1015,9 +1065,16 @@ export default function Chat() {
 
   useEffect(() => {
     if (currentConvId) saveCurrentConvSettings();
-  }, [agentNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap]);
+  }, [agentNames, agentBackendNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap]);
 
-  const handleNewChat = () => { setCurrentConvId(null); loadConvSettings(null); setTypingKeys([]); setMsgQueue([]); setSidebarOpen(false); inputRef.current?.focus(); };
+  const handleNewChat = () => {
+    setCurrentConvId(null);
+    loadConvSettings(null);
+    setTypingKeys([]);
+    setMsgQueue([]);
+    setSidebarOpen(false);
+    inputRef.current?.focus();
+  };
   const handleSelectConv = (id: string) => {
     const conv = conversations.find((c) => c.id === id);
     setCurrentConvId(id);
@@ -1214,7 +1271,7 @@ export default function Chat() {
                             className={`border rounded-[10px] px-3 py-3 text-left transition-colors group ${selected ? "border-black bg-black/[0.03]" : "border-black/8"} ${atLimit ? "opacity-50" : ""}`}
                           >
                             <div className="flex items-center gap-1.5 min-w-0 mb-1">
-                              <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0 bg-black" />
+                              <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: LIMITED_POOL_ACCENT_MAP[profile.key] || "#000000" }} />
                               <span className="text-[10px] tracking-widest text-black truncate" style={monoFont}>{profile.defaultName}</span>
                             </div>
                             <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{profile.roleDescription}</p>
@@ -1254,7 +1311,7 @@ export default function Chat() {
                         whileHover={{ y: -2 }}
                         whileTap={{ scale: 0.98 }}
                         onClick={() => { setCustomizerInitialAgent(null); setShowCustomizer(true); }}
-                        className="border border-dashed border-black/15 rounded-[10px] px-3 py-3 flex flex-col items-center justify-center gap-1 hover:border-black/40 hover:bg-black/2 transition-all group min-h-[72px]"
+                        className="border border-dashed border-black/15 rounded-[10px] px-3 py-3 flex flex-col items-center justify-center gap-1 hover:border-black/40 hover:bg-black/2 transition-colors group min-h-[72px]"
                       >
                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="opacity-20 group-hover:opacity-50 transition-opacity">
                           <path d="M8 1V15M1 8H15" stroke="black" strokeWidth="1.5" strokeLinecap="round"/>
@@ -1284,7 +1341,7 @@ export default function Chat() {
               <div className="w-full">
                 <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>SUGGESTED PROMPTS</p>
                 <div className="flex flex-col gap-2">
-                  {SUGGESTED_PROMPTS.map((prompt, i) => (
+                  {suggestedPrompts.map((prompt, i) => (
                     <motion.button
                       key={i}
                       whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
@@ -1302,7 +1359,7 @@ export default function Chat() {
             <div className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto">
               {currentConv.messages.map((msg) =>
                 msg.role === "user" ? <UserMessage key={msg.id} message={msg} nickname={nickname} />
-                  : <AgentMessage key={msg.id} message={msg} agentNames={agentNames} agentSettings={agentSettings} nickname={nickname} onClickAgent={(key) => { setCustomizerInitialAgent(key); setShowCustomizer(true); }} />
+                  : <AgentMessage key={msg.id} message={msg} agentNames={agentNames} agentBackendNames={agentBackendNames} agentSettings={agentSettings} mode={currentConv?.settings?.mode ?? experimentMode} nickname={nickname} onClickAgent={(key) => { setCustomizerInitialAgent(key); setShowCustomizer(true); }} />
               )}
               <AnimatePresence>
                 {typingKeys.map((k) => <TypingDots key={k} agentKey={k} agentNames={agentNames} />)}
@@ -1319,12 +1376,13 @@ export default function Chat() {
             )}
             <div className="flex gap-2 items-end min-h-[48px]">
               <div className="relative flex">
-                <button ref={attachBtnRef} onClick={() => setAttachMenuOpen((v) => !v)} type="button"
+                <motion.button ref={attachBtnRef} onClick={() => setAttachMenuOpen((v) => !v)} type="button"
+                  whileTap={{ scale: 0.95 }}
                   className="h-[48px] w-[48px] min-h-[48px] bg-black rounded-[12px] flex items-center justify-center flex-shrink-0 transition-colors hover:bg-neutral-800 group">
                   <span className="inline-flex transition-transform duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-hover:scale-110">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                   </span>
-                </button>
+                </motion.button>
                 <AnimatePresence>
                   <AttachMenu open={attachMenuOpen} onClose={() => setAttachMenuOpen(false)} anchorRef={attachBtnRef} />
                 </AnimatePresence>
@@ -1337,7 +1395,7 @@ export default function Chat() {
                   onInput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 120)}px`; }} />
               </div>
               <motion.button onClick={handleSend} disabled={!inputValue.trim() || isLoading}
-                whileTap={!inputValue.trim() || isLoading ? {} : { scale: 0.93 }}
+                whileTap={!inputValue.trim() || isLoading ? {} : { scale: 0.95 }}
                 transition={{ type: "spring", stiffness: 400, damping: 25 }}
                 className="h-[48px] w-[48px] min-h-[48px] bg-black rounded-[12px] flex items-center justify-center flex-shrink-0 hover:bg-neutral-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed group">
                 {isLoading ? (
@@ -1349,12 +1407,13 @@ export default function Chat() {
                 )}
               </motion.button>
               <div className="relative flex">
-                <button ref={settingsBtnRef} onClick={() => setSettingsMenuOpen((v) => !v)} type="button"
+                <motion.button ref={settingsBtnRef} onClick={() => setSettingsMenuOpen((v) => !v)} type="button"
+                  whileTap={{ scale: 0.95 }}
                   className="h-[48px] w-[48px] min-h-[48px] bg-black rounded-[12px] flex items-center justify-center flex-shrink-0 transition-colors hover:bg-neutral-800 group">
                   <span className="inline-flex transition-transform duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-hover:scale-110">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                   </span>
-                </button>
+                </motion.button>
                 <AnimatePresence>
                   <SettingsMenu open={settingsMenuOpen} onClose={() => setSettingsMenuOpen(false)} anchorRef={settingsBtnRef}
                     onCustomize={() => setShowCustomizer(true)} onScene={() => setShowSceneSelector(true)} onTurn={() => setShowTurnModal(true)}

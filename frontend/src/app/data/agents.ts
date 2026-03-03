@@ -48,12 +48,28 @@ export const BACKEND_NAME_TO_KEY: Record<string, AgentKey> = {
   ChatbotC: "C",
 };
 
-export const SUGGESTED_PROMPTS = [
-  "Is free will compatible with determinism?",
-  "What makes a life worth living?",
-  "Can morality exist without religion?",
-  "Is privacy possible in the digital age?",
-];
+export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
+  scene1: [
+    "I need a Black Friday laptop under $1200 for coding and light gaming. What should I prioritize?",
+    "Should I buy now during Black Friday or wait for next-gen models in spring?",
+    "I'm choosing between battery life and performance. How do I decide for daily office work?",
+    "Can you compare MacBook Air, ThinkPad, and gaming laptops for a 3-year horizon?",
+  ],
+  scene2: [
+    "Our group has mixed budgets. How should we pick a destination everyone can accept?",
+    "Can you propose a 5-day trip plan with one low-cost, one mid-range, and one premium option?",
+    "How do we decide between Japan and Southeast Asia for a trip in late autumn?",
+    "What's a fair way to split costs when people want different hotel standards?",
+  ],
+  scene3: [
+    "Which wildfire policy should be prioritized first: fuel reduction, early warning, or evacuation infrastructure?",
+    "How can a city balance wildfire resilience with budget limits over the next 3 years?",
+    "What policy package could reduce risk without causing strong public pushback?",
+    "How should we measure whether a wildfire mitigation policy is actually working?",
+  ],
+};
+
+export const SUGGESTED_PROMPTS = SCENE_SUGGESTED_PROMPTS.scene1;
 
 export const EMOTION_EMOJI: Record<string, string> = {
   joy: "😄", anger: "😠", fear: "😨", sadness: "😢", surprise: "😲", disgust: "🤢", neutral: "😐",

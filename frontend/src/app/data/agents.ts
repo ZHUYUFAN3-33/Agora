@@ -1,9 +1,26 @@
 export type AgentKey = "A" | "B" | "C";
+export type AgentPoolKey = "A" | "B" | "C" | "D" | "E" | "F";
 
 /** Experiment mode: full = all options, limited = color/name only, single = Agent A only, neutral */
 export type ExperimentMode = "full" | "limited" | "single";
 
 export const AGENT_KEYS: AgentKey[] = ["A", "B", "C"];
+export const LIMITED_DEFAULT_SELECTED: AgentPoolKey[] = ["A", "D", "E"];
+
+export interface LimitedAgentProfile {
+  key: AgentPoolKey;
+  defaultName: string;
+  roleDescription: string;
+}
+
+export const LIMITED_AGENT_POOL: LimitedAgentProfile[] = [
+  { key: "A", defaultName: "Mia", roleDescription: "Opportunity Spotter" },
+  { key: "B", defaultName: "Ethan", roleDescription: "Evidence Analyzer" },
+  { key: "C", defaultName: "Noah", roleDescription: "Constraint Checker" },
+  { key: "D", defaultName: "Olivia", roleDescription: "Scope Keeper" },
+  { key: "E", defaultName: "Grace", roleDescription: "Policy Enforcer" },
+  { key: "F", defaultName: "Liam", roleDescription: "System Protector" },
+];
 
 export const DEFAULT_AGENT_NAMES: Record<AgentKey, string> = {
   A: "ChatbotA",

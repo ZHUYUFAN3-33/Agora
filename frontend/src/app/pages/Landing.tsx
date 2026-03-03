@@ -100,16 +100,16 @@ export default function Landing() {
   const spacingControl = controlVisible && (
     <div className="fixed bottom-4 right-4 bg-white/95 border border-black/10 rounded-[10px] shadow-lg px-3 py-2.5 flex flex-col gap-2 z-10">
       <div className="flex items-center gap-3">
-        <span className="text-[10px] text-black/60 whitespace-nowrap w-20" style={monoFont}>logo–text gap</span>
+        <span className="text-[10px] text-[var(--app-muted-text)] whitespace-nowrap w-20" style={monoFont}>logo–text gap</span>
         <input type="range" min={0} max={48} value={logoGap} onChange={(e) => handleLogoGapChange(parseInt(e.target.value, 10))} className="w-20 h-1.5 accent-black" />
-        <span className="text-[10px] text-black/40 w-6" style={monoFont}>{logoGap}px</span>
+        <span className="text-[10px] text-[var(--app-muted-text)] w-6" style={monoFont}>{logoGap}px</span>
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-[10px] text-black/60 whitespace-nowrap w-20" style={monoFont}>text logo X</span>
+        <span className="text-[10px] text-[var(--app-muted-text)] whitespace-nowrap w-20" style={monoFont}>text logo X</span>
         <input type="range" min={-40} max={40} value={textLogoOffsetX} onChange={(e) => handleTextLogoOffsetChange(parseInt(e.target.value, 10))} className="w-20 h-1.5 accent-black" />
-        <span className="text-[10px] text-black/40 w-8" style={monoFont}>{textLogoOffsetX}px</span>
+        <span className="text-[10px] text-[var(--app-muted-text)] w-8" style={monoFont}>{textLogoOffsetX}px</span>
       </div>
-      <button onClick={handleResetToDefault} className="text-[9px] text-black/40 hover:text-black self-start mt-0.5" style={monoFont}>reset to default</button>
+      <button onClick={handleResetToDefault} className="text-[9px] text-[var(--app-muted-text)] hover:text-black self-start mt-0.5" style={monoFont}>reset to default</button>
     </div>
   );
 

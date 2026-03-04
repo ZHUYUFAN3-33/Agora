@@ -537,13 +537,6 @@ function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, on
                 className="flex-1 text-[11px] px-3 py-1.5 border border-black/15 rounded-[6px] outline-none focus:border-black/40 font-mono" maxLength={7} />
             </div>
           </div>
-          {canEditAdvanced && (
-            <div>
-              <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Short Description</label>
-              <input type="text" value={s.roleDescription ?? ""} onChange={(e) => upd(key, "roleDescription", e.target.value)} placeholder="e.g. Enthusiastic Advisor"
-                className="w-full text-[12px] px-3 py-1.5 border border-black/15 rounded-[6px] outline-none focus:border-black/40 transition-colors" style={monoFont} />
-            </div>
-          )}
         </div>
       );
     }
@@ -599,11 +592,6 @@ function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, on
       return (
         <div key="behavior" className="flex flex-col gap-4 w-full break-words">
           <div>
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Additional Prompt</label>
-            <textarea value={s.additionalPrompt} onChange={(e) => upd(key, "additionalPrompt", e.target.value)} placeholder="Extra instructions for this agent..." rows={3}
-              className="w-full text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none resize-none leading-relaxed focus:border-black/40 transition-colors" style={monoFont} />
-          </div>
-          <div>
             <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Decision making style</label>
             <p className="text-[10px] text-[var(--app-muted-text)] mb-2" style={monoFont}>Reasoning style for this agent</p>
             <CustomDropdown
@@ -624,6 +612,11 @@ function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, on
                 </ul>
               </div>
             )}
+          </div>
+          <div>
+            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Additional Prompt</label>
+            <textarea value={s.additionalPrompt} onChange={(e) => upd(key, "additionalPrompt", e.target.value)} placeholder="Extra instructions for this agent..." rows={3}
+              className="w-full text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none resize-none leading-relaxed focus:border-black/40 transition-colors" style={monoFont} />
           </div>
         </div>
       );

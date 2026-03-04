@@ -29,9 +29,9 @@ export const DEFAULT_AGENT_NAMES: Record<AgentKey, string> = {
 };
 
 export const DEFAULT_AGENT_ROLES: Record<AgentKey, string> = {
-  A: "Enthusiastic Advisor",
-  B: "Analytical Consultant",
-  C: "Skeptical Risk Guard",
+  A: "+ + + + +",
+  B: "+ + + + +",
+  C: "+ + + + +",
 };
 
 export const DEFAULT_AGENT_COLORS: Record<AgentKey, string> = {

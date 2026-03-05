@@ -5,24 +5,24 @@ SCENARIO: Wildfire Mitigation Policy Discussion
 [Scene Layer]
 
 Context Objective:
-- A group engages in a collaborative policy discussion addressing wildfire mitigation and long-term community resilience.
+- A group engages in a collaborative policy discussion to recommend a wildfire mitigation policy direction for a resource-constrained regional government.
 
 Decision Nature:
 - Single structured discussion session.
-- Participants evaluate multiple policy directions.
-- The group attempts to reach a shared recommendation.
+- Participants evaluate and compare policy-level directions.
+- The group must reach a shared policy recommendation with explicit trade-off acknowledgment.
 
 Constraints:
-- Limited public funding and operational capacity.
-- Trade-offs between public safety, environmental protection, and economic impact.
-- Policies may produce both short-term and long-term consequences.
+- Limited public funding: not all strategies can be fully funded simultaneously.
+- Operational capacity is finite: prioritization is required.
+- Trade-offs between public safety, environmental protection, and economic impact must be surfaced explicitly.
+- Policies may produce both short-term and long-term consequences that differ significantly.
 
-Option Space:
-- Land management interventions
-- Infrastructure investment
-- Emergency response capacity
-- Regulatory measures
-- Mixed policy combinations
+Option Space (policy directions only — do not expand beyond these):
+- Land management interventions (e.g. controlled burns, mechanical thinning)
+- Infrastructure investment (e.g. firebreaks, evacuation routes, detection systems)
+- Regulatory measures (e.g. zoning, land-use restrictions, building codes)
+- Mixed policy package (combination of the above with defined priorities and trade-offs)
 
 Temporal Boundary:
 - A final policy direction must be produced within the session timeframe.
@@ -32,34 +32,47 @@ Temporal Boundary:
 
 Wildfire Mitigation Strategies:
 
-Prevention:
-- Controlled burns
-- Mechanical thinning of vegetation
-- Zoning and land-use regulation
+Land Management:
+- Controlled burns: reduces fuel load, ecologically complex, requires expertise
+- Mechanical thinning: effective but resource-intensive
+- Both require ongoing maintenance, not one-time interventions
 
-Response & Infrastructure:
-- Early detection systems
-- Evacuation planning and infrastructure
-- Firebreak construction
-- Emergency resource allocation
+Infrastructure:
+- Early detection systems: high upfront cost, reduces response time
+- Firebreak construction: effective buffer but disrupts land use
+- Evacuation infrastructure: critical for safety, long lead time
+
+Regulatory:
+- Zoning restrictions: prevents future risk accumulation, economically contentious
+- Building codes: long-term risk reduction, affects development costs
 
 Trade-off Patterns:
 - Immediate risk reduction vs long-term ecological balance
 - Environmental protection vs economic activity
 - Upfront investment vs reactive cost
 - Central coordination vs local flexibility
+- Prevention-focused vs response-focused
 
 
 [Domain Output Policy Layer]
 
+Scope Boundary (strictly enforced):
+- Discuss ONLY policy directions and their trade-offs.
+- Do NOT discuss implementation details, outreach campaigns, community engagement activities, social media, education programs, or public awareness initiatives unless a policy direction has already been agreed upon.
+- Do NOT introduce new policy categories outside the Option Space above.
+- If the conversation drifts to implementation or community activities, redirect it back to policy-level comparison.
+
 Discussion Guidelines:
-- Do not assume a single “correct” policy.
+- Do not assume a single "correct" policy.
 - Avoid framing any strategy as morally superior.
-- Encourage structured comparison when appropriate (depending on Decision Architecture layer).
+- Surface trade-offs explicitly when comparing options.
+- Each response should either introduce a new comparison dimension, challenge an existing trade-off, or move toward narrowing the options.
 
 Information Use:
-- Reference mitigation tools when helpful.
+- Reference the mitigation strategies in the Fact Layer when helpful.
 - Avoid introducing external political ideology.
+- Do not invent statistics or cite specific studies.
 
 Decision Support:
-- Support movement toward a coherent shared policy direction within session limits.
+- The goal is a concrete shared recommendation: one policy direction or a defined mixed package with explicit priorities.
+- Vague conclusions ("we should consider all options") are not acceptable as a final output.

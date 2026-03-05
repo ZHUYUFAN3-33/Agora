@@ -763,6 +763,7 @@ export default function Chat() {
   const [typingKeys, setTypingKeys] = useState<AgentKey[]>([]);
   const [msgQueue, setMsgQueue] = useState<Array<{ agentKey: AgentKey; content: string; convId: string }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
+  const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>({ A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") });
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -812,6 +813,7 @@ export default function Chat() {
   }, [conversations, typingKeys]);
 
   useEffect(() => { agentNamesRef.current = agentNames; }, [agentNames]);
+  useEffect(() => { agentSettingsRef.current = agentSettings; }, [agentSettings]);
 
   // Queue processor: typing dot → message → next
   useEffect(() => {
@@ -850,9 +852,13 @@ export default function Chat() {
     let convId = currentConvId;
     let roomId = currentConv?.roomId || "";
     const isNewConv = !convId;
-    let nextNamesForConv: Record<AgentKey, string> = { ...agentNames };
+    let nextNamesForConv: Record<AgentKey, string> = { ...agentNamesRef.current };
     let nextBackendNamesForConv: Record<AgentKey, string> = { ...agentBackendNames };
-    let nextSettingsForConv: Record<AgentKey, AgentCustomSetting> = { A: { ...agentSettings.A }, B: { ...agentSettings.B }, C: { ...agentSettings.C } };
+    let nextSettingsForConv: Record<AgentKey, AgentCustomSetting> = {
+      A: { ...agentSettingsRef.current.A },
+      B: { ...agentSettingsRef.current.B },
+      C: { ...agentSettingsRef.current.C },
+    };
 
     if (!convId) {
       try {
@@ -882,6 +888,7 @@ export default function Chat() {
         // Apply agent defaults from info.jsonl (decision, emotion)
         const agentsFromApi = data.agents || [];
         if (agentsFromApi.length > 0) {
+          const applyApiDefaults = experimentMode !== "full";
           agentsFromApi.forEach((a: { key?: string; pool_key?: string; name?: string; decision?: string; emotion?: string; role?: string }) => {
             const k = a.key as AgentKey;
             if (k && (k === "A" || k === "B" || k === "C")) {
@@ -889,16 +896,18 @@ export default function Chat() {
               if (experimentMode === "limited") {
                 const profile = LIMITED_AGENT_POOL.find((p) => p.key === (a.pool_key as AgentPoolKey));
                 nextNamesForConv[k] = profile?.defaultName || a.name || nextNamesForConv[k];
-              } else if (a.name) {
-                nextNamesForConv[k] = a.name;
               }
               nextSettingsForConv[k] = {
                 ...nextSettingsForConv[k],
-                decisionBlock: (a.decision as AgentCustomSetting["decisionBlock"]) || "Rational",
-                emotionTag: a.emotion ? String(a.emotion).toLowerCase() : null,
+                decisionBlock: applyApiDefaults
+                  ? ((a.decision as AgentCustomSetting["decisionBlock"]) || nextSettingsForConv[k].decisionBlock || "Rational")
+                  : nextSettingsForConv[k].decisionBlock,
+                emotionTag: applyApiDefaults
+                  ? (a.emotion ? String(a.emotion).toLowerCase() : nextSettingsForConv[k].emotionTag)
+                  : nextSettingsForConv[k].emotionTag,
                 roleDescription: experimentMode === "limited"
                   ? (LIMITED_AGENT_POOL.find((p) => p.key === (a.pool_key as AgentPoolKey))?.roleDescription || a.role || nextSettingsForConv[k].roleDescription)
-                  : (a.role || nextSettingsForConv[k].roleDescription),
+                  : nextSettingsForConv[k].roleDescription,
                 accentColor: experimentMode === "limited"
                   ? (LIMITED_POOL_ACCENT_MAP[(a.pool_key as AgentPoolKey) || "A"] || nextSettingsForConv[k].accentColor)
                   : nextSettingsForConv[k].accentColor,
@@ -1045,7 +1054,14 @@ export default function Chat() {
     setAgentNames(s.agentNames);
     setAgentBackendNames(s.agentBackendNames || { ...DEFAULT_AGENT_NAMES });
     const merged = (k: AgentKey) => ({ ...defaultSetting(k), ...s.agentSettings[k] });
-    setAgentSettings({ A: merged("A"), B: merged("B"), C: merged("C") });
+    const mergedSettings = { A: merged("A"), B: merged("B"), C: merged("C") };
+    setAgentSettings(mergedSettings);
+    agentNamesRef.current = { ...s.agentNames };
+    agentSettingsRef.current = {
+      A: { ...mergedSettings.A },
+      B: { ...mergedSettings.B },
+      C: { ...mergedSettings.C },
+    };
     setLimitedSelectedAgents(normalizeLimitedSelection(s.limitedSelectedAgents || LIMITED_DEFAULT_SELECTED));
     setSelectedScene(s.selectedScene);
     setMaxAgentTurns(s.maxAgentTurns);
@@ -1053,7 +1069,13 @@ export default function Chat() {
   }, [experimentMode]);
 
   useEffect(() => {
-    loadConvSettings(currentConv);
+    if (!currentConvId) {
+      loadConvSettings(null);
+      return;
+    }
+    if (currentConv) {
+      loadConvSettings(currentConv);
+    }
   }, [currentConvId, currentConv?.id]);
 
   useEffect(() => {
@@ -1097,11 +1119,14 @@ export default function Chat() {
                   if (settings[k]?.decisionBlock !== agentSettings[k]?.decisionBlock) changes.push({ type: "decision", agent, before: agentSettings[k]?.decisionBlock ?? null, after: settings[k]?.decisionBlock ?? null });
                   if ((settings[k]?.additionalPrompt ?? "") !== (agentSettings[k]?.additionalPrompt ?? "")) changes.push({ type: "additional_prompt", agent, before: agentSettings[k]?.additionalPrompt ?? null, after: settings[k]?.additionalPrompt ?? null });
                 });
-                if (changes.length > 0) {
+              if (changes.length > 0) {
                   fetch(`${API_BASE}/log-param-change`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }) }).catch(() => {});
                 }
               }
-              setAgentNames(names); setAgentSettings(settings);
+              setAgentNames(names);
+              setAgentSettings(settings);
+              agentNamesRef.current = { ...names };
+              agentSettingsRef.current = { A: { ...settings.A }, B: { ...settings.B }, C: { ...settings.C } };
             }}
             onClose={() => { setShowCustomizer(false); setCustomizerInitialAgent(null); }}
             onAnalyze={analyzeEmotionForAgent} initialOpenCard={customizerInitialAgent} />

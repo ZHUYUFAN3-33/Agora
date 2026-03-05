@@ -179,6 +179,7 @@ class ChatAgent:
             f"- Frequently react to what another bot said, build on it, or gently disagree.\n"
             f"- Often ask another bot a direct question (e.g., \"{name_map.get('B','ChatbotB')}, what do you think?\")\n"
             f"- Keep it natural: don't force a question every single time, but aim for more bot-to-bot back-and-forth.\n"
+            f"- Ask at most one person per message. Do not end every message with a question — if you have a point to make, make it and let others respond naturally.\n"
             f"- You may address the user too, but avoid making every message solely about the user.\n"
             f"- Output ONLY what {self.name} says (no speaker label, no quotes).\n\n"
             f"=== SCENE (shared) ===\n{scene}\n\n"
@@ -199,6 +200,7 @@ PACING GOAL (important):
 - Promote natural FRIEND group dynamics with more bot-to-bot discussion.
 - Still keep the user included regularly, but less frequently than the bots.
 - Always obey the hard rule: after 5 consecutive agent turns, the next speaker must be U.
+- If the user's last message explicitly addresses or mentions a specific agent by name, that agent MUST speak next regardless of other pacing considerations.
 
 You MUST end your output with a single clear decision:
 NEXT = A or B or C or U (choose exactly one).

@@ -5,63 +5,72 @@ SCENARIO: Travel Planning Discussion
 [Scene Layer]
 
 Context Objective:
-- A small group must agree on a travel destination and high-level travel plan.
+- The user and the group must agree on a travel destination and high-level travel plan within a single planning session.
 
 Decision Nature:
-- Collaborative planning within one structured discussion session.
-- Requires balancing group preferences.
+- The user is the final decision-maker. Agents act as advisors, not co-decision-makers.
+- Requires surfacing and balancing the user's priorities before recommending destinations.
 
-Constraints:
-- Fixed number of vacation days.
-- Budget range.
-- Seasonal/weather considerations.
-- Coordination among participants.
+Constraints (must be established before recommending destinations):
+- Number of available vacation days — must be confirmed with the user.
+- Budget range — must be confirmed with the user.
+- Seasonal and weather considerations relevant to timing.
+- Group size and coordination needs if traveling with others.
 
 Option Space:
-- Urban cultural destinations
-- Nature-based destinations
-- Domestic travel
-- International travel
-- Structured itinerary vs flexible exploration
+Destination type (choose one direction before discussing specifics):
+- Urban cultural destinations (cities, food, museums, nightlife)
+- Nature-based destinations (national parks, hiking, wildlife)
+- Beach / resort destinations (relaxation, water activities)
+- International long-haul trips
+- Domestic short-distance trips
+
+Trip style (separate dimension, discuss after destination type is narrowed):
+- Structured itinerary (pre-booked, dense schedule)
+- Flexible exploration (loose plan, spontaneous)
 
 Temporal Boundary:
-- Final agreement must be reached within the planning session.
+- A concrete travel plan direction must be reached within the session.
 
 
 [Fact Layer]
 
 Common Travel Decision Dimensions:
 
-Destination Types:
-- Cities (culture, food, museums)
-- Nature / national parks
-- Beach destinations
-- International long-haul trips
-- Domestic short-distance trips
-
-Logistics Considerations:
-- Flight cost varies by season and booking time.
-- Accommodation type differences (hotel vs short-term rental).
-- Transportation needs (rental car vs public transit).
-- Visa and travel insurance (if international).
+Logistics:
+- Flight cost varies significantly by season, destination, and booking lead time.
+- Accommodation: hotels offer consistency; short-term rentals offer space and local feel.
+- Transportation: rental car needed for nature/rural destinations; public transit sufficient for cities.
+- International trips require visa checks and travel insurance consideration.
 
 Trade-off Patterns:
 - Cost vs experience intensity
 - Relaxation vs activity density
 - Flexibility vs fixed itinerary
 - Travel distance vs fatigue
+- Popular destinations vs off-the-beaten-path
 
 
 [Domain Output Policy Layer]
 
-Discussion Guidelines:
-- Do not list too many destinations in a single response.
-- Narrow options gradually.
-- Encourage clarification of group priorities before recommending.
+Scope Boundary (strictly enforced):
+- Do NOT recommend a specific destination until vacation days and budget range are both confirmed.
+- Do NOT discuss trip style (structured vs flexible) until destination type is narrowed.
+- Do NOT list more than two destination options in a single response.
+- Do NOT introduce logistics details (visa, flights, accommodation) until a destination direction is established.
+- If the conversation drifts to unrelated topics, redirect back to the planning decision.
+
+Interaction Strategy (required sequence):
+1. First establish vacation days available and budget range.
+2. Then establish the user's priority: relaxation, culture, nature, adventure, or mix.
+3. Only after both are known: propose one or two destination type directions.
+4. After destination type is agreed: discuss trip style and high-level logistics.
+- Do not skip steps. Do not recommend destinations before step 2 is complete.
 
 Information Use:
-- Use factual logistics constraints when helpful.
-- Avoid overloading with minor travel details unless requested.
+- Use logistics constraints to filter options, not to overwhelm.
+- Avoid listing minor travel details unless specifically asked.
 
 Decision Support:
-- Focus on helping the group converge rather than expanding option space endlessly.
+- The goal is a concrete agreed destination direction and high-level plan.
+- Vague conclusions ("anywhere could work") are not acceptable once priorities are established.

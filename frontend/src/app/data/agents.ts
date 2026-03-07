@@ -55,17 +55,53 @@ export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
     "I'm choosing between battery life and performance. How do I decide for daily office work?",
     "Can you compare MacBook Air, ThinkPad, and gaming laptops for a 3-year horizon?",
   ],
+  scene4: [
+    "I need a Black Friday phone under $800 with a great camera. What should I compare first?",
+    "Should I prioritize battery longevity or camera system for everyday use?",
+    "Is last year's flagship a better deal than this year's mid-range phone?",
+    "How much should software update policy affect my phone decision?",
+  ],
+  scene5: [
+    "I have a $700 budget for home office upgrades. Which items should I prioritize first?",
+    "Should I invest more in chair ergonomics or monitor quality for long work sessions?",
+    "How do I choose peripherals that improve productivity without overbuying?",
+    "What's a phased 3-step plan to upgrade my home office over 6 months?",
+  ],
   scene2: [
     "Our group has mixed budgets. How should we pick a destination everyone can accept?",
     "Can you propose a 5-day trip plan with one low-cost, one mid-range, and one premium option?",
     "How do we decide between Japan and Southeast Asia for a trip in late autumn?",
     "What's a fair way to split costs when people want different hotel standards?",
   ],
+  scene6: [
+    "How can a family of five plan a vacation under a fixed budget without sacrificing key experiences?",
+    "Can you design a 6-day family itinerary with optional low-cost alternatives each day?",
+    "What is the best way to balance kids' activities and adult preferences in one trip?",
+    "How should we split spending between flights, lodging, food, and activities?",
+  ],
+  scene7: [
+    "How should we structure a multi-city business itinerary with minimal travel fatigue?",
+    "Can you compare two route options for cost, punctuality risk, and productivity impact?",
+    "What contingency plan should we build if one meeting is delayed or canceled?",
+    "How do we optimize hotel and transit choices for a tight business schedule?",
+  ],
   scene3: [
     "Which wildfire policy should be prioritized first: fuel reduction, early warning, or evacuation infrastructure?",
     "How can a city balance wildfire resilience with budget limits over the next 3 years?",
     "What policy package could reduce risk without causing strong public pushback?",
     "How should we measure whether a wildfire mitigation policy is actually working?",
+  ],
+  scene8: [
+    "What should a city prioritize first for flood preparedness with limited funding?",
+    "How do drainage upgrades compare with zoning reform in near-term flood risk reduction?",
+    "Can you outline a 3-year flood resilience roadmap with practical milestones?",
+    "How should we evaluate whether flood policies are improving response outcomes?",
+  ],
+  scene9: [
+    "What measures should be prioritized to protect vulnerable groups during extreme heat events?",
+    "How should a city balance cooling centers, outreach programs, and power-grid reliability?",
+    "Can you propose a heatwave response framework for immediate and long-term actions?",
+    "What indicators should we track to evaluate heat resilience policy effectiveness?",
   ],
 };
 

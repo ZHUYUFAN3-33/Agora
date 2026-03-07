@@ -1,1 +1,67 @@
-{"scenes":[{"id":"scene1","title":"Black Friday Laptop Purchase","description":"An individual must decide whether and what computing device to purchase during Black Friday promotions. Trade-offs between performance, portability, longevity, and cost.","icon":"💻","color":"#000000"},{"id":"scene2","title":"Travel Planning Discussion","description":"A small group must agree on a travel destination and high-level travel plan. Collaborative planning balancing group preferences, budget, and seasonal considerations.","icon":"✈️","color":"#000000"},{"id":"scene3","title":"Wildfire Mitigation Policy","description":"A group engages in collaborative policy discussion addressing wildfire mitigation and long-term community resilience. Evaluating multiple policy directions.","icon":"🔥","color":"#000000"}]}
+{
+  "scenes": [
+    {
+      "id": "scene1",
+      "title": "Black Friday Laptop Purchase",
+      "description": "An individual must decide whether and what computing device to purchase during Black Friday promotions. Trade-offs between performance, portability, longevity, and cost.",
+      "icon": "💻",
+      "color": "#000000"
+    },
+    {
+      "id": "scene4",
+      "title": "Black Friday Smartphone Purchase",
+      "description": "A buyer compares flagship and mid-range phones during seasonal discounts. Decision factors include camera quality, battery, software support, and total value.",
+      "icon": "📱",
+      "color": "#000000"
+    },
+    {
+      "id": "scene5",
+      "title": "Home Office Equipment Upgrade",
+      "description": "A remote worker plans a practical setup upgrade. The discussion balances ergonomics, productivity impact, budget limits, and long-term durability.",
+      "icon": "🪑",
+      "color": "#000000"
+    },
+    {
+      "id": "scene2",
+      "title": "Travel Planning Discussion",
+      "description": "A small group must agree on a travel destination and high-level travel plan. Collaborative planning balancing group preferences, budget, and seasonal considerations.",
+      "icon": "✈️",
+      "color": "#000000"
+    },
+    {
+      "id": "scene6",
+      "title": "Family Trip Budget Planning",
+      "description": "A family aligns on destination, lodging, and activities under a fixed budget. The plan must satisfy different age groups without overspending.",
+      "icon": "🏖️",
+      "color": "#000000"
+    },
+    {
+      "id": "scene7",
+      "title": "Multi-city Business Trip Plan",
+      "description": "A team organizes a multi-stop business trip with tight schedules. It weighs cost, travel fatigue, meeting priorities, and contingency options.",
+      "icon": "🧳",
+      "color": "#000000"
+    },
+    {
+      "id": "scene3",
+      "title": "Wildfire Mitigation Policy",
+      "description": "A group engages in collaborative policy discussion addressing wildfire mitigation and long-term community resilience. Evaluating multiple policy directions.",
+      "icon": "🔥",
+      "color": "#000000"
+    },
+    {
+      "id": "scene8",
+      "title": "Urban Flood Preparedness Policy",
+      "description": "A city-level team debates flood resilience strategies. It considers drainage investment, zoning constraints, emergency response readiness, and equity impacts.",
+      "icon": "🌊",
+      "color": "#000000"
+    },
+    {
+      "id": "scene9",
+      "title": "Heatwave Response & Resilience",
+      "description": "A policy group evaluates heatwave adaptation measures for vulnerable communities. It compares cooling centers, grid stress planning, and public communication strategy.",
+      "icon": "☀️",
+      "color": "#000000"
+    }
+  ]
+}

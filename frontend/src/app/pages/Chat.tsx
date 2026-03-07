@@ -700,6 +700,22 @@ function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, on
 // ─── Scene Selector ───────────────────────────────────────────────────────────
 
 function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scenes: Scene[]; selectedScene: Scene | null; onSelect: (s: Scene) => void; onClose: () => void }) {
+  const SCENE_PAGE_SIZE = 3;
+  const scenePages: Scene[][] = Array.from(
+    { length: Math.ceil((scenes?.length || 0) / SCENE_PAGE_SIZE) },
+    (_, i) => scenes.slice(i * SCENE_PAGE_SIZE, i * SCENE_PAGE_SIZE + SCENE_PAGE_SIZE),
+  );
+  const [page, setPage] = useState(0);
+
+  useEffect(() => {
+    if (!selectedScene || scenes.length === 0) { setPage(0); return; }
+    const idx = scenes.findIndex((s) => s.id === selectedScene.id);
+    if (idx >= 0) setPage(Math.floor(idx / SCENE_PAGE_SIZE));
+  }, [selectedScene?.id, scenes]);
+
+  const goPrev = () => setPage((p) => Math.max(0, p - 1));
+  const goNext = () => setPage((p) => Math.min(Math.max(scenePages.length - 1, 0), p + 1));
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
       className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6" onClick={onClose}>
@@ -708,36 +724,71 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scen
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
         transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-[520px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)]" onClick={(e) => e.stopPropagation()}>
+        className="w-full max-w-[720px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-5 border-b border-black/8">
           <div>
             <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>Customize Scene</h2>
-            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>Choose or add a consultation scenario</p>
+            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>Choose or add a consultation scenario · {scenePages.length || 1} pages</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <div className="p-6 grid grid-cols-2 gap-3">
-          {scenes.map((s) => (
-            <button key={s.id} onClick={() => { onSelect(s); onClose(); }}
-              className={`text-left p-4 border-2 rounded-[12px] transition-all hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)] ${selectedScene?.id === s.id ? "border-black" : "border-black/10 hover:border-black/30"}`}>
-              <div className="text-2xl mb-2">{s.icon}</div>
-              <div className="text-[13px] mb-1" style={{ ...monoFont, fontWeight: 500 }}>{s.title}</div>
-              <div className="text-[10px] text-[var(--app-muted-text)] leading-relaxed" style={monoFont}>{s.description}</div>
-            </button>
-          ))}
-          <motion.button
-            whileHover={{ y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => {}}
-            className="border-2 border-dashed border-black/15 rounded-[12px] p-4 flex flex-col items-center justify-center gap-1 hover:border-black/40 hover:bg-black/2 transition-all group min-h-[100px]"
-          >
-            <svg width="20" height="20" viewBox="0 0 16 16" fill="none" className="opacity-20 group-hover:opacity-50 transition-opacity">
-              <path d="M8 1V15M1 8H15" stroke="black" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
-            <span className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>customize</span>
-          </motion.button>
+        <div className="px-6 py-5 flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div className="border border-black/10 rounded-[12px] overflow-hidden bg-black/[0.02] flex-1 min-h-0 flex flex-col">
+            <div className="overflow-x-hidden overflow-y-auto flex-1 min-h-0 w-full" style={{ minWidth: 0 }}>
+              <motion.div
+                className="flex"
+                animate={{ x: `-${page * 100}%` }}
+                transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              >
+                {(scenePages.length > 0 ? scenePages : [[]]).map((pageScenes, pageIdx) => (
+                  <div key={pageIdx} className="shrink-0 grow-0 basis-full p-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      {pageScenes.map((s) => (
+                        <button key={s.id} onClick={() => { onSelect(s); onClose(); }}
+                          className={`text-left p-4 border-2 rounded-[12px] transition-all hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)] ${selectedScene?.id === s.id ? "border-black" : "border-black/10 hover:border-black/30"}`}>
+                          <div className="text-2xl mb-2">{s.icon}</div>
+                          <div className="text-[13px] mb-1" style={{ ...monoFont, fontWeight: 500 }}>{s.title}</div>
+                          <div className="text-[10px] text-[var(--app-muted-text)] leading-relaxed" style={monoFont}>{s.description}</div>
+                        </button>
+                      ))}
+                      <motion.button
+                        whileHover={{ y: -2 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => {}}
+                        className="border-2 border-dashed border-black/15 rounded-[12px] p-4 flex flex-col items-center justify-center gap-1 hover:border-black/40 hover:bg-black/2 transition-colors group min-h-[120px]"
+                      >
+                        <svg width="20" height="20" viewBox="0 0 16 16" fill="none" className="opacity-20 group-hover:opacity-50 transition-opacity">
+                          <path d="M8 1V15M1 8H15" stroke="black" strokeWidth="1.5" strokeLinecap="round"/>
+                        </svg>
+                        <span className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>customize</span>
+                      </motion.button>
+                    </div>
+                  </div>
+                ))}
+              </motion.div>
+            </div>
+            {(scenePages.length || 0) > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-black/8 bg-white/50">
+                <button onClick={goPrev} disabled={page === 0}
+                  className="p-2 rounded-[8px] hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
+                </button>
+                <div className="flex gap-1.5">
+                  {scenePages.map((_, i) => (
+                    <button key={i} onClick={() => setPage(i)}
+                      className={`w-2 h-2 rounded-full transition-all ${i === page ? "bg-black scale-125" : "bg-black/25 hover:bg-black/40"}`}
+                      aria-label={`Scene page ${i + 1}`} />
+                  ))}
+                </div>
+                <button onClick={goNext} disabled={page === scenePages.length - 1}
+                  className="p-2 rounded-[8px] hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         {selectedScene && (
           <div className="px-6 pb-4">

@@ -2,6 +2,7 @@
 
 :root {
   --font-size: 16px;
+  --app-muted-text: #5F5F5F; /* Secondary/muted text - adjustable via Appearance settings */
   --background: #ffffff;
   --foreground: oklch(0.145 0 0);
   --card: #ffffff;

@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 MIN_OUTPUT_TOKENS = 16
 MODERATOR_INTERVAL = 2
-MODERATOR_STALL_TURNS = 6
+MODERATOR_STALL_TURNS = 5
 
 TOKYO = ZoneInfo("Asia/Tokyo")
 
@@ -130,6 +130,7 @@ class ChatAgent:
             f"- Frequently react to what another bot said, build on it, or gently disagree.\n"
             f"- Often ask another bot a direct question. Vary your phrasing.\n"
             f"- Keep it natural: don't force a question every single time, but aim for more bot-to-bot back-and-forth.\n"
+            f"- Ask at most one person per message. Do not end every message with a question — if you have a point to make, make it and let others respond naturally.\n"
             f"- Output ONLY what {self.name} says (no speaker label, no quotes).\n\n"
             f"=== SCENE (shared) ===\n{scene}\n\n"
             f"=== ROLE INSTRUCTIONS (for {self.name}) ===\n{self.role_text}\n"
@@ -145,8 +146,17 @@ class ChatAgent:
 
 ADMIN1_SYSTEM = """You are Admin-1: the group-chat pacing analyst.
 Your job: infer who SHOULD speak next and give a brief reason.
-PACING GOAL: Strongly prefer A/B/C over user. After 5 consecutive agent turns, next must be U.
-You MUST end your output with: NEXT = A or B or C or U (choose exactly one)."""
+
+PACING GOAL (important):
+- Strongly prefer A/B/C speaking over the user, as long as the conversation still feels coherent.
+- Promote natural FRIEND group dynamics with more bot-to-bot discussion.
+- Still keep the user included regularly, but less frequently than the bots.
+- Always obey the hard rule: after 5 consecutive agent turns, the next speaker must be U.
+- If the user's last message explicitly addresses or mentions a specific agent by name, that agent MUST speak next regardless of other pacing considerations.
+
+You MUST end your output with a single clear decision:
+NEXT = A or B or C or U (choose exactly one).
+This analysis is NOT shown to the user, but is saved to the thinking log."""
 
 ADMIN2_SYSTEM = """You are Admin-2: output ONLY ONE character: A or B or C or U.
 Do not output anything else."""

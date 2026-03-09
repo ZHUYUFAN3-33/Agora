@@ -135,14 +135,84 @@ scene = read_text(SCENE_FILE) if os.path.exists(SCENE_FILE) else ""
 bot1 = read_text(BOT1_FILE) if os.path.exists(BOT1_FILE) else ""
 bot2 = read_text(BOT2_FILE) if os.path.exists(BOT2_FILE) else ""
 bot3 = read_text(BOT3_FILE) if os.path.exists(BOT3_FILE) else ""
-
-agents: Dict[str, ChatAgent] = {
-    "A": ChatAgent("A", "ChatbotA", bot1),
-    "B": ChatAgent("B", "ChatbotB", bot2),
-    "C": ChatAgent("C", "ChatbotC", bot3),
+SLOT_KEYS: List[str] = ["A", "B", "C"]
+POOL_KEYS: List[str] = ["A", "B", "C", "D", "E", "F"]
+PROFILE_FIXED_CONFIG: Dict[str, dict] = {
+    "A": {"decision": "Spontaneous", "emotion": "joy"},
+    "B": {"decision": "Rational", "emotion": "fear"},
+    "C": {"decision": "Avoidant", "emotion": "disgust"},
+    "D": {"decision": "Dependent", "emotion": "surprise"},
+    "E": {"decision": "Intuitive", "emotion": "anger"},
+    "F": {"decision": "Rational", "emotion": "sadness"},
 }
-agent_list = [agents["A"], agents["B"], agents["C"]]
-all_agent_names = [a.name for a in agent_list]
+
+AGENT_POOL: Dict[str, dict] = {
+    "A": {"name": "ChatbotA", "role_text": bot1},
+    "B": {"name": "ChatbotB", "role_text": bot2},
+    "C": {"name": "ChatbotC", "role_text": bot3},
+    "D": {
+        "name": "ProjectLead",
+        "role_text": (
+            "You are a deadline-driven product manager in a fast-moving company.\n"
+            "- Prioritize delivery impact, user value, and milestone risk.\n"
+            "- Push for concrete plans, owners, and timelines.\n"
+            "- Keep scope realistic and call out over-engineering."
+        ),
+    },
+    "E": {
+        "name": "OpsGuardian",
+        "role_text": (
+            "You are an operations lead focused on cost, process stability, and compliance.\n"
+            "- Highlight budget implications, policy constraints, and operational burden.\n"
+            "- Prefer repeatable processes over ad-hoc decisions.\n"
+            "- Challenge ideas that create hidden maintenance or governance risk."
+        ),
+    },
+    "F": {
+        "name": "ArchKeeper",
+        "role_text": (
+            "You are a reliability-first engineering lead.\n"
+            "- Focus on long-term maintainability, system reliability, and technical debt.\n"
+            "- Ask for fallback plans, observability, and failure-mode handling.\n"
+            "- Prefer robust architecture over short-lived hacks."
+        ),
+    },
+}
+
+
+def _normalize_limited_keys(keys: List[str]) -> List[str]:
+    unique = []
+    for k in keys:
+        if k in POOL_KEYS and k not in unique:
+            unique.append(k)
+    if len(unique) >= 3:
+        return unique[:3]
+    for k in POOL_KEYS:
+        if k not in unique:
+            unique.append(k)
+        if len(unique) == 3:
+            break
+    return unique
+
+
+def _make_session_agents(session: dict) -> Tuple[Dict[str, ChatAgent], List[ChatAgent], List[str]]:
+    agents_map: Dict[str, ChatAgent] = {}
+    for slot in SLOT_KEYS:
+        profile_key = session["slot_to_profile"].get(slot, slot)
+        prof = AGENT_POOL.get(profile_key, AGENT_POOL[slot])
+        agents_map[slot] = ChatAgent(slot, prof["name"], prof["role_text"])
+    agent_list = [agents_map[s] for s in SLOT_KEYS]
+    all_names = [a.name for a in agent_list]
+    return agents_map, agent_list, all_names
+
+
+def _runtime_config_from_slot_profiles(slot_to_profile: Dict[str, str]) -> Dict[str, dict]:
+    conf: Dict[str, dict] = {}
+    for slot in SLOT_KEYS:
+        profile_key = slot_to_profile.get(slot, slot)
+        fixed = PROFILE_FIXED_CONFIG.get(profile_key, PROFILE_FIXED_CONFIG.get(slot, {"decision": "Rational", "emotion": "joy"}))
+        conf[slot] = {"decision": fixed["decision"], "emotion": fixed["emotion"]}
+    return conf
 
 
 def init_session(room_id: str) -> dict:
@@ -158,6 +228,13 @@ def init_session(room_id: str) -> dict:
     session = {
         "room_id": room_id,
         "scene_id": "scene1",
+        "mode": "full",
+        "slot_to_profile": {"A": "A", "B": "B", "C": "C"},
+        "agent_runtime_config": {
+            "A": {"decision": AGENT_CONFIGS.get("A", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("A", {}).get("emotion", "Joy")},
+            "B": {"decision": AGENT_CONFIGS.get("B", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("B", {}).get("emotion", "Joy")},
+            "C": {"decision": AGENT_CONFIGS.get("C", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("C", {}).get("emotion", "Joy")},
+        },
         "history": [],
         "known_user_facts": {},
         "bots_since_user": 0,
@@ -214,20 +291,46 @@ def start_chat():
     """Start a new chat session"""
     data = request.json or {}
     scene_id = (data.get("scene_id") or "scene1").strip()
+    mode = (data.get("mode") or "full").strip().lower()
+    if mode not in {"full", "limited", "single"}:
+        mode = "full"
+    requested_limited_keys = data.get("limited_selected_agent_keys") or []
     if scene_id not in SCENES:
         scene_id = "scene1" if SCENES else ""
     room_id = make_room_id_6()
     session = init_session(room_id)
     session["scene_id"] = scene_id
+    session["mode"] = mode
+
+    if mode == "limited":
+        chosen_profiles = _normalize_limited_keys([str(k).upper() for k in requested_limited_keys if isinstance(k, str)])
+        session["slot_to_profile"] = {slot: chosen_profiles[i] for i, slot in enumerate(SLOT_KEYS)}
+        session["agent_runtime_config"] = _runtime_config_from_slot_profiles(session["slot_to_profile"])
+    else:
+        session["slot_to_profile"] = {"A": "A", "B": "B", "C": "C"}
+        session["agent_runtime_config"] = {
+            "A": {"decision": AGENT_CONFIGS.get("A", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("A", {}).get("emotion", "Joy")},
+            "B": {"decision": AGENT_CONFIGS.get("B", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("B", {}).get("emotion", "Joy")},
+            "C": {"decision": AGENT_CONFIGS.get("C", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("C", {}).get("emotion", "Joy")},
+        }
+
+    session_agents, _, _ = _make_session_agents(session)
     chat_sessions[room_id] = session
 
     return jsonify({
         "room_id": room_id,
         "message": "Chat session started",
+        "mode": mode,
         "agents": [
-            {"key": "A", "name": agents["A"].name, "decision": AGENT_CONFIGS.get("A", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("A", {}).get("emotion", "Joy")},
-            {"key": "B", "name": agents["B"].name, "decision": AGENT_CONFIGS.get("B", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("B", {}).get("emotion", "Joy")},
-            {"key": "C", "name": agents["C"].name, "decision": AGENT_CONFIGS.get("C", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("C", {}).get("emotion", "Joy")},
+            {
+                "key": slot,
+                "pool_key": session["slot_to_profile"].get(slot, slot),
+                "name": session_agents[slot].name,
+                "role": session_agents[slot].role_text.splitlines()[0] if session_agents[slot].role_text else "",
+                "decision": session["agent_runtime_config"].get(slot, {}).get("decision", "Rational"),
+                "emotion": session["agent_runtime_config"].get(slot, {}).get("emotion", "Joy"),
+            }
+            for slot in SLOT_KEYS
         ]
     })
 
@@ -246,6 +349,8 @@ def send_message():
         return jsonify({"error": "Message cannot be empty"}), 400
     
     session = chat_sessions[room_id]
+    session_mode = session.get("mode", "full")
+    agents, agent_list, all_agent_names = _make_session_agents(session)
 
     # Emotion mode: optional emotion_tag + emotion_target from frontend
     emotion_tag    = data.get("emotion_tag")     # e.g. "joy", "anger", None
@@ -295,6 +400,27 @@ def send_message():
                 return _f.read()
         return ""
 
+    def _normalize_style_hint(text: str) -> str:
+        """Ensure style hint is plain content so STYLE PREFERENCE wrapper appears exactly once."""
+        t = (text or "").strip()
+        if not t:
+            return ""
+
+        # If user pasted wrapped blocks, keep only inner contents.
+        wrapped = re.findall(
+            r"\[STYLE PREFERENCE[^\]]*\](.*?)\[END STYLE PREFERENCE\]",
+            t,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if wrapped:
+            t = "\n".join(s.strip() for s in wrapped if s.strip())
+
+        # Remove stray wrapper marker lines if present.
+        t = re.sub(r"(?im)^\s*\[STYLE PREFERENCE[^\]]*\]\s*$", "", t)
+        t = re.sub(r"(?im)^\s*\[END STYLE PREFERENCE\]\s*$", "", t)
+
+        return t.strip()[:500]
+
     # Load sidebar emotion prompt (shared)
     sidebar_emotion_prompt = _load_emotion_prompt(emotion_tag)
 
@@ -304,6 +430,8 @@ def send_message():
 
         # 1. Per-agent emotion override (from customizer) takes priority
         override_tag = agent_emotion_overrides.get(agent_key)
+        if not override_tag and session_mode == "limited":
+            override_tag = session.get("agent_runtime_config", {}).get(agent_key, {}).get("emotion")
         if override_tag:
             ep = _load_emotion_prompt(override_tag)
             if ep:
@@ -321,7 +449,11 @@ def send_message():
             )
 
         # 3. Decision block (frontend overrides info.jsonl default)
-        block_name = agent_decision_block.get(agent_key) or AGENT_CONFIGS.get(agent_key, {}).get("decision", "Rational")
+        block_name = (
+            agent_decision_block.get(agent_key)
+            or session.get("agent_runtime_config", {}).get(agent_key, {}).get("decision")
+            or AGENT_CONFIGS.get(agent_key, {}).get("decision", "Rational")
+        )
         block_prompt = _load_decision_block(block_name)
         if block_prompt:
             result += (
@@ -333,11 +465,16 @@ def send_message():
         # 4. Additional rules from customizer
         extra = (additional_rules.get(agent_key) or "").strip()
         if extra:
-            result += (
-                "\n\n" + "=" * 60
-                + "\nADDITIONAL INSTRUCTIONS (user-defined):\n"
-                + "=" * 60 + "\n" + extra
-            )
+            # Treat user-provided text as style preference only, not task override.
+            safe_extra = _normalize_style_hint(extra)
+            if safe_extra:
+                result += (
+                    "\n\n" + "=" * 60
+                    + "\n[STYLE PREFERENCE — does not override role, structure, safety, or task]\n"
+                    + safe_extra
+                    + "\n[END STYLE PREFERENCE]\n"
+                    + "=" * 60
+                )
 
         return result
 
@@ -370,7 +507,11 @@ def send_message():
 
     # Merge agent config: frontend agent_decision_block overrides info.jsonl
     def _effective_decision(agent_key):
-        return agent_decision_block.get(agent_key) or AGENT_CONFIGS.get(agent_key, {}).get("decision", "Rational")
+        return (
+            agent_decision_block.get(agent_key)
+            or session.get("agent_runtime_config", {}).get(agent_key, {}).get("decision")
+            or AGENT_CONFIGS.get(agent_key, {}).get("decision", "Rational")
+        )
 
     def _get_phase_context(agent_key: str) -> str:
         ms = session["moderator_state"]
@@ -576,8 +717,14 @@ def get_history(room_id):
         return jsonify({"error": "Session not found"}), 404
     
     session = chat_sessions[room_id]
+    session_agents, _, _ = _make_session_agents(session)
     return jsonify({
         "room_id": room_id,
+        "mode": session.get("mode", "full"),
+        "active_agents": [
+            {"key": slot, "pool_key": session.get("slot_to_profile", {}).get(slot, slot), "name": session_agents[slot].name}
+            for slot in SLOT_KEYS
+        ],
         "history": session["history"],
         "known_facts": list(session["known_user_facts"].values()),
     })
@@ -687,17 +834,20 @@ def analyze_emotion():
 @app.route('/api/agent-prompt/<agent_key>', methods=['GET'])
 def get_agent_prompt(agent_key):
     """Get default prompt for an agent"""
-    if agent_key not in ['A', 'B', 'C']:
+    agent_key = (agent_key or "").upper()
+    if agent_key not in POOL_KEYS:
         return jsonify({"error": "Invalid agent key"}), 400
-    
-    bot_file_map = {
-        'A': BOT1_FILE,
-        'B': BOT2_FILE,
-        'C': BOT3_FILE,
-    }
-    
+
     try:
-        prompt = read_text(bot_file_map[agent_key]) if os.path.exists(bot_file_map[agent_key]) else ""
+        if agent_key in {"A", "B", "C"}:
+            bot_file_map = {
+                'A': BOT1_FILE,
+                'B': BOT2_FILE,
+                'C': BOT3_FILE,
+            }
+            prompt = read_text(bot_file_map[agent_key]) if os.path.exists(bot_file_map[agent_key]) else ""
+        else:
+            prompt = AGENT_POOL[agent_key]["role_text"]
         return jsonify({"prompt": prompt})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -709,7 +859,7 @@ if __name__ == '__main__':
     print("🚀 Starting Multi-Agent Chatbot System...")
     print("=" * 60)
     print(f"✓ Scenes loaded: {list(SCENES.keys())} ({sum(len(v) for v in SCENES.values())} chars total)")
-    print(f"✓ Agents: {', '.join(all_agent_names)}")
+    print(f"✓ Agent pool: {', '.join([AGENT_POOL[k]['name'] for k in POOL_KEYS])}")
     print(f"✓ Static folder: {STATIC_FOLDER}")
     print(f"✓ Static files exist: {os.path.exists(os.path.join(STATIC_FOLDER, 'index.html'))}")
     print("\n" + "=" * 60)
@@ -737,4 +887,3 @@ if __name__ == '__main__':
     print("=" * 60)
     print("\n按 Ctrl+C 停止服务器 / Press Ctrl+C to stop the server\n")
     app.run(debug=True, host='127.0.0.1', port=port, use_reloader=False)
-

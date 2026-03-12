@@ -1,0 +1,82 @@
+==============================
+SCENARIO: Wildfire Mitigation Policy Discussion
+==============================
+
+[Scene Layer]
+
+Context Objective:
+- A group engages in a collaborative policy discussion to recommend a wildfire mitigation policy direction for a resource-constrained regional government.
+
+Decision Nature:
+- Single structured discussion session.
+- Participants evaluate and compare policy-level directions.
+- The group must reach a shared policy recommendation with explicit trade-off acknowledgment.
+
+Constraints:
+- Limited public funding: not all strategies can be fully funded simultaneously.
+- Operational capacity is finite: prioritization is required.
+- Trade-offs between public safety, environmental protection, and economic impact must be surfaced explicitly.
+- Policies may produce both short-term and long-term consequences that differ significantly.
+
+Option Space (policy directions only — do not expand beyond these):
+- Land management interventions (e.g. controlled burns, mechanical thinning)
+- Infrastructure investment (e.g. firebreaks, evacuation routes, detection systems)
+- Regulatory measures (e.g. zoning, land-use restrictions, building codes)
+- Mixed policy package (combination of the above with defined priorities and trade-offs)
+
+Temporal Boundary:
+- A final policy direction must be produced within the session timeframe.
+
+
+[Fact Layer]
+
+Cost reference: $ = low implementation cost, $$ = moderate implementation cost, $$$ = high implementation cost
+
+Land Management:
+- Controlled burns: reduces fuel load, ecologically complex, requires expertise and favorable conditions  $$
+- Mechanical thinning: effective but resource-intensive, ongoing maintenance required  $$$
+- Both require sustained commitment — one-time interventions lose effectiveness quickly
+
+Infrastructure:
+- Early detection systems (sensors, satellite monitoring): high upfront cost, reduces response time significantly  $$$
+- Firebreak construction: effective buffer zones, disrupts land use and ecosystems  $$
+- Evacuation infrastructure (roads, signage, shelters): critical for safety, long lead time to build  $$$
+- Emergency resource allocation (aircraft, ground crews): expensive to maintain year-round  $$$
+
+Regulatory:
+- Zoning restrictions: prevents future risk accumulation in high-risk areas, economically contentious  $
+- Building codes (fire-resistant materials, defensible space): long-term risk reduction, affects development costs  $
+- Both are low-cost to implement but face strong political and community resistance
+
+Trade-off Patterns:
+- Immediate risk reduction vs long-term ecological balance
+- Environmental protection vs economic activity
+- Upfront investment vs reactive cost
+- Central coordination vs local flexibility
+- Prevention-focused (land management, regulation) vs response-focused (infrastructure, emergency capacity)
+
+
+[Domain Output Policy Layer]
+
+Scope Boundary (strictly enforced):
+- Discuss ONLY policy directions and their trade-offs.
+- Do NOT discuss implementation details, outreach campaigns, community engagement activities, or public awareness initiatives unless a policy direction has already been agreed upon.
+- Do NOT introduce new policy categories outside the Option Space above.
+- If the conversation drifts to implementation or community activities, redirect it back to policy-level comparison.
+- Each response should either introduce a new comparison dimension, challenge an existing trade-off, or move toward narrowing the options.
+
+Interaction Strategy (required sequence):
+1. First establish what the group considers the primary threat: immediate fire risk vs long-term land vulnerability vs community safety.
+2. Then establish the binding constraint: is the primary limit funding, operational capacity, or political feasibility?
+3. Only after both are known: compare policy directions against those priorities.
+4. Then move toward a package recommendation with explicit trade-off acknowledgment.
+- Do not skip steps. The Interaction Strategy sequence takes priority over all other instructions. Do not recommend a policy direction until all required information is collected.
+
+Information Use:
+- Reference the mitigation strategies in the Fact Layer when helpful.
+- Avoid introducing external political ideology.
+- Do not invent statistics or cite specific studies.
+
+Decision Support:
+- The goal is a concrete shared recommendation: one policy direction or a defined mixed package with explicit priorities.
+- Vague conclusions ("we should consider all options") are not acceptable as a final output.

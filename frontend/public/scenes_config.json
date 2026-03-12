@@ -16,30 +16,30 @@
     },
     {
       "id": "scene5",
-      "title": "Home Office Equipment Upgrade",
-      "description": "A remote worker plans a practical setup upgrade. The discussion balances ergonomics, productivity impact, budget limits, and long-term durability.",
-      "icon": "🪑",
+      "title": "Black Friday Headphones Purchase",
+      "description": "A buyer compares headphone options during seasonal discounts. The discussion balances sound quality, noise cancellation, comfort, portability, and cost.",
+      "icon": "🎧",
       "color": "#000000"
     },
     {
       "id": "scene2",
-      "title": "Travel Planning Discussion",
-      "description": "A small group must agree on a travel destination and high-level travel plan. Collaborative planning balancing group preferences, budget, and seasonal considerations.",
+      "title": "Travel Planning Discussion — Asia",
+      "description": "A group selects an Asia destination and trip direction in one session. It balances budget, vacation days, weather timing, and travel style.",
       "icon": "✈️",
       "color": "#000000"
     },
     {
       "id": "scene6",
-      "title": "Family Trip Budget Planning",
-      "description": "A family aligns on destination, lodging, and activities under a fixed budget. The plan must satisfy different age groups without overspending.",
-      "icon": "🏖️",
+      "title": "Travel Planning Discussion — Europe",
+      "description": "A group narrows Europe options with clear trade-offs across cost, seasonality, and route structure. It compares destination types and trip pacing.",
+      "icon": "🏛️",
       "color": "#000000"
     },
     {
       "id": "scene7",
-      "title": "Multi-city Business Trip Plan",
-      "description": "A team organizes a multi-stop business trip with tight schedules. It weighs cost, travel fatigue, meeting priorities, and contingency options.",
-      "icon": "🧳",
+      "title": "Travel Planning Discussion — Oceania",
+      "description": "A group plans an Oceania trip by weighing long-haul cost, reversed seasons, and destination style across Australia, New Zealand, and Pacific islands.",
+      "icon": "🌏",
       "color": "#000000"
     },
     {
@@ -58,9 +58,9 @@
     },
     {
       "id": "scene9",
-      "title": "Heatwave Response & Resilience",
-      "description": "A policy group evaluates heatwave adaptation measures for vulnerable communities. It compares cooling centers, grid stress planning, and public communication strategy.",
-      "icon": "☀️",
+      "title": "Drought & Water Resource Policy",
+      "description": "A policy team evaluates drought response strategies under limited funding. It compares conservation, supply expansion, allocation reform, and emergency capacity.",
+      "icon": "💧",
       "color": "#000000"
     }
   ]

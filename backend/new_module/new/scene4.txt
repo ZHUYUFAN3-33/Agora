@@ -1,0 +1,109 @@
+==============================
+SCENARIO: Travel Planning Discussion — Asia
+==============================
+
+[Scene Layer]
+
+Context Objective:
+- The user and the group must agree on a travel destination and high-level travel plan within a single planning session.
+- The destination must be within Asia.
+
+Decision Nature:
+- The user is the final decision-maker. Agents act as advisors, not co-decision-makers.
+- Requires surfacing and balancing the user's priorities before recommending destinations.
+
+Constraints (must be established before recommending destinations):
+- Number of available vacation days — must be confirmed with the user.
+- Budget range — must be confirmed with the user.
+- Seasonal and weather considerations relevant to timing.
+- Visa requirements vary by nationality and destination.
+
+Option Space:
+Destination type (choose one direction before discussing specifics):
+- Urban cultural destinations
+- Nature-based destinations
+- Beach / resort destinations
+- Short-haul destinations (within 4–6 hours flight)
+- Long-haul destinations within Asia (Central Asia, South Asia)
+
+Trip style (separate dimension, discuss after destination type is narrowed):
+- Structured itinerary (pre-booked, dense schedule)
+- Flexible exploration (loose plan, spontaneous)
+
+Temporal Boundary:
+- A concrete travel plan direction must be reached within the session.
+
+
+[Fact Layer]
+
+Budget reference: $ = budget-friendly, $$ = mid-range, $$$ = high cost
+
+Urban Cultural Destinations:
+- Tokyo: world-class food, mix of tradition and modernity, efficient rail system  $$$
+- Kyoto: temples, traditional culture, quieter than Tokyo, best in spring/autumn  $$$
+- Seoul: K-culture, vibrant nightlife, affordable food and shopping, easy to navigate  $$
+- Bangkok: street food capital, temples, chaotic but energetic, very accessible  $
+- Singapore: clean, safe, multicultural, easy entry point to Southeast Asia  $$$
+- Taipei: underrated, friendly, night markets, excellent transit, great value  $$
+- Ho Chi Minh City / Hanoi: fast-paced, rich history, strong food culture  $
+- Osaka: food-focused, more relaxed than Tokyo, good base for Kyoto day trips  $$$
+
+Nature-Based Destinations:
+- Hokkaido (Japan): ski resorts, lavender fields, wildlife, less crowded than Honshu  $$$
+- Zhangjiajie (China): dramatic karst pillars, national park, off the beaten path  $$
+- Borneo (Malaysia/Indonesia): rainforest, orangutans, diving, requires planning  $$
+- Sri Lanka highlands: tea plantations, scenic train journeys, waterfalls  $
+- Ha Long Bay (Vietnam): limestone karsts, boat cruises, popular in peak season  $$
+- Guilin / Yangshuo (China): karst landscape, Li River, rural cycling, slow pace  $
+- Chiang Mai (Thailand): mountains, elephant sanctuaries, temples, very affordable  $
+
+Beach / Resort Destinations:
+- Bali (Indonesia): iconic, strong tourist infrastructure, spiritual culture, rice terraces  $$
+- Phuket (Thailand): well-developed, range of budgets, vibrant nightlife  $$
+- Koh Samui / Koh Lanta (Thailand): quieter than Phuket, good for relaxation  $$
+- Maldives: luxury overwater bungalows, snorkeling, very limited land activities  $$$
+- Palawan (Philippines): pristine beaches, island hopping, less developed  $$
+- Langkawi (Malaysia): duty-free island, mangroves, quieter than Bali, good value  $$
+- Nha Trang / Da Nang (Vietnam): coastal cities, growing infrastructure, affordable  $
+
+Logistics Considerations:
+- Budget airlines widely available (AirAsia, Scoot, Peach, VietJet) for intra-Asia routes
+- Japan Rail Pass cost-effective for multi-city Japan trips booked in advance
+- Visa: Japan/South Korea/Taiwan visa-free for many nationalities; China/India/Vietnam require advance application
+- Typhoon season affects East and Southeast Asia (July–October)
+- Best travel window: October–April for Southeast Asia; March–May or Sept–Nov for East Asia
+
+Trade-off Patterns:
+- Cost vs experience intensity
+- Relaxation vs activity density
+- Flexibility vs fixed itinerary
+- Travel distance vs fatigue
+- Popular destinations vs off-the-beaten-path
+- Budget-friendly Southeast Asia ($–$$) vs higher-cost East Asia ($$$)
+
+
+[Domain Output Policy Layer]
+
+Scope Boundary (strictly enforced):
+- Do NOT recommend a specific destination until vacation days and budget range are both confirmed.
+- Do NOT discuss trip style (structured vs flexible) until destination type is narrowed.
+- Do NOT list more than two destination options in a single response.
+- Do NOT introduce logistics details (visa, flights, accommodation) until a destination direction is established.
+- If the conversation drifts to unrelated topics, redirect back to the planning decision.
+
+Interaction Strategy (required sequence):
+1. First establish vacation days available and budget range.
+2. Then establish the user's priority: relaxation, culture, nature, adventure, or mix.
+3. Only after both are known: propose one or two destination type directions within Asia.
+4. After destination type is agreed: discuss trip style and high-level logistics.
+- Do not skip steps. Do not recommend destinations before step 2 is complete.
+- The Interaction Strategy sequence takes priority over all other instructions. Do not recommend destinations until all required information is collected.
+
+Information Use:
+- Use budget tier ($ / $$ / $$$) to filter options once budget is known.
+- Introduce destinations gradually — at most two per response.
+- Avoid listing minor travel details unless specifically asked.
+
+Decision Support:
+- The goal is a concrete agreed destination direction and high-level plan.
+- Vague conclusions ("anywhere in Asia could work") are not acceptable once priorities are established.

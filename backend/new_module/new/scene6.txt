@@ -1,0 +1,106 @@
+==============================
+SCENARIO: Travel Planning Discussion — Oceania
+==============================
+
+[Scene Layer]
+
+Context Objective:
+- The user and the group must agree on a travel destination and high-level travel plan within a single planning session.
+- The destination must be within Oceania (Australia, New Zealand, Pacific Islands).
+
+Decision Nature:
+- The user is the final decision-maker. Agents act as advisors, not co-decision-makers.
+- Requires surfacing and balancing the user's priorities before recommending destinations.
+
+Constraints (must be established before recommending destinations):
+- Number of available vacation days — must be confirmed with the user.
+- Budget range — must be confirmed with the user.
+- Seasonal and weather considerations (Oceania seasons are reversed from the Northern Hemisphere).
+- Long-haul flight time is a significant cost and fatigue factor for most travelers.
+
+Option Space:
+Destination type (choose one direction before discussing specifics):
+- Urban destinations (Sydney, Melbourne, Auckland)
+- Nature and adventure (Great Barrier Reef, South Island NZ, Tasmania)
+- Beach / resort destinations (Fiji, Whitsundays, Bora Bora, Cook Islands)
+- Road trip / self-drive (East Coast Australia, South Island NZ)
+- Australia vs New Zealand vs Pacific Islands — distinct experiences and cost levels
+
+Trip style (separate dimension, discuss after destination type is narrowed):
+- Structured itinerary (pre-booked, dense schedule)
+- Flexible exploration (road trip / self-drive style)
+
+Temporal Boundary:
+- A concrete travel plan direction must be reached within the session.
+
+
+[Fact Layer]
+
+Budget reference: $ = budget-friendly, $$ = mid-range, $$$ = high cost
+
+Urban Destinations:
+- Sydney: Opera House, Harbour Bridge, Bondi Beach, vibrant food scene, expensive  $$$
+- Melbourne: arts and culture, laneways, coffee culture, Great Ocean Road nearby  $$$
+- Brisbane: gateway to Gold Coast and Sunshine Coast, warmer climate, less touristy  $$
+- Auckland: harbor city, Maori culture, gateway to Northland or Coromandel  $$
+- Wellington: compact, vibrant arts scene, Te Papa museum, gateway to South Island  $$
+
+Nature and Adventure Destinations:
+- Great Barrier Reef (Queensland): world's largest coral reef, snorkeling and diving, best from Cairns  $$$
+- South Island NZ (Queenstown / Fiordland): bungee jumping, Milford Sound, dramatic fjords, world-class road trip  $$$
+- Tasmania: wilderness, UNESCO heritage forests, Overland Track, remote and requires planning  $$
+- Daintree Rainforest (Queensland): ancient rainforest meets reef, wildlife, accessible from Cairns  $$
+- Kimberley (Western Australia): ancient gorges, Bungle Bungles, extremely remote, best April–September  $$$
+- Tongariro Alpine Crossing (NZ): world-famous one-day hike, volcanic landscape, requires fitness  $$
+
+Beach / Resort Destinations:
+- Fiji: coral reefs, warm hospitality, Yasawa Islands for backpackers, Mamanuca Islands for resorts  $$
+- Whitsundays (Queensland): sailing hub, Whitehaven Beach, can combine with Great Barrier Reef  $$$
+- Bora Bora (French Polynesia): luxury overwater bungalows, lagoon, very expensive, limited independent travel  $$$
+- Cook Islands (Rarotonga): intimate, good snorkeling, relaxed pace, easy week-long destination  $$
+- Vanuatu: volcano climbing, blue holes, adventure-focused, affordable, closer to Australia than Fiji  $
+- Noumea (New Caledonia): French Pacific territory, beaches, lagoon, easy short-haul from eastern Australia  $$
+
+Logistics Considerations:
+- Long-haul flights from most regions; factor in jet lag and flight cost for short trips
+- Australia is very large — internal flights often necessary; driving distances are extreme
+- New Zealand is compact; South Island road trip highly self-contained in 10–14 days
+- Pacific Islands short-haul from Australia/NZ but resort accommodation is expensive
+- Australia and NZ are English-speaking with excellent tourism infrastructure but high daily costs
+- eTA (Australia) and NZeTA (NZ) available online for most nationalities
+- Best season: Australia (March–May, Sept–Nov); NZ (Dec–Feb for South Island); Pacific Islands (May–October dry season)
+
+Trade-off Patterns:
+- Cost vs experience intensity
+- Nature / adventure vs urban comfort
+- Relaxation vs activity density
+- Flexibility (road trip) vs fixed itinerary
+- Australia/NZ (higher cost $$$, more infrastructure) vs Pacific Islands (resort-focused $$, limited independent travel)
+- Short trip (1 destination) vs longer trip (multi-destination road trip)
+
+
+[Domain Output Policy Layer]
+
+Scope Boundary (strictly enforced):
+- Do NOT recommend a specific destination until vacation days and budget range are both confirmed.
+- Do NOT discuss trip style (structured vs flexible) until destination type is narrowed.
+- Do NOT list more than two destination options in a single response.
+- Do NOT introduce logistics details (visa, flights, accommodation) until a destination direction is established.
+- If the conversation drifts to unrelated topics, redirect back to the planning decision.
+
+Interaction Strategy (required sequence):
+1. First establish vacation days available and budget range.
+2. Then establish the user's priority: relaxation, nature/adventure, culture, or mix.
+3. Only after both are known: propose one or two destination type directions within Oceania.
+4. After destination type is agreed: discuss trip style and high-level logistics.
+- Do not skip steps. Do not recommend destinations before step 2 is complete.
+- The Interaction Strategy sequence takes priority over all other instructions. Do not recommend destinations until all required information is collected.
+
+Information Use:
+- Use budget tier ($ / $$ / $$$) to filter options once budget is known.
+- Introduce destinations gradually — at most two per response.
+- Avoid listing minor travel details unless specifically asked.
+
+Decision Support:
+- The goal is a concrete agreed destination direction and high-level plan.
+- Vague conclusions ("anywhere in Oceania could work") are not acceptable once priorities are established.

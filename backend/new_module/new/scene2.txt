@@ -1,76 +1,102 @@
 ==============================
-SCENARIO: Travel Planning Discussion
+SCENARIO: Black Friday Purchase — Smartphone
 ==============================
 
 [Scene Layer]
 
 Context Objective:
-- The user and the group must agree on a travel destination and high-level travel plan within a single planning session.
+- An individual must decide what smartphone to purchase during Black Friday promotions.
 
 Decision Nature:
-- The user is the final decision-maker. Agents act as advisors, not co-decision-makers.
-- Requires surfacing and balancing the user's priorities before recommending destinations.
+- Single-person decision.
+- Trade-offs between performance, camera quality, battery life, ecosystem, and cost.
 
-Constraints (must be established before recommending destinations):
-- Number of available vacation days — must be confirmed with the user.
-- Budget range — must be confirmed with the user.
-- Seasonal and weather considerations relevant to timing.
-- Group size and coordination needs if traveling with others.
+Constraints (must be established before recommending specific models):
+- Budget ceiling — must be confirmed with the user.
+- Primary use case — must be confirmed with the user.
+- Ecosystem preference (iOS vs Android) significantly narrows the option space.
 
-Option Space:
-Destination type (choose one direction before discussing specifics):
-- Urban cultural destinations (cities, food, museums, nightlife)
-- Nature-based destinations (national parks, hiking, wildlife)
-- Beach / resort destinations (relaxation, water activities)
-- International long-haul trips
-- Domestic short-distance trips
-
-Trip style (separate dimension, discuss after destination type is narrowed):
-- Structured itinerary (pre-booked, dense schedule)
-- Flexible exploration (loose plan, spontaneous)
+Option Space (do not expand beyond these categories):
+- Premium flagship smartphones
+- Mid-range smartphones
+- Budget smartphones
+- Compact / small-form-factor phones
+- Android ecosystem vs Apple ecosystem
 
 Temporal Boundary:
-- A concrete travel plan direction must be reached within the session.
+- Decision must be made within the sale period.
 
 
 [Fact Layer]
 
-Common Travel Decision Dimensions:
+Budget reference:
+- $ = under $400
+- $$ = $400–$800
+- $$$ = $800+
 
-Logistics:
-- Flight cost varies significantly by season, destination, and booking lead time.
-- Accommodation: hotels offer consistency; short-term rentals offer space and local feel.
-- Transportation: rental car needed for nature/rural destinations; public transit sufficient for cities.
-- International trips require visa checks and travel insurance consideration.
+Premium Flagship:
+- iPhone 16 / 16 Pro: best iOS experience, strong camera, A18 chip, Apple ecosystem  $$$
+- Samsung Galaxy S25 / S25 Ultra: Android flagship, versatile camera, S Pen (Ultra), premium build  $$$
+- Google Pixel 9 Pro: best Android camera processing, clean software, fast updates  $$$
+- OnePlus 13: near-flagship performance, fast charging, slightly lower camera ceiling  $$
+
+Mid-Range:
+- iPhone 15 (previous gen, heavily discounted): still excellent performance, good camera  $$
+- Samsung Galaxy A55: solid mid-range, good display, decent camera, long software support  $$
+- Google Pixel 8a: flagship camera features at mid-range price, clean Android  $$
+- Motorola Edge 50 Pro: good value, clean software, strong battery  $$
+- Nothing Phone (2): unique design, good performance, transparent back, clean OS  $$
+
+Budget:
+- Samsung Galaxy A35: reliable, good display, 4 years of OS updates  $
+- Motorola Moto G series: solid budget option, near-stock Android, good battery  $
+- Xiaomi Redmi Note 13: high specs for price, MIUI software layer, good cameras  $
+- Nokia G series: durable, clean Android, long update support, basic performance  $
+
+Compact / Small Form Factor:
+- iPhone 16 / 15: smaller than Pro models, still flagship-grade  $$$
+- Samsung Galaxy S25: compact flagship, smaller than S25+/Ultra  $$$
+- Sony Xperia 5 VI: compact Android flagship, excellent display, niche but capable  $$$
+
+Key Evaluation Dimensions:
+- Performance: chipset, sustained performance, RAM
+- Camera: main sensor quality, low-light, video capability, zoom
+- Battery: capacity, fast charge speed, wireless charging
+- Display: size, refresh rate, brightness, resolution
+- Software: iOS vs Android, update longevity, bloatware
+- Ecosystem: existing devices (AirPods, Apple Watch, Samsung Watch, etc.)
+- Durability: IP rating, build material
 
 Trade-off Patterns:
-- Cost vs experience intensity
-- Relaxation vs activity density
-- Flexibility vs fixed itinerary
-- Travel distance vs fatigue
-- Popular destinations vs off-the-beaten-path
+- iOS simplicity and ecosystem vs Android flexibility and customization
+- Camera versatility vs overall performance budget
+- Battery size vs phone thickness and weight
+- Flagship performance vs mid-range value
+- Brand ecosystem lock-in vs cross-platform flexibility
 
 
 [Domain Output Policy Layer]
 
 Scope Boundary (strictly enforced):
-- Do NOT recommend a specific destination until vacation days and budget range are both confirmed.
-- Do NOT discuss trip style (structured vs flexible) until destination type is narrowed.
-- Do NOT list more than two destination options in a single response.
-- Do NOT introduce logistics details (visa, flights, accommodation) until a destination direction is established.
-- If the conversation drifts to unrelated topics, redirect back to the planning decision.
+- Do NOT recommend a specific model until the user's primary use case AND budget range are both known.
+- Ecosystem preference (iOS vs Android) should be established early — it halves the option space immediately.
+- Do NOT expand the option list once a category has been established — narrow, do not broaden.
+- Do NOT mention more than ONE model per message.
+- Do NOT mention prices unless a direct comparison benefit is clear. At most one price hint per response.
+- If the conversation drifts to accessories or unrelated topics, redirect to the phone decision.
 
 Interaction Strategy (required sequence):
-1. First establish vacation days available and budget range.
-2. Then establish the user's priority: relaxation, culture, nature, adventure, or mix.
-3. Only after both are known: propose one or two destination type directions.
-4. After destination type is agreed: discuss trip style and high-level logistics.
-- Do not skip steps. Do not recommend destinations before step 2 is complete.
+1. First establish ecosystem preference (iOS or Android) — this is the most important filter.
+2. Then establish the user's primary use case (photography, gaming, business, everyday use, longevity).
+3. Then establish budget range.
+4. Only after all three are known: narrow to one or two relevant options and compare.
+- Do not skip steps. Do not recommend a model before step 3 is complete.
+- The Interaction Strategy sequence takes priority over all other instructions. Do not recommend options until all required information is collected.
 
 Information Use:
-- Use logistics constraints to filter options, not to overwhelm.
-- Avoid listing minor travel details unless specifically asked.
+- Use budget tier ($ / $$ / $$$) to filter options once budget is known.
+- If budget stress appears high, suggest a previous-generation flagship rather than expanding the option list.
 
 Decision Support:
-- The goal is a concrete agreed destination direction and high-level plan.
-- Vague conclusions ("anywhere could work") are not acceptable once priorities are established.
+- The goal is one concrete purchase recommendation with a clear rationale.
+- Vague conclusions ("it depends on your needs") are not acceptable once needs are established.

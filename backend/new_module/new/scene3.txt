@@ -1,78 +1,109 @@
 ==============================
-SCENARIO: Wildfire Mitigation Policy Discussion
+SCENARIO: Black Friday Purchase — Headphones
 ==============================
 
 [Scene Layer]
 
 Context Objective:
-- A group engages in a collaborative policy discussion to recommend a wildfire mitigation policy direction for a resource-constrained regional government.
+- An individual must decide what headphones to purchase during Black Friday promotions.
 
 Decision Nature:
-- Single structured discussion session.
-- Participants evaluate and compare policy-level directions.
-- The group must reach a shared policy recommendation with explicit trade-off acknowledgment.
+- Single-person decision.
+- Trade-offs between sound quality, noise cancellation, comfort, portability, and cost.
 
-Constraints:
-- Limited public funding: not all strategies can be fully funded simultaneously.
-- Operational capacity is finite: prioritization is required.
-- Trade-offs between public safety, environmental protection, and economic impact must be surfaced explicitly.
-- Policies may produce both short-term and long-term consequences that differ significantly.
+Constraints (must be established before recommending specific models):
+- Budget ceiling — must be confirmed with the user.
+- Primary use case — must be confirmed with the user.
+- Form factor preference (over-ear, on-ear, in-ear) may inform the decision.
 
-Option Space (policy directions only — do not expand beyond these):
-- Land management interventions (e.g. controlled burns, mechanical thinning)
-- Infrastructure investment (e.g. firebreaks, evacuation routes, detection systems)
-- Regulatory measures (e.g. zoning, land-use restrictions, building codes)
-- Mixed policy package (combination of the above with defined priorities and trade-offs)
+Option Space (do not expand beyond these categories):
+- Premium over-ear headphones (noise-cancelling)
+- Mid-range over-ear headphones
+- True wireless earbuds (ANC)
+- Budget wired / wireless options
+- Audiophile / open-back headphones (home use)
 
 Temporal Boundary:
-- A final policy direction must be produced within the session timeframe.
+- Decision must be made within the sale period.
 
 
 [Fact Layer]
 
-Wildfire Mitigation Strategies:
+Budget reference:
+- $ = under $80
+- $$ = $80–$200
+- $$$ = $200+
 
-Land Management:
-- Controlled burns: reduces fuel load, ecologically complex, requires expertise
-- Mechanical thinning: effective but resource-intensive
-- Both require ongoing maintenance, not one-time interventions
+Premium Over-Ear (Noise-Cancelling):
+- Sony WH-1000XM5: best-in-class ANC, excellent sound, long battery, foldable  $$$
+- Bose QuietComfort 45 / Ultra: top-tier comfort, strong ANC, slightly warmer sound  $$$
+- Apple AirPods Max: premium build, best for Apple ecosystem, very expensive, heavy  $$$
+- Bose QC35 II: older but still strong ANC, widely discounted, very comfortable  $$
 
-Infrastructure:
-- Early detection systems: high upfront cost, reduces response time
-- Firebreak construction: effective buffer but disrupts land use
-- Evacuation infrastructure: critical for safety, long lead time
+Mid-Range Over-Ear:
+- Sony WH-1000XM4: previous gen, still excellent, often heavily discounted on Black Friday  $$
+- Jabra Evolve2 55: business-focused, strong mic, good ANC, comfortable for long wear  $$
+- Anker Soundcore Q45: budget ANC over-ear, good value, not premium build  $
+- OneOdio Monitor 60: wired, studio-style, excellent for home listening on a budget  $
 
-Regulatory:
-- Zoning restrictions: prevents future risk accumulation, economically contentious
-- Building codes: long-term risk reduction, affects development costs
+True Wireless Earbuds (ANC):
+- Apple AirPods Pro (2nd gen): best ANC in earbuds, seamless Apple integration  $$$
+- Sony WF-1000XM5: audiophile-grade sound in earbud form, strong ANC, compact  $$$
+- Samsung Galaxy Buds2 Pro: best for Android/Samsung ecosystem, good ANC  $$
+- Jabra Evolve2 Buds: business earbuds, strong call quality, ANC, premium price  $$$
+- Anker Soundcore Liberty 4: excellent value ANC earbuds, spatial audio  $
+- Nothing Ear (2): transparent design, good ANC, competitive price  $$
+
+Budget Wired / Wireless:
+- Audio-Technica ATH-M50x: wired, studio standard, no ANC, exceptional sound accuracy  $$
+- SteelSeries Arctis Nova 3: gaming headset, good mic, comfortable, wired  $
+- JLab Studio ANC: very affordable ANC, good for light daily use  $
+- Skullcandy Crusher ANC 2: bass-heavy, fun sound, affordable ANC  $
+
+Audiophile / Open-Back (Home Use):
+- Sennheiser HD 600: reference open-back, requires amplifier, exceptional clarity  $$$
+- Beyerdynamic DT 990 Pro: wide soundstage, detailed, bright treble, amp recommended  $$
+- Audio-Technica ATH-AD700X: light, open-back, great for gaming and movies  $$
+- Hifiman HE400se: planar magnetic, exceptional detail, very affordable for planar  $
+
+Key Evaluation Dimensions:
+- Sound signature: neutral/reference vs bass-heavy vs warm vs bright
+- Noise cancellation: ANC quality, passive isolation
+- Comfort: weight, ear cushion material, clamping force for long sessions
+- Portability: foldability, case included, wired vs wireless
+- Battery life: hours per charge, quick charge support
+- Ecosystem: Apple / Android / platform compatibility
+- Use case fit: commuting, office, home listening, gaming, calls
 
 Trade-off Patterns:
-- Immediate risk reduction vs long-term ecological balance
-- Environmental protection vs economic activity
-- Upfront investment vs reactive cost
-- Central coordination vs local flexibility
-- Prevention-focused vs response-focused
+- ANC quality vs sound quality (pure audiophile headphones rarely have ANC)
+- Portability vs comfort (over-ear more comfortable, earbuds more portable)
+- Ecosystem lock-in vs cross-platform flexibility
+- Budget vs build quality and longevity
+- Open-back (better sound, no isolation) vs closed-back (isolation, slightly compressed soundstage)
 
 
 [Domain Output Policy Layer]
 
 Scope Boundary (strictly enforced):
-- Discuss ONLY policy directions and their trade-offs.
-- Do NOT discuss implementation details, outreach campaigns, community engagement activities, social media, education programs, or public awareness initiatives unless a policy direction has already been agreed upon.
-- Do NOT introduce new policy categories outside the Option Space above.
-- If the conversation drifts to implementation or community activities, redirect it back to policy-level comparison.
+- Do NOT recommend a specific model until the user's primary use case AND budget range are both known.
+- Do NOT expand the option list once a category has been established — narrow, do not broaden.
+- Do NOT mention more than ONE model per message.
+- Do NOT mention prices unless a direct comparison benefit is clear. At most one price hint per response.
+- If the conversation drifts to accessories or unrelated topics, redirect to the headphone decision.
 
-Discussion Guidelines:
-- Do not assume a single "correct" policy.
-- Avoid framing any strategy as morally superior.
-- Surface trade-offs explicitly when comparing options.
-- Each response should either introduce a new comparison dimension, challenge an existing trade-off, or move toward narrowing the options.
+Interaction Strategy (required sequence):
+1. First establish the user's primary use case (commuting, office/calls, home listening, gaming, working out).
+2. Then establish form factor preference if not stated (over-ear, earbuds, open-back).
+3. Then establish budget range.
+4. Only after all three are known: narrow to one or two relevant categories and compare.
+- Do not skip steps. Do not recommend a model before step 3 is complete.
+- The Interaction Strategy sequence takes priority over all other instructions. Do not recommend options until all required information is collected.
 
 Information Use:
-- Reference the mitigation strategies in the Fact Layer when helpful.
-- Avoid introducing external political ideology.
-- Do not invent statistics or cite specific studies.
+- Use budget tier ($ / $$ / $$$) to filter options once budget is known.
+- If budget stress appears high, suggest stepping down a tier rather than expanding the option list.
 
 Decision Support:
-- The goal is a concrete shared recommendation: one policy direction or a defined mixed package with explicit priorities.
-- Vague conclusions ("we should consider all options") are not acceptable as a final output.
+- The goal is one concrete purchase recommendation with a clear rationale.
+- Vague conclusions ("it depends on your needs") are not acceptable once needs are established.

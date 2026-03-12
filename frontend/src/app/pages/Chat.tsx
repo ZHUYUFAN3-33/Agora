@@ -834,6 +834,7 @@ export default function Chat() {
   const [maxAgentTurns, setMaxAgentTurns] = useState(5);
   const [maxUserGap, setMaxUserGap] = useState(12);
   const [currentPhase, setCurrentPhase] = useState<string | null>(null);
+  const [showPhaseIndicator, setShowPhaseIndicator] = useState(false);
 
   const [agentNames, setAgentNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
   const [agentBackendNames, setAgentBackendNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
@@ -1151,6 +1152,33 @@ export default function Chat() {
   };
   const handleLogout = () => { localStorage.removeItem("agora_auth"); navigate("/"); };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } };
+  const autoResizeInput = useCallback((el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    const maxHeight = 120;
+    el.style.height = "auto";
+    const nextHeight = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "p") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+      }
+      setShowPhaseIndicator((prev) => !prev);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    autoResizeInput(inputRef.current);
+  }, [inputValue, autoResizeInput]);
 
   return (
     <div className="h-screen bg-white flex overflow-hidden">
@@ -1283,7 +1311,7 @@ export default function Chat() {
             {currentConv && (
               <div className="flex items-center gap-1.5 pr-3 border-r border-black/10" style={monoFont}>
                 <span className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest">Turn {currentConv.messages?.filter((m) => m.role === "user").length ?? 0}</span>
-                {currentPhase && <span className="text-[10px] text-[var(--app-muted-text)]">· Phase: {currentPhase}</span>}
+                {showPhaseIndicator && currentPhase && <span className="text-[10px] text-[var(--app-muted-text)]">· Phase: {currentPhase}</span>}
               </div>
             )}
             {(currentConv?.settings?.mode === "single" ? ["A"] : AGENT_KEYS).map((key) => (
@@ -1461,14 +1489,14 @@ export default function Chat() {
                   placeholder="Enter a question or topic to explore..." rows={1} disabled={isLoading}
                   className="flex-1 min-h-[24px] bg-transparent resize-none outline-none text-white placeholder-[#828282] leading-relaxed disabled:opacity-50"
                   style={{ ...monoFont, fontSize: "13px", maxHeight: "120px" }}
-                  onInput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 120)}px`; }} />
+                  onInput={(e) => autoResizeInput(e.currentTarget)} />
               </div>
               <motion.button onClick={handleSend} disabled={!inputValue.trim() || isLoading}
                 whileTap={!inputValue.trim() || isLoading ? {} : { scale: 0.95 }}
                 transition={{ type: "spring", stiffness: 400, damping: 25 }}
                 className="h-[48px] w-[48px] min-h-[48px] bg-black rounded-[12px] flex items-center justify-center flex-shrink-0 hover:bg-neutral-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed group">
                 {isLoading ? (
-                  <motion.div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full" animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }} />
+                  <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
                 ) : (
                   <span className="inline-flex transition-transform duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-hover:scale-110">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 13V3M3 8L8 3L13 8" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>

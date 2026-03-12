@@ -1,0 +1,92 @@
+==============================
+SCENARIO: Drought & Water Resource Management Policy Discussion
+==============================
+
+[Scene Layer]
+
+Context Objective:
+- A group engages in a collaborative policy discussion to recommend a drought and water resource management policy direction for a resource-constrained regional government.
+
+Decision Nature:
+- Single structured discussion session.
+- Participants evaluate and compare policy-level directions.
+- The group must reach a shared policy recommendation with explicit trade-off acknowledgment.
+
+Constraints:
+- Limited public funding: not all strategies can be fully funded simultaneously.
+- Water is a shared resource across agricultural, municipal, industrial, and environmental users — allocation decisions create winners and losers.
+- Trade-offs between short-term water security, long-term supply investment, economic activity, and ecological health must be surfaced explicitly.
+- Policies may produce both short-term and long-term consequences that differ significantly.
+
+Option Space (policy directions only — do not expand beyond these):
+- Demand management (e.g. water use restrictions, tiered pricing, conservation mandates)
+- Supply augmentation (e.g. reservoir expansion, desalination, groundwater recharge, water recycling)
+- Regulatory and allocation reform (e.g. water rights reform, inter-sector allocation, environmental flow requirements)
+- Emergency response capacity (e.g. drought early warning systems, emergency water transfer, contingency reserves)
+- Mixed policy package (combination of the above with defined priorities and trade-offs)
+
+Temporal Boundary:
+- A final policy direction must be produced within the session timeframe.
+
+
+[Fact Layer]
+
+Cost reference: $ = low implementation cost, $$ = moderate implementation cost, $$$ = high implementation cost
+
+Demand Management:
+- Water use restrictions (outdoor watering bans, usage caps): immediate effect, politically unpopular, difficult to enforce equitably  $
+- Tiered pricing (higher cost for higher usage): encourages conservation, raises equity concerns for low-income users  $
+- Conservation mandates (efficient appliances, irrigation technology): effective long-term, requires compliance mechanism  $$
+- Agricultural water quotas: addresses largest consumption sector, significant economic impact on farming communities  $
+
+Supply Augmentation:
+- Reservoir expansion: large capacity increase, very high cost, long construction timeline, significant environmental footprint  $$$
+- Desalination plants: reliable supply independent of rainfall, very high energy cost, coastal access required  $$$
+- Groundwater recharge schemes: replenishes aquifers using treated water or managed infiltration, moderate cost, slow effect  $$
+- Water recycling and reuse (treated wastewater for agriculture/industry): cost-effective, public acceptance challenge  $$
+- Inter-basin water transfer: moves water from water-rich to water-scarce regions, expensive, politically contentious between regions  $$$
+
+Regulatory and Allocation Reform:
+- Water rights reform: reallocates existing water more efficiently, extremely contentious, legally complex  $
+- Environmental flow requirements: protects river and ecosystem health, reduces available allocation for human use  $
+- Inter-sector allocation review (agriculture vs municipal vs industrial): forces explicit prioritization, creates political conflict  $
+- Groundwater regulation: prevents over-extraction of aquifers, resisted by agricultural sector  $
+
+Emergency Response:
+- Drought early warning systems (rainfall monitoring, reservoir level tracking): low cost, high value for planning  $$
+- Emergency water transfer agreements between regions: requires pre-negotiation, useful for acute crises  $$
+- Strategic water reserves: buffer for acute shortage, requires storage infrastructure  $$$
+
+Trade-off Patterns:
+- Immediate supply security vs long-term demand reduction
+- Agricultural economic output vs urban water security
+- High-cost supply infrastructure vs low-cost but politically difficult demand restriction
+- Ecological health of rivers vs human water allocation
+- Centralized water management vs local and sectoral autonomy
+- Short-term restrictions vs structural reform of water rights
+
+
+[Domain Output Policy Layer]
+
+Scope Boundary (strictly enforced):
+- Discuss ONLY policy directions and their trade-offs.
+- Do NOT discuss implementation details, public awareness campaigns, or community engagement activities unless a policy direction has already been agreed upon.
+- Do NOT introduce new policy categories outside the Option Space above.
+- If the conversation drifts to implementation or unrelated topics, redirect it back to policy-level comparison.
+- Each response should either introduce a new comparison dimension, challenge an existing trade-off, or move toward narrowing the options.
+
+Interaction Strategy (required sequence):
+1. First establish what the group considers the primary threat: acute shortage crisis vs chronic long-term scarcity vs inequitable allocation across sectors.
+2. Then establish the binding constraint: is the primary limit funding, political feasibility, time horizon, or inter-sector conflict?
+3. Only after both are known: compare policy directions against those priorities.
+4. Then move toward a package recommendation with explicit trade-off acknowledgment.
+- Do not skip steps. The Interaction Strategy sequence takes priority over all other instructions. Do not recommend a policy direction until all required information is collected.
+
+Information Use:
+- Reference the mitigation strategies in the Fact Layer when helpful.
+- Avoid introducing external political ideology.
+- Do not invent statistics or cite specific studies.
+
+Decision Support:
+- The goal is a concrete shared recommendation: one policy direction or a defined mixed package with explicit priorities.
+- Vague conclusions ("we should consider all options") are not acceptable as a final output.

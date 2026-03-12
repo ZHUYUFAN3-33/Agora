@@ -41,7 +41,9 @@ python app.py
 
 ## 项目简介 / Project Description
 
-基于 OpenAI API 的多智能体对话系统，支持电脑购买咨询等场景。三个 AI 代理从不同角度为用户提供建议：
+基于 OpenAI API 的多智能体协作对话系统，用于多场景共创与决策实验（电脑购买只是其中一个测试场景，不是唯一目标）。系统通过可配置的 Agent 角色、情绪层与决策层来观察不同协作策略下的讨论路径与结论质量。
+
+默认示例中，三个 AI 代理从不同角度提供建议：
 
 - **ChatbotA** 🔥 — 兴奋急躁：推动快速决策
 - **ChatbotB** 🧠 — 冷静分析：理性分析、长期价值
@@ -52,6 +54,43 @@ python app.py
 - **Full**：完整 persona / emotion / decision
 - **Limited**：仅颜色与名称
 - **Single**：单 Agent，中立风格
+
+---
+
+## 理论基础 / Theoretical Grounding
+
+### 情绪层（Emotion）
+
+- 使用三维情绪空间：`Valence`（愉悦度）+ `Arousal`（唤醒度）+ `Control`（控制感）。
+- 其中 `Control` 在理论上对应 PAD 模型中的 `Dominance` 维度。
+- 系统采用“文本关键词 + 三维滑条中心点 + 概率融合”的混合判定方式，将状态映射到六类离散情绪：`joy / anger / fear / sadness / surprise / disgust`。
+
+### 决策层（Decision）
+
+- 使用五种决策风格：`Rational / Intuitive / Dependent / Avoidant / Spontaneous`。
+- 该风格集合与 Scott & Bruce 的 General Decision-Making Style（GDMS）五维框架一致，用于控制 Agent 的“推理方式”而非“结论内容”。
+
+> 说明：当前仓库实现为工程化落地版本，代码与提示词中采用了上述理论结构，但未在代码内显式附论文引用条目。
+
+---
+
+## 版本流程（参照 Fig.3）/ Version Flow Mapping
+
+你的当前版本可按下面流程理解：
+
+1. **Team Selection（选 Agent 组合）**  
+   在会话开始时为每个 Agent 指定（或覆盖）`decision + emotion` 配置，形成团队分工。
+2. **Discuss the Problem（进入问题讨论）**  
+   用户输入问题后，多 Agent 在同一线程内基于各自风格协同回应。
+3. **Thinking Mode（Explore / Focus）**  
+   - **Explore**：发散探索，提出候选方向、补充维度与新假设。  
+   - **Focus**：收敛整理，强调取舍、排序与可执行建议。
+4. **Summary Recap（摘要回顾）**  
+   通过结构化总结提炼关键观点与推荐路径（可用于对话回看和日志导出）。
+5. **Facilitation（过程引导）**  
+   当讨论停滞或分歧较大时，系统通过规则化提示推进下一步（例如要求明确取舍、降低风险或促成承诺）。
+
+你和图中的差异重点是：图里强调“角色专家团队共创”，你这个版本进一步把每个 Agent 的行为拆成了可独立控制的 `Emotion Layer + Decision Layer`，所以更适合做可重复实验和消融对比。
 
 ---
 

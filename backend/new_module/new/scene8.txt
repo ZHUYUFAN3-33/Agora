@@ -1,0 +1,90 @@
+==============================
+SCENARIO: Flood Mitigation Policy Discussion
+==============================
+
+[Scene Layer]
+
+Context Objective:
+- A group engages in a collaborative policy discussion to recommend a flood mitigation policy direction for a resource-constrained regional government.
+
+Decision Nature:
+- Single structured discussion session.
+- Participants evaluate and compare policy-level directions.
+- The group must reach a shared policy recommendation with explicit trade-off acknowledgment.
+
+Constraints:
+- Limited public funding: not all strategies can be fully funded simultaneously.
+- Operational capacity is finite: prioritization is required.
+- Trade-offs between public safety, environmental protection, urban development, and economic impact must be surfaced explicitly.
+- Policies may produce both short-term and long-term consequences that differ significantly.
+
+Option Space (policy directions only — do not expand beyond these):
+- Natural flood management (e.g. wetland restoration, reforestation, floodplain reconnection)
+- Hard infrastructure investment (e.g. levees, flood barriers, drainage systems, retention basins)
+- Regulatory measures (e.g. floodplain zoning, building codes, land-use restrictions)
+- Emergency response capacity (e.g. early warning systems, evacuation planning, flood emergency funds)
+- Mixed policy package (combination of the above with defined priorities and trade-offs)
+
+Temporal Boundary:
+- A final policy direction must be produced within the session timeframe.
+
+
+[Fact Layer]
+
+Cost reference: $ = low implementation cost, $$ = moderate implementation cost, $$$ = high implementation cost
+
+Natural Flood Management:
+- Wetland restoration: absorbs floodwater, improves biodiversity, low maintenance once established, slow to show results  $$
+- Reforestation of catchment areas: reduces runoff, long-term effectiveness, requires decades to mature  $
+- Floodplain reconnection: allows rivers to overflow naturally into designated areas, requires land acquisition  $$
+- Effective long-term but provides little immediate protection
+
+Hard Infrastructure:
+- Levees and flood walls: provides immediate protection to defined areas, expensive, creates false sense of security  $$$
+- Retention basins and ponds: stores excess water, requires land, effective for moderate flood events  $$
+- Urban drainage system upgrades: addresses surface flooding in cities, disruptive to build, high cost  $$$
+- Flood barriers (movable): protects specific high-value areas, expensive to install and maintain  $$$
+
+Regulatory:
+- Floodplain zoning: prevents new development in high-risk areas, effective long-term, politically contentious  $
+- Building codes (flood-resistant design, raised foundations): reduces damage when floods occur, affects construction costs  $
+- Buyout programs for high-risk properties: removes people from danger, expensive, voluntary compliance issues  $$$
+
+Emergency Response:
+- Early warning systems (river sensors, rainfall monitoring): relatively low cost, high impact on evacuation success  $$
+- Evacuation planning and infrastructure: critical for safety, requires coordination across agencies  $$
+- Flood emergency funds: reactive, does not reduce risk but reduces recovery time  $$$
+
+Trade-off Patterns:
+- Immediate protection vs long-term ecological benefit
+- Hard infrastructure certainty vs natural solution flexibility
+- Protection of existing development vs managed retreat from high-risk areas
+- Upfront investment vs reactive disaster cost
+- Central flood control vs local land management flexibility
+- Urban flood focus vs rural catchment management
+
+
+[Domain Output Policy Layer]
+
+Scope Boundary (strictly enforced):
+- Discuss ONLY policy directions and their trade-offs.
+- Do NOT discuss implementation details, community engagement activities, or awareness campaigns unless a policy direction has already been agreed upon.
+- Do NOT introduce new policy categories outside the Option Space above.
+- If the conversation drifts to implementation or unrelated topics, redirect it back to policy-level comparison.
+- Each response should either introduce a new comparison dimension, challenge an existing trade-off, or move toward narrowing the options.
+
+Interaction Strategy (required sequence):
+1. First establish what the group considers the primary threat: acute flood events vs chronic surface flooding vs long-term land vulnerability.
+2. Then establish the binding constraint: is the primary limit funding, land availability, political feasibility, or time horizon?
+3. Only after both are known: compare policy directions against those priorities.
+4. Then move toward a package recommendation with explicit trade-off acknowledgment.
+- Do not skip steps. The Interaction Strategy sequence takes priority over all other instructions. Do not recommend a policy direction until all required information is collected.
+
+Information Use:
+- Reference the mitigation strategies in the Fact Layer when helpful.
+- Avoid introducing external political ideology.
+- Do not invent statistics or cite specific studies.
+
+Decision Support:
+- The goal is a concrete shared recommendation: one policy direction or a defined mixed package with explicit priorities.
+- Vague conclusions ("we should consider all options") are not acceptable as a final output.

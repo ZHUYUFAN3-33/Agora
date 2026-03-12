@@ -99,10 +99,15 @@ chat_sessions: Dict[str, dict] = {}
 SCENE_FILE = os.path.join(BASE_DIR, "scene.txt")
 SCENE_DIR = os.path.join(BASE_DIR, "new_module", "new")
 SCENES: Dict[str, str] = {}
-for i in range(1, 4):
-    p = os.path.join(SCENE_DIR, f"scene{i}.txt")
-    if os.path.exists(p):
-        SCENES[f"scene{i}"] = read_text(p)
+if os.path.isdir(SCENE_DIR):
+    for fname in sorted(os.listdir(SCENE_DIR), key=lambda n: (int(re.match(r"scene(\d+)\.txt$", n).group(1)) if re.match(r"scene(\d+)\.txt$", n) else 10**9, n)):
+        m = re.match(r"scene(\d+)\.txt$", fname)
+        if not m:
+            continue
+        scene_key = f"scene{int(m.group(1))}"
+        p = os.path.join(SCENE_DIR, fname)
+        if os.path.exists(p):
+            SCENES[scene_key] = read_text(p)
 BOT1_FILE = os.path.join(BASE_DIR, "chatbot1.txt")
 BOT2_FILE = os.path.join(BASE_DIR, "chatbot2.txt")
 BOT3_FILE = os.path.join(BASE_DIR, "chatbot3.txt")

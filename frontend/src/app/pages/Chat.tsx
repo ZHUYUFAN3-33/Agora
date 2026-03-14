@@ -239,6 +239,11 @@ function AgentEmotionPopover({
 }) {
   const emotionTag = settings.emotionTag || "joy";
   const emotionColor = EMOTION_COLORS[emotionTag] || "#111111";
+  const decisionIndex = Math.max(0, DECISION_BLOCKS.indexOf(settings.decisionBlock));
+  const cycleDecision = (direction: -1 | 1) => {
+    const nextIndex = (decisionIndex + direction + DECISION_BLOCKS.length) % DECISION_BLOCKS.length;
+    onAdjustEmotion(agentKey, { decisionBlock: DECISION_BLOCKS[nextIndex] }, false);
+  };
   return (
     <motion.div
       initial={{ opacity: 0, y: 6, scale: 0.98 }}
@@ -248,46 +253,78 @@ function AgentEmotionPopover({
       className="absolute left-0 top-full mt-3 z-30 w-[252px] rounded-[14px] border border-black/20 bg-[#fffdfa] px-3 py-3 shadow-[0_14px_36px_rgba(0,0,0,0.16)]"
     >
       <div className="absolute left-5 top-[-7px] h-3.5 w-3.5 rotate-45 border-l border-t border-black/20 bg-[#fffdfa]" />
-      <div className="mb-2 flex items-center justify-between gap-2 rounded-[10px] border border-black/8 bg-black/[0.02] px-2.5 py-2">
-        <span className="text-[10px] tracking-widest text-black/85 uppercase" style={monoFont}>Tone</span>
-        <span className="text-[10px] text-black/70 truncate" style={monoFont}>{agentName}</span>
+      <div className="mb-3 px-0.5">
+        <span className="text-[10px] tracking-widest text-black/85 uppercase" style={monoFont}>Emotion</span>
       </div>
-      <div
-        className="mb-3 flex items-center justify-between gap-2 rounded-[10px] border px-2.5 py-2 text-[10px]"
-        style={{
-          ...monoFont,
-          borderColor: emotionColor + "66",
-          background: emotionColor + "22",
-          color: emotionColor,
-        }}
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <EmotionIcon emotion={emotionTag} size={14} />
-          <span className="capitalize font-semibold">{emotionTag}</span>
-        </div>
-        <span className="text-[9px] uppercase tracking-widest text-black/65" style={monoFont}>current</span>
-      </div>
-      <div className="flex flex-col gap-2">
-        {([
-          { label: "Valence", field: "valence" as const, value: settings.valence },
-          { label: "Arousal", field: "arousal" as const, value: settings.arousal },
-          { label: "Control", field: "control" as const, value: settings.control },
-        ] as const).map(({ label, field, value }) => (
-          <div key={field} className="flex items-center gap-2 rounded-[8px] px-1 py-0.5">
-            <span className="w-[48px] flex-shrink-0 text-[10px] text-black/80" style={monoFont}>{label}</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(value * 100)}
-              onChange={(e) => onAdjustEmotion(agentKey, { [field]: parseInt(e.target.value, 10) / 100 } as Partial<AgentCustomSetting>)}
-              onMouseUp={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
-              onTouchEnd={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
-              className="flex-1 h-[4px] accent-black"
-            />
-            <span className="w-[28px] text-right text-[10px] text-black/80" style={monoFont}>{value.toFixed(2)}</span>
+      <div className="rounded-[12px] border border-black/10 bg-black/[0.02] px-3 py-3">
+        <div className="mb-3">
+          <div
+            className="flex items-center justify-between gap-2 rounded-[10px] border px-2.5 py-2 text-[10px]"
+            style={{
+              ...monoFont,
+              borderColor: emotionColor + "66",
+              background: emotionColor + "22",
+              color: emotionColor,
+            }}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <EmotionIcon emotion={emotionTag} size={14} />
+              <span className="capitalize font-semibold">{emotionTag}</span>
+            </div>
           </div>
-        ))}
+        </div>
+        <div className="border-t border-black/8 pt-3">
+          <div className="flex flex-col gap-2">
+            {([
+              { label: "Valence", field: "valence" as const, value: settings.valence },
+              { label: "Arousal", field: "arousal" as const, value: settings.arousal },
+              { label: "Control", field: "control" as const, value: settings.control },
+            ] as const).map(({ label, field, value }) => (
+              <div key={field} className="flex min-w-0 items-center gap-2 rounded-[8px] px-1 py-0.5">
+                <span className="w-[54px] flex-shrink-0 text-[10px] text-black/80" style={monoFont}>{label}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round(value * 100)}
+                  onChange={(e) => onAdjustEmotion(agentKey, { [field]: parseInt(e.target.value, 10) / 100 } as Partial<AgentCustomSetting>)}
+                  onMouseUp={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
+                  onTouchEnd={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
+                  className="min-w-0 flex-1 h-[4px] accent-black"
+                />
+                <span className="w-[34px] flex-shrink-0 text-right text-[10px] text-black/80" style={monoFont}>{value.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-3 border-t border-black/8 pt-3">
+          <div className="mb-1 text-[9px] uppercase tracking-widest text-black/55" style={monoFont}>Decision</div>
+          <div className="flex items-center gap-2 px-1 py-1">
+            <button
+              type="button"
+              onClick={() => cycleDecision(-1)}
+              className="flex h-7 w-7 items-center justify-center rounded-[7px] text-black/70 transition-colors hover:bg-black/[0.03] hover:text-black"
+              aria-label="Previous decision style"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+            </button>
+            <div className="min-w-0 flex-1 text-center">
+              <div className="text-[11px] text-black" style={monoFont}>{settings.decisionBlock}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => cycleDecision(1)}
+              className="flex h-7 w-7 items-center justify-center rounded-[7px] text-black/70 transition-colors hover:bg-black/[0.03] hover:text-black"
+              aria-label="Next decision style"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-black/10 pt-2.5">
         <button

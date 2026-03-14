@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
+import { createPortal } from "react-dom";
 import { AgoraLogo, AgoraLogoFull } from "../components/AgoraLogo";
 import { CustomDropdown } from "../components/ui/CustomDropdown";
 import { AppearanceModal } from "../components/AppearanceModal";
@@ -76,6 +77,7 @@ interface Message {
   agentKey?: AgentKey;
   content: string;
   timestamp: number;
+  emotionTagSnapshot?: string | null;
 }
 
 interface ConvSettings {
@@ -199,9 +201,11 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 function TypingDots({ agentKey, agentNames }: { agentKey: AgentKey; agentNames: Record<AgentKey, string> }) {
   return (
     <motion.div
+      layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 8 }}
+      transition={{ duration: 0.22, layout: { duration: 0.26, ease: [0.22, 1, 0.36, 1] } }}
       className="flex flex-col gap-1 mb-2"
     >
       <div className="flex items-center gap-2 mb-1">
@@ -226,123 +230,160 @@ function TypingDots({ agentKey, agentNames }: { agentKey: AgentKey; agentNames: 
 
 function AgentEmotionPopover({
   agentKey,
-  agentName,
   settings,
   onAdjustEmotion,
   onOpenAdvanced,
+  anchorRect,
+  safeRect,
+  onHoverStart,
+  onHoverEnd,
 }: {
   agentKey: AgentKey;
-  agentName: string;
   settings: AgentCustomSetting;
   onAdjustEmotion: (key: AgentKey, patch: Partial<AgentCustomSetting>, shouldAnalyze?: boolean) => void;
   onOpenAdvanced: (key: AgentKey) => void;
+  anchorRect: DOMRect | null;
+  safeRect: DOMRect | null;
+  onHoverStart: () => void;
+  onHoverEnd: () => void;
 }) {
+  if (!anchorRect || typeof window === "undefined") return null;
   const emotionTag = settings.emotionTag || "joy";
   const emotionColor = EMOTION_COLORS[emotionTag] || "#111111";
   const decisionIndex = Math.max(0, DECISION_BLOCKS.indexOf(settings.decisionBlock));
+  const emotionDefaults = defaultSetting(agentKey);
+  const panelWidth = 252;
+  const estimatedPanelHeight = 332;
+  const viewportPad = 12;
+  const safeTop = Math.max(viewportPad, (safeRect?.top ?? 0) + viewportPad);
+  const safeBottom = Math.min(window.innerHeight - viewportPad, (safeRect?.bottom ?? window.innerHeight) - viewportPad);
+  const safeLeft = Math.max(viewportPad, safeRect?.left ?? 0);
+  const safeRight = Math.min(window.innerWidth - viewportPad, safeRect?.right ?? window.innerWidth);
+  const spaceBelow = safeBottom - anchorRect.bottom;
+  const spaceAbove = anchorRect.top - safeTop;
+  const placeAbove = spaceBelow < estimatedPanelHeight && spaceAbove > spaceBelow;
+  const left = Math.min(Math.max(anchorRect.left, safeLeft), Math.max(safeLeft, safeRight - panelWidth));
+  const top = placeAbove ? anchorRect.top - 12 : anchorRect.bottom + 12;
   const cycleDecision = (direction: -1 | 1) => {
     const nextIndex = (decisionIndex + direction + DECISION_BLOCKS.length) % DECISION_BLOCKS.length;
     onAdjustEmotion(agentKey, { decisionBlock: DECISION_BLOCKS[nextIndex] }, false);
   };
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 6, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 4, scale: 0.98 }}
-      transition={{ duration: 0.16 }}
-      className="absolute left-0 top-full mt-3 z-30 w-[252px] rounded-[14px] border border-black/20 bg-[#fffdfa] px-3 py-3 shadow-[0_14px_36px_rgba(0,0,0,0.16)]"
+  return createPortal(
+    <div
+      className="fixed z-40"
+      style={{ left, top }}
+      onMouseEnter={onHoverStart}
+      onMouseLeave={onHoverEnd}
     >
-      <div className="absolute left-5 top-[-7px] h-3.5 w-3.5 rotate-45 border-l border-t border-black/20 bg-[#fffdfa]" />
-      <div className="mb-3 px-0.5">
-        <span className="text-[10px] tracking-widest text-black/85 uppercase" style={monoFont}>Emotion</span>
-      </div>
-      <div className="rounded-[12px] border border-black/10 bg-black/[0.02] px-3 py-3">
-        <div className="mb-3">
-          <div
-            className="flex items-center justify-between gap-2 rounded-[10px] border px-2.5 py-2 text-[10px]"
-            style={{
-              ...monoFont,
-              borderColor: emotionColor + "66",
-              background: emotionColor + "22",
-              color: emotionColor,
-            }}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <EmotionIcon emotion={emotionTag} size={14} />
-              <span className="capitalize font-semibold">{emotionTag}</span>
-            </div>
+      <div className={placeAbove ? "-translate-y-full" : ""}>
+        <motion.div
+          initial={{ opacity: 0, y: placeAbove ? -6 : 6, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: placeAbove ? -4 : 4, scale: 0.98 }}
+          transition={{ duration: 0.16 }}
+          className="relative z-30 w-[252px] rounded-[14px] border border-black/20 bg-[#fffdfa] px-3 py-3 shadow-[0_14px_36px_rgba(0,0,0,0.16)]"
+        >
+          <div className={`absolute left-5 h-3.5 w-3.5 rotate-45 border-black/20 bg-[#fffdfa] ${placeAbove ? "bottom-[-7px] border-b border-r" : "top-[-7px] border-l border-t"}`} />
+          <div className="mb-3 px-0.5">
+            <span className="text-[10px] tracking-widest text-black/85 uppercase" style={monoFont}>Emotion</span>
           </div>
-        </div>
-        <div className="border-t border-black/8 pt-3">
-          <div className="flex flex-col gap-2">
-            {([
-              { label: "Valence", field: "valence" as const, value: settings.valence },
-              { label: "Arousal", field: "arousal" as const, value: settings.arousal },
-              { label: "Control", field: "control" as const, value: settings.control },
-            ] as const).map(({ label, field, value }) => (
-              <div key={field} className="flex min-w-0 items-center gap-2 rounded-[8px] px-1 py-0.5">
-                <span className="w-[54px] flex-shrink-0 text-[10px] text-black/80" style={monoFont}>{label}</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={Math.round(value * 100)}
-                  onChange={(e) => onAdjustEmotion(agentKey, { [field]: parseInt(e.target.value, 10) / 100 } as Partial<AgentCustomSetting>)}
-                  onMouseUp={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
-                  onTouchEnd={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
-                  className="min-w-0 flex-1 h-[4px] accent-black"
-                />
-                <span className="w-[34px] flex-shrink-0 text-right text-[10px] text-black/80" style={monoFont}>{value.toFixed(2)}</span>
+          <div className="rounded-[12px] border border-black/10 bg-black/[0.02] px-3 py-3">
+            <div className="mb-3">
+              <div
+                className="flex items-center justify-between gap-2 rounded-[10px] border px-2.5 py-2 text-[10px]"
+                style={{
+                  ...monoFont,
+                  borderColor: emotionColor + "66",
+                  background: emotionColor + "22",
+                  color: emotionColor,
+                }}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <EmotionIcon emotion={emotionTag} size={14} />
+                  <span className="capitalize font-semibold">{emotionTag}</span>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-        <div className="mt-3 border-t border-black/8 pt-3">
-          <div className="mb-1 text-[9px] uppercase tracking-widest text-black/55" style={monoFont}>Decision</div>
-          <div className="flex items-center gap-2 px-1 py-1">
-            <button
-              type="button"
-              onClick={() => cycleDecision(-1)}
-              className="flex h-7 w-7 items-center justify-center rounded-[7px] text-black/70 transition-colors hover:bg-black/[0.03] hover:text-black"
-              aria-label="Previous decision style"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M15 18l-6-6 6-6" />
-              </svg>
-            </button>
-            <div className="min-w-0 flex-1 text-center">
-              <div className="text-[11px] text-black" style={monoFont}>{settings.decisionBlock}</div>
             </div>
+            <div className="border-t border-black/8 pt-3">
+              <div className="flex flex-col gap-2">
+                {([
+                  { label: "Valence", field: "valence" as const, value: settings.valence },
+                  { label: "Arousal", field: "arousal" as const, value: settings.arousal },
+                  { label: "Control", field: "control" as const, value: settings.control },
+                ] as const).map(({ label, field, value }) => (
+                  <div key={field} className="flex min-w-0 items-center gap-2 rounded-[8px] px-1 py-0.5">
+                    <span className="w-[54px] flex-shrink-0 text-[10px] text-black/80" style={monoFont}>{label}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(value * 100)}
+                      onChange={(e) => onAdjustEmotion(agentKey, { [field]: parseInt(e.target.value, 10) / 100 } as Partial<AgentCustomSetting>)}
+                      onMouseUp={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
+                      onTouchEnd={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
+                      className="min-w-0 flex-1 h-[4px] accent-black"
+                    />
+                    <span className="w-[34px] flex-shrink-0 text-right text-[10px] text-black/80" style={monoFont}>{value.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="mt-3 border-t border-black/8 pt-3">
+              <div className="mb-1 text-[9px] uppercase tracking-widest text-black/55" style={monoFont}>Decision</div>
+              <div className="flex items-center gap-2 px-1 py-1">
+                <button
+                  type="button"
+                  onClick={() => cycleDecision(-1)}
+                  className="flex h-7 w-7 items-center justify-center rounded-[7px] text-black/70 transition-colors hover:bg-black/[0.03] hover:text-black"
+                  aria-label="Previous decision style"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                </button>
+                <div className="min-w-0 flex-1 text-center">
+                  <div className="text-[11px] text-black" style={monoFont}>{settings.decisionBlock}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => cycleDecision(1)}
+                  className="flex h-7 w-7 items-center justify-center rounded-[7px] text-black/70 transition-colors hover:bg-black/[0.03] hover:text-black"
+                  aria-label="Next decision style"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M9 18l6-6-6-6" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-black/10 pt-2.5">
             <button
-              type="button"
-              onClick={() => cycleDecision(1)}
-              className="flex h-7 w-7 items-center justify-center rounded-[7px] text-black/70 transition-colors hover:bg-black/[0.03] hover:text-black"
-              aria-label="Next decision style"
+              onClick={() => onAdjustEmotion(agentKey, {
+                emotionOn: true,
+                emotionTag: emotionDefaults.emotionTag,
+                valence: emotionDefaults.valence,
+                arousal: emotionDefaults.arousal,
+                control: emotionDefaults.control,
+                emotionText: "",
+              }, false)}
+              className="text-[10px] text-black/65 transition-colors hover:text-black"
+              style={monoFont}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M9 18l6-6-6-6" />
-              </svg>
+              reset tag
+            </button>
+            <button
+              onClick={() => onOpenAdvanced(agentKey)}
+              className="rounded-[6px] border border-black/12 px-2 py-1 text-[10px] text-black transition-colors hover:border-black/25 hover:bg-black/[0.03]"
+              style={monoFont}
+            >
+              advance setting
             </button>
           </div>
-        </div>
+        </motion.div>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-2 border-t border-black/10 pt-2.5">
-        <button
-          onClick={() => onAdjustEmotion(agentKey, { emotionTag: null, emotionText: "", emotionOn: true }, false)}
-          className="text-[10px] text-black/65 transition-colors hover:text-black"
-          style={monoFont}
-        >
-          reset tag
-        </button>
-        <button
-          onClick={() => onOpenAdvanced(agentKey)}
-          className="rounded-[6px] border border-black/12 px-2 py-1 text-[10px] text-black transition-colors hover:border-black/25 hover:bg-black/[0.03]"
-          style={monoFont}
-        >
-          advance setting
-        </button>
-      </div>
-    </motion.div>
+    </div>,
+    document.body,
   );
 }
 
@@ -355,6 +396,7 @@ function AgentMessage({
   nickname,
   onOpenAdvancedAgent,
   onQuickEmotionAdjust,
+  getPopoverSafeRect,
   compactRepeatedIntro = false,
   emojiRepeatIndex = 0,
 }: {
@@ -366,11 +408,15 @@ function AgentMessage({
   nickname?: string;
   onOpenAdvancedAgent?: (key: AgentKey) => void;
   onQuickEmotionAdjust?: (key: AgentKey, patch: Partial<AgentCustomSetting>, shouldAnalyze?: boolean) => void;
+  getPopoverSafeRect?: () => DOMRect | null;
   compactRepeatedIntro?: boolean;
   emojiRepeatIndex?: number;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const [safeRect, setSafeRect] = useState<DOMRect | null>(null);
   const closeTimerRef = useRef<number | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
   const name = message.agentKey ? agentNames[message.agentKey] : "Agent";
   const role = message.agentKey
     ? (mode === "limited"
@@ -385,8 +431,9 @@ function AgentMessage({
     ? applyDisplayNames(message.content, agentNames, nickname, mode, agentBackendNames)
     : message.content;
   const compactedContent = compactRepeatedIntro ? stripRepeatedFirstTurnIntro(displayContent, name) : displayContent;
+  const messageEmotionTag = message.emotionTagSnapshot ?? null;
   const finalContent = message.agentKey
-    ? diversifyEmotionEmoji(compactedContent, agentSettings?.[message.agentKey]?.emotionTag, emojiRepeatIndex, message.agentKey)
+    ? diversifyEmotionEmoji(compactedContent, messageEmotionTag, emojiRepeatIndex, message.agentKey)
     : compactedContent;
   const quickEmotionEnabled = !isError && mode === "full" && !!message.agentKey && !!onQuickEmotionAdjust && !!onOpenAdvancedAgent;
   const currentSettings = message.agentKey ? agentSettings?.[message.agentKey] : null;
@@ -398,8 +445,15 @@ function AgentMessage({
     }
   };
 
+  const updatePopoverPosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    setAnchorRect(triggerRef.current.getBoundingClientRect());
+    setSafeRect(getPopoverSafeRect?.() ?? null);
+  }, [getPopoverSafeRect]);
+
   const openPopover = () => {
     clearCloseTimer();
+    updatePopoverPosition();
     setPopoverOpen(true);
   };
 
@@ -409,12 +463,24 @@ function AgentMessage({
   };
 
   useEffect(() => () => clearCloseTimer(), []);
+  useLayoutEffect(() => {
+    if (!popoverOpen) return;
+    updatePopoverPosition();
+    const handlePosition = () => updatePopoverPosition();
+    window.addEventListener("resize", handlePosition);
+    window.addEventListener("scroll", handlePosition, true);
+    return () => {
+      window.removeEventListener("resize", handlePosition);
+      window.removeEventListener("scroll", handlePosition, true);
+    };
+  }, [popoverOpen, updatePopoverPosition]);
 
   return (
     <motion.div
+      layout
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35 }}
+      transition={{ duration: 0.35, layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }}
       className="flex flex-col gap-1 mb-4"
     >
       <div className="flex items-center gap-2 mb-1">
@@ -423,6 +489,7 @@ function AgentMessage({
           style={{ backgroundColor: isError ? "#ef4444" : accentColor }}
         />
         <div
+          ref={triggerRef}
           className="relative"
           onMouseEnter={quickEmotionEnabled ? openPopover : undefined}
           onMouseLeave={quickEmotionEnabled ? closePopoverSoon : undefined}
@@ -441,8 +508,11 @@ function AgentMessage({
               <div onMouseEnter={openPopover} onMouseLeave={closePopoverSoon}>
                 <AgentEmotionPopover
                   agentKey={message.agentKey}
-                  agentName={name}
                   settings={currentSettings || defaultSetting(message.agentKey)}
+                  anchorRect={anchorRect}
+                  safeRect={safeRect}
+                  onHoverStart={openPopover}
+                  onHoverEnd={closePopoverSoon}
                   onAdjustEmotion={(key, patch, shouldAnalyze) => {
                     onQuickEmotionAdjust?.(key, patch, shouldAnalyze);
                   }}
@@ -479,9 +549,10 @@ function AgentMessage({
 function UserMessage({ message, nickname }: { message: Message; nickname: string }) {
   return (
     <motion.div
+      layout
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+      transition={{ duration: 0.3, layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }}
       className="flex flex-col items-end gap-1 mb-6"
     >
       <div className="flex items-center gap-2 mb-1">
@@ -1028,7 +1099,7 @@ export default function Chat() {
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [typingKeys, setTypingKeys] = useState<AgentKey[]>([]);
-  const [msgQueue, setMsgQueue] = useState<Array<{ agentKey: AgentKey; content: string; convId: string }>>([]);
+  const [msgQueue, setMsgQueue] = useState<Array<{ agentKey: AgentKey; content: string; convId: string; emotionTagSnapshot: string | null }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
   const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>({ A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") });
 
@@ -1061,11 +1132,20 @@ export default function Chat() {
   const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full");
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messagesContentRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const currentConv = conversations.find((c) => c.id === currentConvId) || null;
   const appearance = useAppearanceContext();
   const activeSceneId = selectedScene?.id || "scene1";
   const suggestedPrompts = SCENE_SUGGESTED_PROMPTS[activeSceneId] || SCENE_SUGGESTED_PROMPTS.scene1;
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const c = messagesContainerRef.current;
+    if (!c) return;
+    c.scrollTo({ top: c.scrollHeight, behavior });
+  }, []);
+  const getPopoverSafeRect = useCallback(() => messagesContainerRef.current?.getBoundingClientRect() ?? null, []);
 
   useEffect(() => { if (!localStorage.getItem("agora_auth")) navigate("/"); }, [navigate]);
 
@@ -1077,22 +1157,58 @@ export default function Chat() {
   useEffect(() => {
     const c = messagesContainerRef.current;
     if (!c) return;
-    if (c.scrollHeight - c.scrollTop - c.clientHeight < 120) c.scrollTop = c.scrollHeight;
-  }, [conversations, typingKeys]);
+    const updateStickiness = () => {
+      stickToBottomRef.current = c.scrollHeight - c.scrollTop - c.clientHeight < 140;
+    };
+    updateStickiness();
+    c.addEventListener("scroll", updateStickiness, { passive: true });
+    return () => c.removeEventListener("scroll", updateStickiness);
+  }, [currentConvId]);
+
+  useEffect(() => {
+    const content = messagesContentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!stickToBottomRef.current) return;
+      scrollMessagesToBottom(typingKeys.length > 0 ? "auto" : "smooth");
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [currentConvId, scrollMessagesToBottom, typingKeys.length]);
+
+  useLayoutEffect(() => {
+    if (!currentConvId) return;
+    const frame = window.requestAnimationFrame(() => scrollMessagesToBottom("auto"));
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentConvId, scrollMessagesToBottom]);
 
   useEffect(() => { agentNamesRef.current = agentNames; }, [agentNames]);
   useEffect(() => { agentSettingsRef.current = agentSettings; }, [agentSettings]);
 
   // Queue processor: typing dot → message → next
   useEffect(() => {
-    if (msgQueue.length === 0) { setTypingKeys([]); return; }
+    if (msgQueue.length === 0) {
+      setTypingKeys([]);
+      return;
+    }
     const next = msgQueue[0];
     setTypingKeys([next.agentKey]);
     const timer = setTimeout(() => {
-      const agentMsg: Message = { id: `msg-${Date.now()}-${next.agentKey}`, role: "agent", agentKey: next.agentKey, content: next.content, timestamp: Date.now() };
+      const agentMsg: Message = {
+        id: `msg-${Date.now()}-${next.agentKey}`,
+        role: "agent",
+        agentKey: next.agentKey,
+        content: next.content,
+        timestamp: Date.now(),
+        emotionTagSnapshot: next.emotionTagSnapshot,
+      };
       const names = agentNamesRef.current;
       setConversations((prev) => prev.map((c) => c.id === next.convId ? { ...c, messages: [...c.messages, agentMsg], preview: `${names[next.agentKey]}: ${next.content.slice(0, 60)}…`, timestamp: "just now" } : c));
-      setMsgQueue((q) => q.slice(1));
+      setMsgQueue((q) => {
+        const rest = q.slice(1);
+        setTypingKeys(rest.length > 0 ? [rest[0].agentKey] : []);
+        return rest;
+      });
     }, 900);
     return () => clearTimeout(timer);
   }, [msgQueue]);
@@ -1229,7 +1345,16 @@ export default function Chat() {
       const responses: Array<{ agent_key: string; message: string }> = data.responses || [];
       if (responses.length === 0) { setTypingKeys([]); }
       else {
-        const mapped = responses.map((r) => ({ agentKey: (r.agent_key || "A") as AgentKey, content: r.message, convId: convId as string }));
+        const mapped = responses.map((r) => {
+          const agentKey = (r.agent_key || "A") as AgentKey;
+          const currentSetting = agentSettingsRef.current[agentKey];
+          return {
+            agentKey,
+            content: r.message,
+            convId: convId as string,
+            emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
+          };
+        });
         const filtered = activeMode === "single" ? mapped.filter((m) => m.agentKey === "A").slice(0, 1) : mapped;
         setMsgQueue(filtered);
       }
@@ -1272,7 +1397,15 @@ export default function Chat() {
       const messages: Message[] = (data.history || []).map((h: { character: string; txt: string }, i: number) => {
         if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (data.history.length - i) * 1000 };
         const agentKey = runtimeMap[h.character] ?? BACKEND_NAME_TO_KEY[h.character] ?? "A";
-        return { id: `h-${i}`, role: "agent" as const, agentKey, content: h.txt, timestamp: Date.now() - (data.history.length - i) * 1000 };
+        const currentSetting = agentSettingsRef.current[agentKey];
+        return {
+          id: `h-${i}`,
+          role: "agent" as const,
+          agentKey,
+          content: h.txt,
+          timestamp: Date.now() - (data.history.length - i) * 1000,
+          emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
+        };
       });
       setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, messages } : c));
     } catch {}
@@ -1544,8 +1677,16 @@ export default function Chat() {
         </header>
 
         <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 sm:px-8 py-6">
+          <AnimatePresence mode="wait" initial={false}>
           {!currentConv ? (
-            <div className="w-full max-w-[440px] sm:max-w-[560px] lg:max-w-[680px] xl:max-w-[800px] mx-auto flex flex-col items-center justify-center min-h-[60vh] gap-8">
+            <motion.div
+              key="welcome"
+              initial={{ opacity: 0, y: 18, scale: 0.985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -12, scale: 0.99 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              className="w-full max-w-[440px] sm:max-w-[560px] lg:max-w-[680px] xl:max-w-[800px] mx-auto flex flex-col items-center justify-center min-h-[60vh] gap-8"
+            >
               <div className="flex flex-col items-center gap-4 w-full">
                 <AgoraLogo size={96} />
                 {!backendOnline && (
@@ -1669,9 +1810,18 @@ export default function Chat() {
                   ))}
                 </div>
               </div>
-            </div>
+            </motion.div>
           ) : (
-            <div className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto">
+            <motion.div
+              key="chat"
+              ref={messagesContentRef}
+              layout
+              initial={{ opacity: 0, y: 20, scale: 0.992 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.995 }}
+              transition={{ layout: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } }}
+              className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto"
+            >
               {(() => {
                 let userTurnCount = 0;
                 const firstTurnAgentSeen: Partial<Record<AgentKey, boolean>> = {};
@@ -1685,7 +1835,7 @@ export default function Chat() {
                   if (msg.agentKey && userTurnCount === 1) {
                     firstTurnAgentSeen[msg.agentKey] = true;
                   }
-                  const emotionTag = msg.agentKey ? (agentSettings[msg.agentKey]?.emotionTag || "joy") : "";
+                  const emotionTag = msg.agentKey ? (msg.emotionTagSnapshot ?? "") : "";
                   const emojiRepeatIndex = emotionTag ? (emotionTagCounts[emotionTag] || 0) : 0;
                   if (emotionTag) emotionTagCounts[emotionTag] = emojiRepeatIndex + 1;
                   return (
@@ -1697,6 +1847,7 @@ export default function Chat() {
                       agentSettings={agentSettings}
                       mode={currentConv?.settings?.mode ?? experimentMode}
                       nickname={nickname}
+                      getPopoverSafeRect={getPopoverSafeRect}
                       compactRepeatedIntro={compactRepeatedIntro}
                       emojiRepeatIndex={emojiRepeatIndex}
                       onOpenAdvancedAgent={(key) => { setCustomizerInitialAgent(key); setShowCustomizer(true); }}
@@ -1728,12 +1879,13 @@ export default function Chat() {
                   );
                 });
               })()}
-              <AnimatePresence>
+              <AnimatePresence initial={false} mode="popLayout">
                 {typingKeys.map((k) => <TypingDots key={k} agentKey={k} agentNames={agentNames} />)}
               </AnimatePresence>
               <div />
-            </div>
+            </motion.div>
           )}
+          </AnimatePresence>
         </div>
 
         <div className="flex-shrink-0 border-t border-black/8 px-4 sm:px-8 py-4">

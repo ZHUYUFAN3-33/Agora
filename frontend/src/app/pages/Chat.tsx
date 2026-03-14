@@ -41,14 +41,54 @@ const LIMITED_POOL_ACCENT_MAP: Record<AgentPoolKey, string> = {
   E: "#ee9b00",
   F: "#bb3e03",
 };
-const EMOTION_EMOJI_VARIANTS: Record<string, string[]> = {
-  joy: ["😊", "😄", "😌", "🙂"],
-  fear: ["😟", "😰", "😬", "🫣"],
-  anger: ["😠", "😤", "🙄", "😒"],
-  sadness: ["😔", "😞", "🥲", "😢"],
-  surprise: ["😮", "😲", "🤯", "🫢"],
-  disgust: ["😬", "🙃", "😑", "🤢"],
+type EmotionEmojiPalette = {
+  primary: string[];
+  accent: string[];
+  replaceable: string[];
 };
+
+const EMOTION_EMOJI_VARIANTS: Record<string, EmotionEmojiPalette> = {
+  joy: {
+    primary: ["😊", "😄", "🙂", "😌", "😁", "😎"],
+    accent: ["✨", "🎉", "💫", "🌟", "🥳", "🙌"],
+    replaceable: ["😊", "😄", "🙂", "😌", "😁", "😃", "😎", "✨", "🎉", "💫", "🌟", "🥳", "🙌"],
+  },
+  fear: {
+    primary: ["😟", "😰", "😬", "🫣", "😧", "😥"],
+    accent: ["⚠️", "💭", "🌀", "❗"],
+    replaceable: ["😟", "😰", "😬", "🫣", "😧", "😥", "⚠️", "💭", "🌀", "❗"],
+  },
+  anger: {
+    primary: ["😠", "😤", "🙄", "😒", "😑", "🤨"],
+    accent: ["🔥", "💥", "⚡", "‼️"],
+    replaceable: ["😠", "😤", "🙄", "😒", "😑", "🤨", "🔥", "💥", "⚡", "‼️"],
+  },
+  sadness: {
+    primary: ["😔", "😞", "🥲", "😢", "😕", "😪"],
+    accent: ["💧", "🌧️", "🫧", "🫠"],
+    replaceable: ["😔", "😞", "🥲", "😢", "😕", "😪", "💧", "🌧️", "🫧", "🫠"],
+  },
+  surprise: {
+    primary: ["😮", "😲", "🤯", "🫢", "😯", "😳"],
+    accent: ["✨", "⚡", "❗", "🪄"],
+    replaceable: ["😮", "😲", "🤯", "🫢", "😯", "😳", "✨", "⚡", "❗", "🪄"],
+  },
+  disgust: {
+    primary: ["😬", "🙃", "😑", "🤢", "😖", "😵"],
+    accent: ["🚫", "🛑", "⚠️", "🧪"],
+    replaceable: ["😬", "🙃", "😑", "🤢", "😖", "😵", "🚫", "🛑", "⚠️", "🧪"],
+  },
+};
+
+const EMOJI_REGEX = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu;
+
+function hashSeed(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) % 10007;
+  }
+  return hash;
+}
 
 function EmotionIcon({ emotion, size = 20 }: { emotion: string; size?: number }) {
   const key = (emotion || "").toLowerCase();
@@ -153,18 +193,28 @@ function diversifyEmotionEmoji(
   emotionTag: string | null | undefined,
   repeatIndex: number,
   agentKey?: AgentKey,
+  messageId?: string,
 ): string {
   const tag = (emotionTag || "").toLowerCase();
-  const variants = EMOTION_EMOJI_VARIANTS[tag];
-  if (!variants || variants.length === 0 || repeatIndex < 2) return content;
-  const firstMatch = content.match(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u);
-  if (!firstMatch || typeof firstMatch.index !== "number") return content;
-  const currentEmoji = firstMatch[0];
-  const variantPool = variants.includes(currentEmoji) ? variants : [currentEmoji, ...variants];
+  const palette = EMOTION_EMOJI_VARIANTS[tag];
+  if (!palette || repeatIndex < 1) return content;
+  const replaceable = new Set(palette.replaceable);
+  const accentSet = new Set(palette.accent);
+  const primaryPool = palette.primary;
+  const accentPool = palette.accent.length > 0 ? palette.accent : palette.primary;
   const agentOffset = agentKey ? AGENT_KEYS.indexOf(agentKey) + 1 : 0;
-  const nextEmoji = variantPool[(repeatIndex + agentOffset) % variantPool.length];
-  if (nextEmoji === currentEmoji) return content;
-  return `${content.slice(0, firstMatch.index)}${nextEmoji}${content.slice(firstMatch.index + currentEmoji.length)}`;
+  const messageOffset = hashSeed(messageId || content) % 11;
+  let replacementIndex = 0;
+  let replaced = false;
+  const nextContent = content.replace(EMOJI_REGEX, (emoji) => {
+    if (!replaceable.has(emoji)) return emoji;
+    const pool = accentSet.has(emoji) ? accentPool : primaryPool;
+    const nextEmoji = pool[(repeatIndex + agentOffset + messageOffset + replacementIndex) % pool.length];
+    replacementIndex += 1;
+    replaced = replaced || nextEmoji !== emoji;
+    return nextEmoji;
+  });
+  return replaced ? nextContent : content;
 }
 
 function normalizeLimitedSelection(keys: AgentPoolKey[]): AgentPoolKey[] {
@@ -198,15 +248,20 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 // ─── Message components ───────────────────────────────────────────────────────
 
-function TypingDots({ agentKey, agentNames }: { agentKey: AgentKey; agentNames: Record<AgentKey, string> }) {
+function TypingDots({
+  agentKey,
+  agentNames,
+}: {
+  agentKey: AgentKey;
+  agentNames: Record<AgentKey, string>;
+}) {
   return (
     <motion.div
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 8 }}
-      transition={{ duration: 0.22, layout: { duration: 0.26, ease: [0.22, 1, 0.36, 1] } }}
-      className="flex flex-col gap-1 mb-2"
+      initial={{ opacity: 0, y: 10, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 6, scale: 0.98 }}
+      transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+      className="w-fit"
     >
       <div className="flex items-center gap-2 mb-1">
         <div className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0 bg-black" />
@@ -214,13 +269,13 @@ function TypingDots({ agentKey, agentNames }: { agentKey: AgentKey; agentNames: 
           {agentNames[agentKey]}
         </span>
       </div>
-      <div className="ml-4 flex items-center gap-1 h-8 px-4 bg-transparent border border-black/10 rounded-[10px] w-fit">
+      <div className="ml-4 inline-flex items-center gap-1 rounded-[16px] border border-black/10 bg-[#fffdfa] px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.08)]">
         {[0, 1, 2].map((i) => (
           <motion.div
             key={i}
-            className="w-[5px] h-[5px] bg-black rounded-full"
-            animate={{ opacity: [0.3, 1, 0.3] }}
-            transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.25 }}
+            className="h-[6px] w-[6px] rounded-full bg-black/70"
+            animate={{ y: [0, -2, 0], opacity: [0.35, 1, 0.35] }}
+            transition={{ duration: 1.05, repeat: Infinity, delay: i * 0.14, ease: "easeInOut" }}
           />
         ))}
       </div>
@@ -433,7 +488,7 @@ function AgentMessage({
   const compactedContent = compactRepeatedIntro ? stripRepeatedFirstTurnIntro(displayContent, name) : displayContent;
   const messageEmotionTag = message.emotionTagSnapshot ?? null;
   const finalContent = message.agentKey
-    ? diversifyEmotionEmoji(compactedContent, messageEmotionTag, emojiRepeatIndex, message.agentKey)
+    ? diversifyEmotionEmoji(compactedContent, messageEmotionTag, emojiRepeatIndex, message.agentKey, message.id)
     : compactedContent;
   const quickEmotionEnabled = !isError && mode === "full" && !!message.agentKey && !!onQuickEmotionAdjust && !!onOpenAdvancedAgent;
   const currentSettings = message.agentKey ? agentSettings?.[message.agentKey] : null;
@@ -1676,7 +1731,7 @@ export default function Chat() {
           </div>
         </header>
 
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 sm:px-8 py-6">
+        <div ref={messagesContainerRef} className="relative flex-1 overflow-y-auto px-4 sm:px-8 py-6">
           <AnimatePresence mode="wait" initial={false}>
           {!currentConv ? (
             <motion.div
@@ -1879,13 +1934,25 @@ export default function Chat() {
                   );
                 });
               })()}
-              <AnimatePresence initial={false} mode="popLayout">
-                {typingKeys.map((k) => <TypingDots key={k} agentKey={k} agentNames={agentNames} />)}
-              </AnimatePresence>
               <div />
             </motion.div>
           )}
           </AnimatePresence>
+          {currentConv && (
+            <div className="pointer-events-none absolute inset-x-4 bottom-4 sm:bottom-6">
+              <div className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto">
+                <AnimatePresence initial={false} mode="wait">
+                  {typingKeys[0] && (
+                    <TypingDots
+                      key={`typing-${typingKeys[0]}`}
+                      agentKey={typingKeys[0]}
+                      agentNames={agentNames}
+                    />
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex-shrink-0 border-t border-black/8 px-4 sm:px-8 py-4">

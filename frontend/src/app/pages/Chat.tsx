@@ -40,6 +40,14 @@ const LIMITED_POOL_ACCENT_MAP: Record<AgentPoolKey, string> = {
   E: "#ee9b00",
   F: "#bb3e03",
 };
+const EMOTION_EMOJI_VARIANTS: Record<string, string[]> = {
+  joy: ["😊", "😄", "😌", "🙂"],
+  fear: ["😟", "😰", "😬", "🫣"],
+  anger: ["😠", "😤", "🙄", "😒"],
+  sadness: ["😔", "😞", "🥲", "😢"],
+  surprise: ["😮", "😲", "🤯", "🫢"],
+  disgust: ["😬", "🙃", "😑", "🤢"],
+};
 
 function EmotionIcon({ emotion, size = 20 }: { emotion: string; size?: number }) {
   const key = (emotion || "").toLowerCase();
@@ -123,8 +131,41 @@ function applyDisplayNames(
   }
   if (nickname && nickname.trim()) {
     out = out.replace(/\bUser\b/g, nickname.trim());
+    out = out.replace(/\bU\b/g, nickname.trim());
+  } else {
+    out = out.replace(/\bU\b/g, "user");
   }
   return out;
+}
+
+function stripRepeatedFirstTurnIntro(content: string, agentName: string): string {
+  const escapedName = agentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let out = content.trim();
+  out = out.replace(/^(?:[\p{Emoji_Presentation}\p{Extended_Pictographic}]\s*)+/u, "");
+  out = out.replace(
+    new RegExp(`^(?:hi|hello|hey)\\s*,?\\s*i['’]?m\\s+${escapedName}[.!]?\\s*`, "i"),
+    "",
+  );
+  return out.trim() || content.trim();
+}
+
+function diversifyEmotionEmoji(
+  content: string,
+  emotionTag: string | null | undefined,
+  repeatIndex: number,
+  agentKey?: AgentKey,
+): string {
+  const tag = (emotionTag || "").toLowerCase();
+  const variants = EMOTION_EMOJI_VARIANTS[tag];
+  if (!variants || variants.length === 0 || repeatIndex < 2) return content;
+  const firstMatch = content.match(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u);
+  if (!firstMatch || typeof firstMatch.index !== "number") return content;
+  const currentEmoji = firstMatch[0];
+  const variantPool = variants.includes(currentEmoji) ? variants : [currentEmoji, ...variants];
+  const agentOffset = agentKey ? AGENT_KEYS.indexOf(agentKey) + 1 : 0;
+  const nextEmoji = variantPool[(repeatIndex + agentOffset) % variantPool.length];
+  if (nextEmoji === currentEmoji) return content;
+  return `${content.slice(0, firstMatch.index)}${nextEmoji}${content.slice(firstMatch.index + currentEmoji.length)}`;
 }
 
 function normalizeLimitedSelection(keys: AgentPoolKey[]): AgentPoolKey[] {
@@ -280,6 +321,8 @@ function AgentMessage({
   nickname,
   onOpenAdvancedAgent,
   onQuickEmotionAdjust,
+  compactRepeatedIntro = false,
+  emojiRepeatIndex = 0,
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
@@ -289,6 +332,8 @@ function AgentMessage({
   nickname?: string;
   onOpenAdvancedAgent?: (key: AgentKey) => void;
   onQuickEmotionAdjust?: (key: AgentKey, patch: Partial<AgentCustomSetting>, shouldAnalyze?: boolean) => void;
+  compactRepeatedIntro?: boolean;
+  emojiRepeatIndex?: number;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
@@ -305,6 +350,10 @@ function AgentMessage({
   const displayContent = message.agentKey
     ? applyDisplayNames(message.content, agentNames, nickname, mode, agentBackendNames)
     : message.content;
+  const compactedContent = compactRepeatedIntro ? stripRepeatedFirstTurnIntro(displayContent, name) : displayContent;
+  const finalContent = message.agentKey
+    ? diversifyEmotionEmoji(compactedContent, agentSettings?.[message.agentKey]?.emotionTag, emojiRepeatIndex, message.agentKey)
+    : compactedContent;
   const quickEmotionEnabled = !isError && mode === "full" && !!message.agentKey && !!onQuickEmotionAdjust && !!onOpenAdvancedAgent;
   const currentSettings = message.agentKey ? agentSettings?.[message.agentKey] : null;
 
@@ -386,7 +435,7 @@ function AgentMessage({
           className="text-[13px] text-black/80 leading-relaxed whitespace-pre-wrap"
           style={{ ...monoFont, color: isError ? "#ef4444" : undefined }}
         >
-          {displayContent}
+          {finalContent}
         </p>
       </div>
     </motion.div>
@@ -1589,9 +1638,24 @@ export default function Chat() {
             </div>
           ) : (
             <div className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto">
-              {currentConv.messages.map((msg) =>
-                msg.role === "user" ? <UserMessage key={msg.id} message={msg} nickname={nickname} />
-                  : <AgentMessage
+              {(() => {
+                let userTurnCount = 0;
+                const firstTurnAgentSeen: Partial<Record<AgentKey, boolean>> = {};
+                const emotionTagCounts: Record<string, number> = {};
+                return currentConv.messages.map((msg) => {
+                  if (msg.role === "user") {
+                    userTurnCount += 1;
+                    return <UserMessage key={msg.id} message={msg} nickname={nickname} />;
+                  }
+                  const compactRepeatedIntro = !!(msg.agentKey && userTurnCount === 1 && firstTurnAgentSeen[msg.agentKey]);
+                  if (msg.agentKey && userTurnCount === 1) {
+                    firstTurnAgentSeen[msg.agentKey] = true;
+                  }
+                  const emotionTag = msg.agentKey ? (agentSettings[msg.agentKey]?.emotionTag || "joy") : "";
+                  const emojiRepeatIndex = emotionTag ? (emotionTagCounts[emotionTag] || 0) : 0;
+                  if (emotionTag) emotionTagCounts[emotionTag] = emojiRepeatIndex + 1;
+                  return (
+                    <AgentMessage
                       key={msg.id}
                       message={msg}
                       agentNames={agentNames}
@@ -1599,6 +1663,8 @@ export default function Chat() {
                       agentSettings={agentSettings}
                       mode={currentConv?.settings?.mode ?? experimentMode}
                       nickname={nickname}
+                      compactRepeatedIntro={compactRepeatedIntro}
+                      emojiRepeatIndex={emojiRepeatIndex}
                       onOpenAdvancedAgent={(key) => { setCustomizerInitialAgent(key); setShowCustomizer(true); }}
                       onQuickEmotionAdjust={async (key, patch, shouldAnalyze) => {
                         setAgentSettings((prev) => ({
@@ -1625,7 +1691,9 @@ export default function Chat() {
                         }));
                       }}
                     />
-              )}
+                  );
+                });
+              })()}
               <AnimatePresence>
                 {typingKeys.map((k) => <TypingDots key={k} agentKey={k} agentNames={agentNames} />)}
               </AnimatePresence>

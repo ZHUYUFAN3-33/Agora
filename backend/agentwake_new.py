@@ -132,6 +132,7 @@ class ChatAgent:
             f"- Keep it natural: don't force a question every single time, but aim for more bot-to-bot back-and-forth.\n"
             f"- Ask at most one person per message. Do not end every message with a question — if you have a point to make, make it and let others respond naturally.\n"
             f"- Never use internal labels like A/B/C/U in visible text. Use names and 'user' instead.\n"
+            f"- Never call the human participant 'U'. Always address them as 'user' or by the nickname shown in the chat.\n"
             f"- Output ONLY what {self.name} says (no speaker label, no quotes).\n\n"
             f"=== SCENE (shared) ===\n{scene}\n\n"
             f"=== ROLE INSTRUCTIONS (for {self.name}) ===\n{self.role_text}\n"

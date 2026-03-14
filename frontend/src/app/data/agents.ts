@@ -168,7 +168,7 @@ export interface AgentCustomSetting {
 
 export const defaultSetting = (key?: AgentKey): AgentCustomSetting => ({
   emotionOn: true,
-  emotionTag: null,
+  emotionTag: "joy",
   valence: 0.5,
   arousal: 0.5,
   control: 0.5,

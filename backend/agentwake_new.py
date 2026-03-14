@@ -120,17 +120,18 @@ class ChatAgent:
     spoke: int = 0
 
     def system_prompt(self, scene: str, name_map: Dict[str, str], phase_context: str = "") -> str:
-        roster = "\n".join([f"- {k}: {v}" for k, v in name_map.items()])
+        roster = "\n".join([f"- {v}" for _, v in name_map.items()])
         prompt = (
             f"You are {self.name} in a group chat.\n"
             f"Participants (remember their names):\n{roster}\n"
-            f"- U: user\n\n"
+            f"- user (the human participant)\n\n"
             f"GROUP DYNAMICS (important):\n"
             f"- This is a FRIEND group chat. Actively talk WITH the other bots, not only the user.\n"
             f"- Frequently react to what another bot said, build on it, or gently disagree.\n"
             f"- Often ask another bot a direct question. Vary your phrasing.\n"
             f"- Keep it natural: don't force a question every single time, but aim for more bot-to-bot back-and-forth.\n"
             f"- Ask at most one person per message. Do not end every message with a question — if you have a point to make, make it and let others respond naturally.\n"
+            f"- Never use internal labels like A/B/C/U in visible text. Use names and 'user' instead.\n"
             f"- Output ONLY what {self.name} says (no speaker label, no quotes).\n\n"
             f"=== SCENE (shared) ===\n{scene}\n\n"
             f"=== ROLE INSTRUCTIONS (for {self.name}) ===\n{self.role_text}\n"
@@ -268,6 +269,8 @@ def sanitize_single_message(text: str, agent_name: str, all_names: List[str]) ->
     m = re.search(pat, t)
     if m:
         t = t[: m.start()].rstrip()
+    # Avoid leaking internal scheduler token for user.
+    t = re.sub(r"\bU\b", "user", t)
     return t.strip() or "..."
 
 

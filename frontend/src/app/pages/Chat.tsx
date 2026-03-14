@@ -186,6 +186,91 @@ function TypingDots({ agentKey, agentNames }: { agentKey: AgentKey; agentNames: 
   );
 }
 
+function AgentEmotionPopover({
+  agentKey,
+  agentName,
+  settings,
+  onAdjustEmotion,
+  onOpenAdvanced,
+}: {
+  agentKey: AgentKey;
+  agentName: string;
+  settings: AgentCustomSetting;
+  onAdjustEmotion: (key: AgentKey, patch: Partial<AgentCustomSetting>, shouldAnalyze?: boolean) => void;
+  onOpenAdvanced: (key: AgentKey) => void;
+}) {
+  const emotionTag = settings.emotionTag || "joy";
+  const emotionColor = EMOTION_COLORS[emotionTag] || "#111111";
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 4, scale: 0.98 }}
+      transition={{ duration: 0.16 }}
+      className="absolute left-0 top-full mt-3 z-30 w-[252px] rounded-[14px] border border-black/20 bg-[#fffdfa] px-3 py-3 shadow-[0_14px_36px_rgba(0,0,0,0.16)]"
+    >
+      <div className="absolute left-5 top-[-7px] h-3.5 w-3.5 rotate-45 border-l border-t border-black/20 bg-[#fffdfa]" />
+      <div className="mb-2 flex items-center justify-between gap-2 rounded-[10px] border border-black/8 bg-black/[0.02] px-2.5 py-2">
+        <span className="text-[10px] tracking-widest text-black/85 uppercase" style={monoFont}>Tone</span>
+        <span className="text-[10px] text-black/70 truncate" style={monoFont}>{agentName}</span>
+      </div>
+      <div
+        className="mb-3 flex items-center justify-between gap-2 rounded-[10px] border px-2.5 py-2 text-[10px]"
+        style={{
+          ...monoFont,
+          borderColor: emotionColor + "66",
+          background: emotionColor + "22",
+          color: emotionColor,
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <EmotionIcon emotion={emotionTag} size={14} />
+          <span className="capitalize font-semibold">{emotionTag}</span>
+        </div>
+        <span className="text-[9px] uppercase tracking-widest text-black/65" style={monoFont}>current</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {([
+          { label: "Valence", field: "valence" as const, value: settings.valence },
+          { label: "Arousal", field: "arousal" as const, value: settings.arousal },
+          { label: "Control", field: "control" as const, value: settings.control },
+        ] as const).map(({ label, field, value }) => (
+          <div key={field} className="flex items-center gap-2 rounded-[8px] px-1 py-0.5">
+            <span className="w-[48px] flex-shrink-0 text-[10px] text-black/80" style={monoFont}>{label}</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(value * 100)}
+              onChange={(e) => onAdjustEmotion(agentKey, { [field]: parseInt(e.target.value, 10) / 100 } as Partial<AgentCustomSetting>)}
+              onMouseUp={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
+              onTouchEnd={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
+              className="flex-1 h-[4px] accent-black"
+            />
+            <span className="w-[28px] text-right text-[10px] text-black/80" style={monoFont}>{value.toFixed(2)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-black/10 pt-2.5">
+        <button
+          onClick={() => onAdjustEmotion(agentKey, { emotionTag: null, emotionText: "", emotionOn: true }, false)}
+          className="text-[10px] text-black/65 transition-colors hover:text-black"
+          style={monoFont}
+        >
+          reset tag
+        </button>
+        <button
+          onClick={() => onOpenAdvanced(agentKey)}
+          className="rounded-[6px] border border-black/12 px-2 py-1 text-[10px] text-black transition-colors hover:border-black/25 hover:bg-black/[0.03]"
+          style={monoFont}
+        >
+          advance setting
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
 function AgentMessage({
   message,
   agentNames,
@@ -193,7 +278,8 @@ function AgentMessage({
   agentSettings,
   mode,
   nickname,
-  onClickAgent,
+  onOpenAdvancedAgent,
+  onQuickEmotionAdjust,
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
@@ -201,8 +287,11 @@ function AgentMessage({
   agentSettings?: Record<AgentKey, AgentCustomSetting>;
   mode: ExperimentMode;
   nickname?: string;
-  onClickAgent?: (key: AgentKey) => void;
+  onOpenAdvancedAgent?: (key: AgentKey) => void;
+  onQuickEmotionAdjust?: (key: AgentKey, patch: Partial<AgentCustomSetting>, shouldAnalyze?: boolean) => void;
 }) {
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
   const name = message.agentKey ? agentNames[message.agentKey] : "Agent";
   const role = message.agentKey
     ? (mode === "limited"
@@ -216,6 +305,27 @@ function AgentMessage({
   const displayContent = message.agentKey
     ? applyDisplayNames(message.content, agentNames, nickname, mode, agentBackendNames)
     : message.content;
+  const quickEmotionEnabled = !isError && mode === "full" && !!message.agentKey && !!onQuickEmotionAdjust && !!onOpenAdvancedAgent;
+  const currentSettings = message.agentKey ? agentSettings?.[message.agentKey] : null;
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  const openPopover = () => {
+    clearCloseTimer();
+    setPopoverOpen(true);
+  };
+
+  const closePopoverSoon = () => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => setPopoverOpen(false), 120);
+  };
+
+  useEffect(() => () => clearCloseTimer(), []);
 
   return (
     <motion.div
@@ -229,16 +339,39 @@ function AgentMessage({
           className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0"
           style={{ backgroundColor: isError ? "#ef4444" : accentColor }}
         />
-        <button
-          className={`text-[11px] tracking-widest leading-none ${
-            !isError && onClickAgent ? "hover:underline underline-offset-2 cursor-pointer" : "cursor-default"
-          }`}
-          style={{ ...monoFont, color: isError ? "#ef4444" : "#000" }}
-          onClick={() => message.agentKey && onClickAgent?.(message.agentKey)}
-          disabled={isError || !onClickAgent}
+        <div
+          className="relative"
+          onMouseEnter={quickEmotionEnabled ? openPopover : undefined}
+          onMouseLeave={quickEmotionEnabled ? closePopoverSoon : undefined}
         >
-          {name}
-        </button>
+          <button
+            className={`text-[11px] tracking-widest leading-none ${
+              quickEmotionEnabled ? "cursor-default hover:underline underline-offset-2" : "cursor-default"
+            }`}
+            style={{ ...monoFont, color: isError ? "#ef4444" : "#000" }}
+            type="button"
+          >
+            {name}
+          </button>
+          <AnimatePresence>
+            {quickEmotionEnabled && popoverOpen && message.agentKey && (
+              <div onMouseEnter={openPopover} onMouseLeave={closePopoverSoon}>
+                <AgentEmotionPopover
+                  agentKey={message.agentKey}
+                  agentName={name}
+                  settings={currentSettings || defaultSetting(message.agentKey)}
+                  onAdjustEmotion={(key, patch, shouldAnalyze) => {
+                    onQuickEmotionAdjust?.(key, patch, shouldAnalyze);
+                  }}
+                  onOpenAdvanced={(key) => {
+                    setPopoverOpen(false);
+                    onOpenAdvancedAgent?.(key);
+                  }}
+                />
+              </div>
+            )}
+          </AnimatePresence>
+        </div>
         {role && (
           <span className="text-[10px] text-[var(--app-muted-text)] ml-1" style={monoFont}>
             · {role}
@@ -1343,6 +1476,7 @@ export default function Chat() {
                 {experimentMode === "limited" ? (
                   <>
                     <motion.div
+                      key={`agent-grid-${experimentMode}`}
                       className="grid gap-3 w-full grid-cols-2"
                       initial="hidden"
                       animate="visible"
@@ -1353,7 +1487,7 @@ export default function Chat() {
                         const atLimit = limitedSelectedAgents.length >= 3 && !selected;
                         return (
                           <motion.button
-                            key={profile.key}
+                            key={`${experimentMode}-${profile.key}`}
                             variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } } }}
                             whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                             whileTap={{ scale: 0.98 }}
@@ -1380,6 +1514,7 @@ export default function Chat() {
                   </>
                 ) : (
                   <motion.div
+                    key={`agent-grid-${experimentMode}`}
                     className={`grid gap-3 w-full ${experimentMode === "single" ? "grid-cols-1" : "grid-cols-2"}`}
                     initial="hidden"
                     animate="visible"
@@ -1387,7 +1522,7 @@ export default function Chat() {
                   >
                     {(experimentMode === "single" ? ["A"] : AGENT_KEYS).map((key) => (
                       <motion.button
-                        key={key}
+                        key={`${experimentMode}-${key}`}
                         variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } } }}
                         whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                         whileTap={{ scale: 0.98 }}
@@ -1456,7 +1591,40 @@ export default function Chat() {
             <div className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto">
               {currentConv.messages.map((msg) =>
                 msg.role === "user" ? <UserMessage key={msg.id} message={msg} nickname={nickname} />
-                  : <AgentMessage key={msg.id} message={msg} agentNames={agentNames} agentBackendNames={agentBackendNames} agentSettings={agentSettings} mode={currentConv?.settings?.mode ?? experimentMode} nickname={nickname} onClickAgent={(key) => { setCustomizerInitialAgent(key); setShowCustomizer(true); }} />
+                  : <AgentMessage
+                      key={msg.id}
+                      message={msg}
+                      agentNames={agentNames}
+                      agentBackendNames={agentBackendNames}
+                      agentSettings={agentSettings}
+                      mode={currentConv?.settings?.mode ?? experimentMode}
+                      nickname={nickname}
+                      onOpenAdvancedAgent={(key) => { setCustomizerInitialAgent(key); setShowCustomizer(true); }}
+                      onQuickEmotionAdjust={async (key, patch, shouldAnalyze) => {
+                        setAgentSettings((prev) => ({
+                          ...prev,
+                          [key]: {
+                            ...prev[key],
+                            ...patch,
+                          },
+                        }));
+                        if (!shouldAnalyze) return;
+                        const next = {
+                          ...agentSettingsRef.current[key],
+                          ...patch,
+                        };
+                        const result = await analyzeEmotionForAgent(key, next.valence, next.arousal, next.control, next.emotionText || "");
+                        if (!result) return;
+                        setAgentSettings((prev) => ({
+                          ...prev,
+                          [key]: {
+                            ...prev[key],
+                            emotionOn: true,
+                            emotionTag: result.emotion_tag,
+                          },
+                        }));
+                      }}
+                    />
               )}
               <AnimatePresence>
                 {typingKeys.map((k) => <TypingDots key={k} agentKey={k} agentNames={agentNames} />)}

@@ -709,11 +709,11 @@ function AttachMenu({ open, onClose, anchorRef }: { open: boolean; onClose: () =
 }
 
 
-// ─── Settings menu (Customize Agent, Customize Scene, Turn Cap, Reload, Export) ─
+// ─── Settings menu (Customize Agent, Customize Scene, Reload, Export) ─
 
-function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onTurn, onAppearance, onReloadHistory, onExportLog, hasRoomId, showFontColor, onToggleFontColor }: {
+function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onExportLog, hasRoomId, showFontColor, onToggleFontColor }: {
   open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLButtonElement | null>;
-  onCustomize: () => void; onScene: () => void; onTurn: () => void; onAppearance: () => void;
+  onCustomize: () => void; onScene: () => void; onAppearance: () => void;
   onReloadHistory: () => void; onExportLog: () => void; hasRoomId: boolean;
   showFontColor: boolean; onToggleFontColor: () => void;
 }) {
@@ -748,7 +748,6 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onTurn, 
       className="absolute bottom-full right-0 mb-2 bg-white border border-black/10 rounded-[12px] shadow-[0_2px_12px_rgba(0,0,0,0.06)] py-2 min-w-[200px] z-50">
       <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label="Customize Agent" onClick={onCustomize} />
       <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>} label="Customize Scene" onClick={onScene} />
-      <Item icon={<svg width="14" height="14" viewBox="0 0 17 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.4182 14H15.4182V19M6.41824 6H1.41824V1M15.8358 7.0034C15.2751 5.61566 14.3364 4.41304 13.1262 3.53223C11.9161 2.65141 10.4834 2.12752 8.9905 2.02051C7.4976 1.9135 6.0043 2.2274 4.68093 2.92661C3.35756 3.62582 2.25706 4.68254 1.50417 5.97612M1.00027 12.9971C1.56095 14.3848 2.4997 15.5874 3.70981 16.4682C4.91992 17.3491 6.35412 17.8723 7.84701 17.9793C9.33991 18.0863 10.832 17.7725 12.1554 17.0732C13.4787 16.374 14.5785 15.3175 15.3314 14.0239"/></svg>} label="Turn Cap" onClick={onTurn} />
       {showFontColor && <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3a9 9 0 1 0 9 9"/><circle cx="12" cy="12" r="3"/></svg>} label="字体颜色" onClick={onAppearance} />}
       {hasRoomId && (
         <>
@@ -756,54 +755,6 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onTurn, 
           <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label="Export log" onClick={onExportLog} />
         </>
       )}
-    </motion.div>
-  );
-}
-
-// ─── Turn Cap settings modal (per-conversation pacing) ──────────────────────────
-
-function TurnSettingsModal({ maxAgentTurns, setMaxAgentTurns, maxUserGap, setMaxUserGap, onClose }: {
-  maxAgentTurns: number; setMaxAgentTurns: (v: number) => void;
-  maxUserGap: number; setMaxUserGap: (v: number) => void;
-  onClose: () => void;
-}) {
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
-      className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6" onClick={onClose}>
-      <motion.div
-        initial={{ opacity: 0, scale: 0.97, y: 16 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.97, y: 8 }}
-        transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-[440px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)]" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-5 border-b border-black/8">
-          <div>
-            <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>Turn Cap</h2>
-            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>Per-conversation pacing — when to let user speak</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div className="p-6 flex flex-col gap-4">
-          <div>
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Agent turns</label>
-            <p className="text-[10px] text-[var(--app-muted-text)] mb-2" style={monoFont}>Max agent messages before prompting user</p>
-            <div className="flex items-center gap-2">
-              <input type="range" min={2} max={10} value={maxAgentTurns} onChange={(e) => setMaxAgentTurns(parseInt(e.target.value))} className="flex-1 h-[3px] accent-black" />
-              <span className="text-[11px] text-[var(--app-muted-text)] w-6 text-right" style={monoFont}>{maxAgentTurns}</span>
-            </div>
-          </div>
-          <div>
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>User gap</label>
-            <p className="text-[10px] text-[var(--app-muted-text)] mb-2" style={monoFont}>Max messages before user should respond</p>
-            <div className="flex items-center gap-2">
-              <input type="range" min={4} max={20} value={maxUserGap} onChange={(e) => setMaxUserGap(parseInt(e.target.value))} className="flex-1 h-[3px] accent-black" />
-              <span className="text-[11px] text-[var(--app-muted-text)] w-6 text-right" style={monoFont}>{maxUserGap}</span>
-            </div>
-          </div>
-        </div>
-      </motion.div>
     </motion.div>
   );
 }
@@ -1195,7 +1146,6 @@ export default function Chat() {
   const [showCustomizer, setShowCustomizer] = useState(false);
   const [customizerInitialAgent, setCustomizerInitialAgent] = useState<AgentKey | null>(null);
   const [showSceneSelector, setShowSceneSelector] = useState(false);
-  const [showTurnModal, setShowTurnModal] = useState(false);
   const [showAppearanceModal, setShowAppearanceModal] = useState(false);
   const [showFontColorInSettings, setShowFontColorInSettings] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
@@ -1735,11 +1685,6 @@ export default function Chat() {
         {showSceneSelector && (
           <SceneSelectorModal scenes={scenes} selectedScene={selectedScene} onSelect={setSelectedScene} onClose={() => setShowSceneSelector(false)} />
         )}
-        {showTurnModal && (
-          <AnimatePresence mode="wait">
-            <TurnSettingsModal key="turn" maxAgentTurns={maxAgentTurns} setMaxAgentTurns={setMaxAgentTurns} maxUserGap={maxUserGap} setMaxUserGap={setMaxUserGap} onClose={() => setShowTurnModal(false)} />
-          </AnimatePresence>
-        )}
         {showAppearanceModal && (
           <AppearanceModal
             open={showAppearanceModal}
@@ -2097,7 +2042,7 @@ export default function Chat() {
                 </motion.button>
                 <AnimatePresence>
                   <SettingsMenu open={settingsMenuOpen} onClose={() => setSettingsMenuOpen(false)} anchorRef={settingsBtnRef}
-                    onCustomize={() => setShowCustomizer(true)} onScene={() => setShowSceneSelector(true)} onTurn={() => setShowTurnModal(true)}
+                    onCustomize={() => setShowCustomizer(true)} onScene={() => setShowSceneSelector(true)}
                     onAppearance={() => setShowAppearanceModal(true)}
                     onReloadHistory={handleLoadHistory} onExportLog={handleExportLog} hasRoomId={!!currentConv?.roomId}
                     showFontColor={showFontColorInSettings} onToggleFontColor={() => setShowFontColorInSettings((v) => !v)} />

@@ -55,37 +55,37 @@ export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
     "I'm choosing between battery life and performance. How do I decide for daily office work?",
     "Can you compare MacBook Air, ThinkPad, and gaming laptops for a 3-year horizon?",
   ],
-  scene4: [
+  scene2: [
     "I need a Black Friday phone under $800 with a great camera. What should I compare first?",
     "Should I prioritize battery longevity or camera system for everyday use?",
     "Is last year's flagship a better deal than this year's mid-range phone?",
     "How much should software update policy affect my phone decision?",
   ],
-  scene5: [
+  scene3: [
     "I want Black Friday headphones under $200 for commuting and calls. What should I compare first?",
     "Should I prioritize noise cancellation, comfort, or sound quality for daily use?",
     "Is an older premium ANC model better than a new mid-range option this year?",
     "How should I choose between over-ear headphones and ANC earbuds on a budget?",
   ],
-  scene2: [
+  scene4: [
     "We only have 6 days and mixed budgets. How should we choose an Asia destination everyone accepts?",
     "Can you compare one low-cost, one mid-range, and one premium Asia trip direction?",
     "How should we decide between an urban Asia trip and a nature-focused Asia route?",
     "What is a fair way to split costs when people want different hotel standards?",
   ],
-  scene6: [
+  scene5: [
     "We are planning Europe with limited days. Should we do one country deeply or multiple cities quickly?",
     "Can you compare Western Europe vs Eastern Europe for budget, crowd levels, and logistics?",
     "How do we choose between culture-focused cities and nature-heavy routes in Europe?",
     "What itinerary style is better for first-time Europe travel: structured or flexible?",
   ],
-  scene7: [
+  scene6: [
     "We are considering Oceania. How should we choose between Australia, New Zealand, and Pacific islands?",
     "Can you compare one urban, one nature, and one beach-focused Oceania trip option?",
     "How should we handle long-haul flight fatigue and budget trade-offs for Oceania?",
     "What is a realistic 7-day Oceania plan direction with clear priorities?",
   ],
-  scene3: [
+  scene7: [
     "Which wildfire policy should be prioritized first: fuel reduction, early warning, or evacuation infrastructure?",
     "How can a city balance wildfire resilience with budget limits over the next 3 years?",
     "What policy package could reduce risk without causing strong public pushback?",

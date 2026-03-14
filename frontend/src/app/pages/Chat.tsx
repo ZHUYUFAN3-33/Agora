@@ -109,7 +109,7 @@ function formatTime(ts: number): string {
   return `${Math.floor(diff / 86400000)}d ago`;
 }
 
-// Replace backend names (ChatbotA/B/C) with user-defined display names; replace "User" with nickname
+// Replace backend names (ChatbotA/B/C) with user-defined display names; replace generic user label with nickname.
 function applyDisplayNames(
   content: string,
   names: Record<AgentKey, string>,
@@ -130,10 +130,7 @@ function applyDisplayNames(
     });
   }
   if (nickname && nickname.trim()) {
-    out = out.replace(/\bUser\b/g, nickname.trim());
-    out = out.replace(/\bU\b/g, nickname.trim());
-  } else {
-    out = out.replace(/\bU\b/g, "user");
+    out = out.replace(/\buser\b/gi, nickname.trim());
   }
   return out;
 }

@@ -270,8 +270,12 @@ def sanitize_single_message(text: str, agent_name: str, all_names: List[str]) ->
     m = re.search(pat, t)
     if m:
         t = t[: m.start()].rstrip()
-    # Avoid leaking internal scheduler token for user.
-    t = re.sub(r"\bU\b", "user", t)
+    # Normalize leaked internal user label only in direct-address contexts.
+    t = re.sub(
+        r"(?<!\w)U(?=(?:['’]s\b|[,\.\!\?\:\;]|\s+(?:could|can|would|will|do|did|have|are|please|let(?:'s|s)|what|which|when|where|why|how)\b))",
+        "user",
+        t,
+    )
     return t.strip() or "..."
 
 

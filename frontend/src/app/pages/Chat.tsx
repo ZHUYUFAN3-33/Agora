@@ -2036,7 +2036,7 @@ export default function Chat() {
           </AnimatePresence>
         </div>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-[108px] z-20 px-4 sm:px-8">
+        <div className="pointer-events-none absolute inset-x-0 bottom-[148px] z-20 px-4 sm:px-8">
           <div className={`mx-auto ${currentConv ? "max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px]" : "max-w-[440px] sm:max-w-[560px] lg:max-w-[680px] xl:max-w-[800px]"}`}>
             <AnimatePresence initial={false} mode="wait">
               {currentConv && typingKeys[0] && (

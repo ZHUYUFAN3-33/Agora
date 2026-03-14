@@ -610,11 +610,25 @@ def send_message():
             {"role": "user", "content": f"=== SCENE ===\n{base_scene}\n\n=== ROLES ===\n{roles}\n\n=== STATS ===\n{stats}\n\n=== TRANSCRIPT ===\n{history_str}\n\nDecide NEXT."},
         ]
         admin1_out = create_response_with_client(client_admin, "gpt-4o", admin1_msgs, 0.2, 260)
-        append_jsonl(session["think_fp"], {"chat_room_id": room_id, "time": now_local_iso(), "admin1": admin1_out})
+        append_jsonl(session["think_fp"], {
+            "chat_room_id": room_id,
+            "time": now_local_iso(),
+            "turn": session.get("user_turn_count", 0),
+            "turn_idx": session.get("turn_idx", 0),
+            "phase": session["moderator_state"].get("state", "Exploration"),
+            "admin1": admin1_out,
+        })
         admin2_msgs = [{"role": "system", "content": ADMIN2_SYSTEM}, {"role": "user", "content": admin1_out}]
         admin2_out = create_response_with_client(client_admin, "gpt-4o", admin2_msgs, 0.0, 16)
         admin2_out = (admin2_out or "").strip().upper()
-        append_jsonl(session["think_fp"], {"chat_room_id": room_id, "time": now_local_iso(), "admin2": admin2_out})
+        append_jsonl(session["think_fp"], {
+            "chat_room_id": room_id,
+            "time": now_local_iso(),
+            "turn": session.get("user_turn_count", 0),
+            "turn_idx": session.get("turn_idx", 0),
+            "phase": session["moderator_state"].get("state", "Exploration"),
+            "admin2": admin2_out,
+        })
         if admin2_out not in {"A", "B", "C", "U"}:
             admin2_out = random.choice(["A", "B", "C"])
         if admin2_out == "U" and random.random() < PREFER_AGENTS:

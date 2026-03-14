@@ -33,6 +33,7 @@ import {
 
 const monoFont = { fontFamily: "'Share Tech Mono', monospace" };
 const condensedFont = { fontFamily: "'Barlow Condensed', sans-serif" };
+const FULL_AGENT_NAMES: Record<AgentKey, string> = { A: "ChatbotA", B: "ChatbotB", C: "ChatbotC" };
 const LIMITED_POOL_ACCENT_MAP: Record<AgentPoolKey, string> = {
   A: "#005f73",
   B: "#e9d8a6",
@@ -223,6 +224,16 @@ function normalizeLimitedSelection(keys: AgentPoolKey[]): AgentPoolKey[] {
   if (unique.length >= 3) return unique.slice(0, 3);
   const padding = LIMITED_AGENT_POOL.map((p) => p.key).filter((k) => !unique.includes(k));
   return [...unique, ...padding].slice(0, 3);
+}
+
+function sameEmotionSnapshot(a: AgentCustomSetting, b: AgentCustomSetting): boolean {
+  return (
+    a.emotionOn === b.emotionOn &&
+    a.emotionTag === b.emotionTag &&
+    a.valence === b.valence &&
+    a.arousal === b.arousal &&
+    a.control === b.control
+  );
 }
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
@@ -451,6 +462,7 @@ function AgentMessage({
   nickname,
   onOpenAdvancedAgent,
   onQuickEmotionAdjust,
+  onQuickAdjustCommit,
   getPopoverSafeRect,
   compactRepeatedIntro = false,
   emojiRepeatIndex = 0,
@@ -462,7 +474,8 @@ function AgentMessage({
   mode: ExperimentMode;
   nickname?: string;
   onOpenAdvancedAgent?: (key: AgentKey) => void;
-  onQuickEmotionAdjust?: (key: AgentKey, patch: Partial<AgentCustomSetting>, shouldAnalyze?: boolean) => void;
+  onQuickEmotionAdjust?: (key: AgentKey, patch: Partial<AgentCustomSetting>, shouldAnalyze?: boolean) => Promise<void> | void;
+  onQuickAdjustCommit?: (key: AgentKey, before: AgentCustomSetting) => Promise<void> | void;
   getPopoverSafeRect?: () => DOMRect | null;
   compactRepeatedIntro?: boolean;
   emojiRepeatIndex?: number;
@@ -472,6 +485,7 @@ function AgentMessage({
   const [safeRect, setSafeRect] = useState<DOMRect | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLDivElement | null>(null);
+  const dirtyBaselineRef = useRef<AgentCustomSetting | null>(null);
   const name = message.agentKey ? agentNames[message.agentKey] : "Agent";
   const role = message.agentKey
     ? (mode === "limited"
@@ -508,16 +522,32 @@ function AgentMessage({
 
   const openPopover = () => {
     clearCloseTimer();
+    if (!popoverOpen && message.agentKey) {
+      dirtyBaselineRef.current = { ...(currentSettings || defaultSetting(message.agentKey)) };
+    }
     updatePopoverPosition();
     setPopoverOpen(true);
   };
 
+  const commitQuickAdjust = useCallback(() => {
+    if (!message.agentKey || !dirtyBaselineRef.current) return;
+    const before = dirtyBaselineRef.current;
+    dirtyBaselineRef.current = null;
+    void onQuickAdjustCommit?.(message.agentKey, before);
+  }, [message.agentKey, onQuickAdjustCommit]);
+
   const closePopoverSoon = () => {
     clearCloseTimer();
-    closeTimerRef.current = window.setTimeout(() => setPopoverOpen(false), 120);
+    closeTimerRef.current = window.setTimeout(() => {
+      setPopoverOpen(false);
+      commitQuickAdjust();
+    }, 120);
   };
 
-  useEffect(() => () => clearCloseTimer(), []);
+  useEffect(() => () => {
+    clearCloseTimer();
+    commitQuickAdjust();
+  }, [commitQuickAdjust]);
   useLayoutEffect(() => {
     if (!popoverOpen) return;
     updatePopoverPosition();
@@ -569,10 +599,11 @@ function AgentMessage({
                   onHoverStart={openPopover}
                   onHoverEnd={closePopoverSoon}
                   onAdjustEmotion={(key, patch, shouldAnalyze) => {
-                    onQuickEmotionAdjust?.(key, patch, shouldAnalyze);
+                    void onQuickEmotionAdjust?.(key, patch, shouldAnalyze);
                   }}
                   onOpenAdvanced={(key) => {
                     setPopoverOpen(false);
+                    commitQuickAdjust();
                     onOpenAdvancedAgent?.(key);
                   }}
                 />
@@ -1157,6 +1188,7 @@ export default function Chat() {
   const [msgQueue, setMsgQueue] = useState<Array<{ agentKey: AgentKey; content: string; convId: string; emotionTagSnapshot: string | null }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
   const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>({ A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") });
+  const quickAdjustPendingRef = useRef<Record<AgentKey, Promise<void> | null>>({ A: null, B: null, C: null });
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -1201,6 +1233,15 @@ export default function Chat() {
     c.scrollTo({ top: c.scrollHeight, behavior });
   }, []);
   const getPopoverSafeRect = useCallback(() => messagesContainerRef.current?.getBoundingClientRect() ?? null, []);
+  const postParamChanges = useCallback((changes: Array<Record<string, unknown>>) => {
+    const mode = currentConv?.settings?.mode ?? experimentMode;
+    if (mode !== "full" || !currentConv?.roomId || changes.length === 0) return;
+    fetch(`${API_BASE}/log-param-change`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }),
+    }).catch(() => {});
+  }, [currentConv?.roomId, currentConv?.settings?.mode, experimentMode]);
 
   useEffect(() => { if (!localStorage.getItem("agora_auth")) navigate("/"); }, [navigate]);
 
@@ -1275,6 +1316,83 @@ export default function Chat() {
       return await res.json();
     } catch { return null; }
   }, []);
+
+  const handleQuickEmotionAdjust = useCallback((key: AgentKey, patch: Partial<AgentCustomSetting>, shouldAnalyze?: boolean) => {
+    setAgentSettings((prev) => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        ...patch,
+      },
+    }));
+    if (!shouldAnalyze) return Promise.resolve();
+    const next = {
+      ...agentSettingsRef.current[key],
+      ...patch,
+    };
+    const pending = (async () => {
+      const result = await analyzeEmotionForAgent(key, next.valence, next.arousal, next.control, next.emotionText || "");
+      if (!result) return;
+      setAgentSettings((prev) => ({
+        ...prev,
+        [key]: {
+          ...prev[key],
+          emotionOn: true,
+          emotionTag: result.emotion_tag,
+        },
+      }));
+    })();
+    quickAdjustPendingRef.current[key] = pending.finally(() => {
+      if (quickAdjustPendingRef.current[key] === pending) {
+        quickAdjustPendingRef.current[key] = null;
+      }
+    });
+    return pending;
+  }, [analyzeEmotionForAgent]);
+
+  const commitQuickAdjustChanges = useCallback(async (key: AgentKey, before: AgentCustomSetting) => {
+    const mode = currentConv?.settings?.mode ?? experimentMode;
+    if (mode !== "full" || !currentConv?.roomId) return;
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    if (quickAdjustPendingRef.current[key]) {
+      await quickAdjustPendingRef.current[key];
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+    const after = agentSettingsRef.current[key];
+    if (!after) return;
+    const changes: Array<Record<string, unknown>> = [];
+    if (!sameEmotionSnapshot(before, after)) {
+      changes.push({
+        type: "emotion",
+        source: "hover_menu",
+        agent: FULL_AGENT_NAMES[key],
+        before: {
+          emotionOn: before.emotionOn,
+          emotionTag: before.emotionTag,
+          valence: before.valence,
+          arousal: before.arousal,
+          control: before.control,
+        },
+        after: {
+          emotionOn: after.emotionOn,
+          emotionTag: after.emotionTag,
+          valence: after.valence,
+          arousal: after.arousal,
+          control: after.control,
+        },
+      });
+    }
+    if (before.decisionBlock !== after.decisionBlock) {
+      changes.push({
+        type: "decision",
+        source: "hover_menu",
+        agent: FULL_AGENT_NAMES[key],
+        before: before.decisionBlock,
+        after: after.decisionBlock,
+      });
+    }
+    postParamChanges(changes);
+  }, [currentConv?.roomId, currentConv?.settings?.mode, experimentMode, postParamChanges]);
 
   const handleSend = async () => {
     const text = inputValue.trim();
@@ -1699,7 +1817,7 @@ export default function Chat() {
       </aside>
 
       {/* Main */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="relative flex-1 flex flex-col min-w-0">
         <header className="h-[56px] border-b border-black/8 flex items-center px-4 gap-4 flex-shrink-0">
           <button className="p-1.5 hover:bg-black/5 rounded-md transition-colors" onClick={() => setSidebarOpen(true)}>
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 4.5H16M2 9H16M2 13.5H16" stroke="black" strokeWidth="1.5" strokeLinecap="round"/></svg>
@@ -1731,7 +1849,7 @@ export default function Chat() {
           </div>
         </header>
 
-        <div ref={messagesContainerRef} className="relative flex-1 overflow-y-auto px-4 sm:px-8 py-6">
+        <div ref={messagesContainerRef} className="relative flex-1 overflow-y-auto px-4 sm:px-8 pt-6 pb-28">
           <AnimatePresence mode="wait" initial={false}>
           {!currentConv ? (
             <motion.div
@@ -1906,30 +2024,8 @@ export default function Chat() {
                       compactRepeatedIntro={compactRepeatedIntro}
                       emojiRepeatIndex={emojiRepeatIndex}
                       onOpenAdvancedAgent={(key) => { setCustomizerInitialAgent(key); setShowCustomizer(true); }}
-                      onQuickEmotionAdjust={async (key, patch, shouldAnalyze) => {
-                        setAgentSettings((prev) => ({
-                          ...prev,
-                          [key]: {
-                            ...prev[key],
-                            ...patch,
-                          },
-                        }));
-                        if (!shouldAnalyze) return;
-                        const next = {
-                          ...agentSettingsRef.current[key],
-                          ...patch,
-                        };
-                        const result = await analyzeEmotionForAgent(key, next.valence, next.arousal, next.control, next.emotionText || "");
-                        if (!result) return;
-                        setAgentSettings((prev) => ({
-                          ...prev,
-                          [key]: {
-                            ...prev[key],
-                            emotionOn: true,
-                            emotionTag: result.emotion_tag,
-                          },
-                        }));
-                      }}
+                      onQuickEmotionAdjust={handleQuickEmotionAdjust}
+                      onQuickAdjustCommit={commitQuickAdjustChanges}
                     />
                   );
                 });
@@ -1938,21 +2034,20 @@ export default function Chat() {
             </motion.div>
           )}
           </AnimatePresence>
-          {currentConv && (
-            <div className="pointer-events-none absolute inset-x-4 bottom-4 sm:bottom-6">
-              <div className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto">
-                <AnimatePresence initial={false} mode="wait">
-                  {typingKeys[0] && (
-                    <TypingDots
-                      key={`typing-${typingKeys[0]}`}
-                      agentKey={typingKeys[0]}
-                      agentNames={agentNames}
-                    />
-                  )}
-                </AnimatePresence>
-              </div>
-            </div>
-          )}
+        </div>
+
+        <div className="pointer-events-none absolute inset-x-0 bottom-[108px] z-20 px-4 sm:px-8">
+          <div className={`mx-auto ${currentConv ? "max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px]" : "max-w-[440px] sm:max-w-[560px] lg:max-w-[680px] xl:max-w-[800px]"}`}>
+            <AnimatePresence initial={false} mode="wait">
+              {currentConv && typingKeys[0] && (
+                <TypingDots
+                  key={`status-typing-${typingKeys[0]}-${msgQueue[0]?.content ?? "pending"}`}
+                  agentKey={typingKeys[0]}
+                  agentNames={agentNames}
+                />
+              )}
+            </AnimatePresence>
+          </div>
         </div>
 
         <div className="flex-shrink-0 border-t border-black/8 px-4 sm:px-8 py-4">

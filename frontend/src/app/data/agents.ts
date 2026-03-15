@@ -71,7 +71,7 @@ export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
     "We only have 6 days and mixed budgets. How should we choose an Asia destination everyone accepts?",
     "Can you compare one low-cost, one mid-range, and one premium Asia trip direction?",
     "How should we decide between an urban Asia trip and a nature-focused Asia route?",
-    "What is a fair way to split costs when people want different hotel standards?",
+    "What is a fair way to split Asia trip costs when people want different hotel standards?",
   ],
   scene5: [
     "We are planning Europe with limited days. Should we do one country deeply or multiple cities quickly?",
@@ -88,7 +88,7 @@ export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
   scene7: [
     "Which wildfire policy should be prioritized first: fuel reduction, early warning, or evacuation infrastructure?",
     "How can a city balance wildfire resilience with budget limits over the next 3 years?",
-    "What policy package could reduce risk without causing strong public pushback?",
+    "What wildfire policy package could reduce risk without causing strong public pushback?",
     "How should we measure whether a wildfire mitigation policy is actually working?",
   ],
   scene8: [

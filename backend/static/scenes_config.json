@@ -1,33 +1,67 @@
 {
   "scenes": [
     {
-      "id": "laptop_purchase",
-      "title": "Laptop Purchase Advisory",
-      "description": "Professional advice for Black Friday laptop shopping. Three AI agents analyze from different perspectives.",
+      "id": "scene1",
+      "title": "Black Friday Laptop Purchase",
+      "description": "An individual must decide whether and what computing device to purchase during Black Friday promotions. Trade-offs between performance, portability, longevity, and cost.",
       "icon": "💻",
-      "color": "#667eea"
+      "color": "#000000"
     },
     {
-      "id": "phone_purchase",
-      "title": "Smartphone Purchase Advisory",
-      "description": "Recommend the best smartphone for you, considering performance, price and usage scenarios.",
+      "id": "scene2",
+      "title": "Black Friday Smartphone Purchase",
+      "description": "A buyer compares flagship and mid-range phones during seasonal discounts. Decision factors include camera quality, battery, software support, and total value.",
       "icon": "📱",
-      "color": "#f093fb"
+      "color": "#000000"
     },
     {
-      "id": "gaming_setup",
-      "title": "Gaming Setup Advisory",
-      "description": "Build the perfect gaming experience with comprehensive advice from graphics cards to peripherals.",
-      "icon": "🎮",
-      "color": "#4ecdc4"
+      "id": "scene3",
+      "title": "Black Friday Headphones Purchase",
+      "description": "A buyer compares headphone options during seasonal discounts. The discussion balances sound quality, noise cancellation, comfort, portability, and cost.",
+      "icon": "🎧",
+      "color": "#000000"
     },
     {
-      "id": "home_office",
-      "title": "Home Office Setup Advisory",
-      "description": "Boost remote work efficiency by choosing the ideal office equipment combination.",
-      "icon": "🏠",
-      "color": "#ffd93d"
+      "id": "scene4",
+      "title": "Travel Planning Discussion — Asia",
+      "description": "A group selects an Asia destination and trip direction in one session. It balances budget, vacation days, weather timing, and travel style.",
+      "icon": "✈️",
+      "color": "#000000"
+    },
+    {
+      "id": "scene5",
+      "title": "Travel Planning Discussion — Europe",
+      "description": "A group narrows Europe options with clear trade-offs across cost, seasonality, and route structure. It compares destination types and trip pacing.",
+      "icon": "🏛️",
+      "color": "#000000"
+    },
+    {
+      "id": "scene6",
+      "title": "Travel Planning Discussion — Oceania",
+      "description": "A group plans an Oceania trip by weighing long-haul cost, reversed seasons, and destination style across Australia, New Zealand, and Pacific islands.",
+      "icon": "🌏",
+      "color": "#000000"
+    },
+    {
+      "id": "scene7",
+      "title": "Wildfire Mitigation Policy",
+      "description": "A group engages in collaborative policy discussion addressing wildfire mitigation and long-term community resilience. Evaluating multiple policy directions.",
+      "icon": "🔥",
+      "color": "#000000"
+    },
+    {
+      "id": "scene8",
+      "title": "Urban Flood Preparedness Policy",
+      "description": "A city-level team debates flood resilience strategies. It considers drainage investment, zoning constraints, emergency response readiness, and equity impacts.",
+      "icon": "🌊",
+      "color": "#000000"
+    },
+    {
+      "id": "scene9",
+      "title": "Drought & Water Resource Policy",
+      "description": "A policy team evaluates drought response strategies under limited funding. It compares conservation, supply expansion, allocation reform, and emergency capacity.",
+      "icon": "💧",
+      "color": "#000000"
     }
   ]
 }
-

@@ -971,6 +971,7 @@ function CustomizerModal({
   const agentOptions = experimentMode === "single" ? [("A" as AgentKey)] : AGENT_KEYS;
   const totalCards = canEditAdvanced ? 3 : 1;
   const tutorialCardIndex = tutorialStep !== null && tutorialStep >= 1 && tutorialStep <= 3 ? tutorialStep - 1 : null;
+  const tutorialGuideStep = tutorialStep !== null ? WELCOME_TUTORIAL_STEPS[tutorialStep] : null;
 
   useEffect(() => { if (initialOpenCard) setSelectedAgent(initialOpenCard); }, [initialOpenCard]);
   useEffect(() => { setPage(0); }, [selectedAgent]);
@@ -1118,7 +1119,7 @@ function CustomizerModal({
               <div className="relative z-10">
                 <div className="flex items-center justify-between gap-3 mb-2">
                   <p className="text-[11px] tracking-widest text-black uppercase" style={monoFont}>
-                    {tutorialStep}/{WELCOME_TUTORIAL_STEPS.length} · {WELCOME_TUTORIAL_STEPS[tutorialCardIndex].title}
+                    {tutorialStep! + 1}/{WELCOME_TUTORIAL_STEPS.length} · {tutorialGuideStep?.title}
                   </p>
                   <button
                     type="button"
@@ -1130,7 +1131,7 @@ function CustomizerModal({
                   </button>
                 </div>
                 <p className="text-[12px] text-black/75 leading-relaxed" style={monoFont}>
-                  {WELCOME_TUTORIAL_STEPS[tutorialCardIndex].body}
+                  {tutorialGuideStep?.body}
                 </p>
                 <div className="flex items-center justify-between mt-4">
                   <button

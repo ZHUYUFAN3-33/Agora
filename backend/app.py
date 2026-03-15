@@ -587,6 +587,7 @@ def send_message():
     
     # Get agent responses (Newst: phase-based, Admin-1/2 for next speaker)
     responses = []
+    responded_keys_this_turn: List[str] = []
     transcript_lines = history_to_transcript_lines(session["history"])
     name_map = {a.key: a.name for a in agent_list}
     max_history_chars = 12000
@@ -594,6 +595,67 @@ def send_message():
     def _user_gap(hist):
         li = next((i for i in range(len(hist) - 1, -1, -1) if hist[i].get("character") == "user"), None)
         return (len(hist) - 1) - li if li is not None else len(hist)
+
+    def _last_agent_key() -> Optional[str]:
+        last_label = session.get("last_speaker_label") or ""
+        for key, agent in agents.items():
+            if agent.name == last_label:
+                return key
+        return None
+
+    def _pick_alternative_agent(*exclude_keys: str) -> Optional[str]:
+        excluded = {k for k in exclude_keys if k in SLOT_KEYS}
+        candidates = [k for k in SLOT_KEYS if k not in excluded]
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda k: (
+                k in responded_keys_this_turn,
+                session["has_spoken"].get(k, False),
+                k,
+            )
+        )
+        return candidates[0]
+
+    def _normalize_next_speaker(choice: Optional[str]) -> Optional[str]:
+        if choice not in {"A", "B", "C", "U"}:
+            return _pick_alternative_agent()
+        if choice == "U":
+            return "U"
+
+        last_key = _last_agent_key()
+        if last_key and choice == last_key and int(session.get("consecutive_count", 0) or 0) >= 1:
+            alt = _pick_alternative_agent(choice)
+            if alt:
+                return alt
+
+        # Within one user turn, avoid reusing the same speaker until others have had a chance.
+        if choice in responded_keys_this_turn and len(responded_keys_this_turn) < len(SLOT_KEYS):
+            alt = _pick_alternative_agent(*responded_keys_this_turn)
+            if alt:
+                return alt
+        return choice
+
+    def _append_agent_response(speaker: str, txt: str) -> None:
+        agent = agents[speaker]
+        agent_msg = {"chat_room_id": room_id, "time": now_local_iso(), "character": agent.name, "txt": txt}
+        append_jsonl(session["chat_fp"], agent_msg)
+        session["history"].append(agent_msg)
+        transcript_lines.append(f"{agent.name}: {txt}")
+        responses.append({"agent": agent.name, "agent_key": speaker, "message": txt, "time": agent_msg["time"]})
+
+        agent.spoke += 1
+        session["has_spoken"][speaker] = True
+        session["bots_since_user"] += 1
+        session["turn_idx"] += 1
+        session["turns_in_current_state"] = session.get("turns_in_current_state", 0) + 1
+        responded_keys_this_turn.append(speaker)
+
+        if session.get("last_speaker_label") == agent.name:
+            session["consecutive_count"] = session.get("consecutive_count", 0) + 1
+        else:
+            session["last_speaker_label"] = agent.name
+            session["consecutive_count"] = 1
 
     def _admin_choose_next() -> Optional[str]:
         if session["bots_since_user"] >= max_agent_turns_before_user:
@@ -604,7 +666,13 @@ def send_message():
             return "U"
         history_str = clamp_history(transcript_lines, max_history_chars)
         roles = build_roles_summary(agent_list)
-        stats = f"bots_since_user={session['bots_since_user']}, moderator_state={session['moderator_state'].get('state','Exploration')}"
+        stats = (
+            f"bots_since_user={session['bots_since_user']}, "
+            f"moderator_state={session['moderator_state'].get('state','Exploration')}, "
+            f"last_speaker={session.get('last_speaker_label') or '(none)'}, "
+            f"consecutive_count={session.get('consecutive_count', 0)}, "
+            f"responded_this_turn={','.join(responded_keys_this_turn) or '(none)'}"
+        )
         admin1_msgs = [
             {"role": "system", "content": ADMIN1_SYSTEM},
             {"role": "user", "content": f"=== SCENE ===\n{base_scene}\n\n=== ROLES ===\n{roles}\n\n=== STATS ===\n{stats}\n\n=== TRANSCRIPT ===\n{history_str}\n\nDecide NEXT."},
@@ -630,10 +698,10 @@ def send_message():
             "admin2": admin2_out,
         })
         if admin2_out not in {"A", "B", "C", "U"}:
-            admin2_out = random.choice(["A", "B", "C"])
+            admin2_out = _pick_alternative_agent() or random.choice(["A", "B", "C"])
         if admin2_out == "U" and random.random() < PREFER_AGENTS:
-            return random.choice(["A", "B", "C"])
-        return admin2_out
+            admin2_out = _pick_alternative_agent(_last_agent_key() or "") or random.choice(["A", "B", "C"])
+        return _normalize_next_speaker(admin2_out)
 
     def _call_chat_agent_new(speaker: str, force_intro: bool = False, stall_mode: bool = False) -> str:
         agent = agents[speaker]
@@ -674,19 +742,17 @@ def send_message():
         txt = create_response_with_client(client_chat, "gpt-4o", msgs, temp, 220)
         return sanitize_single_message((txt or "").strip() or "…", agent.name, all_agent_names)
 
-    def _run_stall_burst():
+    def _run_stall_burst(skip_key: Optional[str] = None):
         """When stall: force A->B->C burst with stall-specific prompt."""
         for key in ["A", "B", "C"]:
-            agent = agents[key]
+            if key == skip_key:
+                continue
+            if session["bots_since_user"] >= max_agent_turns_before_user:
+                break
+            if _user_gap(session["history"]) >= max_user_gap:
+                break
             txt = _call_chat_agent_new(key, force_intro=not session["has_spoken"][key], stall_mode=True)
-            agent_msg = {"chat_room_id": room_id, "time": now_local_iso(), "character": agent.name, "txt": txt}
-            append_jsonl(session["chat_fp"], agent_msg)
-            session["history"].append(agent_msg)
-            transcript_lines.append(f"{agent.name}: {txt}")
-            responses.append({"agent": agent.name, "agent_key": key, "message": txt, "time": agent_msg["time"]})
-            session["has_spoken"][key] = True
-            session["bots_since_user"] += 1
-            session["turn_idx"] += 1
+            _append_agent_response(key, txt)
 
     for _ in range(max_agent_turns_before_user + 2):
         if session["bots_since_user"] >= max_agent_turns_before_user:
@@ -698,24 +764,11 @@ def send_message():
         if speaker == "U":
             break
 
-        agent = agents[speaker]
         txt = _call_chat_agent_new(speaker, force_intro=not session["has_spoken"][speaker])
-
-        agent_msg = {"chat_room_id": room_id, "time": now_local_iso(), "character": agent.name, "txt": txt}
-        append_jsonl(session["chat_fp"], agent_msg)
-        session["history"].append(agent_msg)
-        transcript_lines.append(f"{agent.name}: {txt}")
-        responses.append({"agent": agent.name, "agent_key": speaker, "message": txt, "time": agent_msg["time"]})
-
-        session["has_spoken"][speaker] = True
-        session["bots_since_user"] += 1
-        session["turn_idx"] += 1
-        session["turns_in_current_state"] = session.get("turns_in_current_state", 0) + 1
-        session["last_speaker_label"] = agent.name
-        session["consecutive_count"] = 1
+        _append_agent_response(speaker, txt)
 
         if session["moderator_state"].get("stall"):
-            _run_stall_burst()
+            _run_stall_burst(skip_key=speaker)
             break
 
     current_phase = session["moderator_state"].get("state", "Exploration")

@@ -51,9 +51,16 @@ python app.py
 
 ### 实验模式
 
-- **Full**：完整 persona / emotion / decision
-- **Limited**：仅颜色与名称
-- **Single**：单 Agent，中立风格
+- **Full**：完整 persona / emotion / decision，可在自定义面板中调整名称、颜色、情绪、决策风格和附加提示。
+- **Limited**：先从 6 个 preset profile 中选 3 个进入对话；界面只开放基础显示项，但后端仍使用与 Full 相同的多 Agent 调度器。
+- **Single**：单 Agent，中立风格，直接返回一条回复，不进入多 Agent 调度。
+
+### 当前调度说明 / Scheduler Notes
+
+- **Full** 和 **Limited** 共用同一个后端 speaker scheduler；差异主要在可选 agent 池和前端可编辑项，不在调度器本身。
+- 每次用户发言后，后端会在 `max_agent_turns_before_user` 与 `max_user_gap` 约束内连续生成多条 agent 回复。
+- 当前版本加入了两条代码级约束：尽量避免同一个 agent 连续发言；同一轮 user turn 内优先轮到还没发言的 agent，再考虑重复发言。
+- 当 moderator 判定 `stall=true` 时，会触发一次 burst 推进讨论；当前实现会跳过刚刚已经发言的 agent，避免它在 burst 里再重复说一遍。
 
 ---
 
@@ -139,11 +146,28 @@ Agora/
 
 ---
 
+## 引导流程 / Onboarding Guide
+
+新版 React 前端内置 7 步 welcome tutorial：
+
+1. `Agents`
+2. `Basic`
+3. `Emotion`
+4. `Behavior`
+5. `Scene`
+6. `Suggested Prompts`
+7. `Input`
+
+其中 `Basic / Emotion / Behavior` 会映射到 `Customize Agent` modal 内的三张 card；`Scene / Suggested Prompts / Input` 对应主界面区域。
+
+---
+
 ## 注意事项 / Notes
 
 1. **API 密钥**：请勿提交到版本控制
 2. **费用**：使用 OpenAI API 会产生费用
 3. **端口**：前端 (`frontend`) 默认连接 `localhost:5001`，需用 `PORT=5001` 启动后端
+4. **后端重启**：`backend/app.py` 以 `use_reloader=False` 启动，修改后端调度逻辑后需要手动重启 Flask 服务，前端不会自动拿到新逻辑
 
 ---
 

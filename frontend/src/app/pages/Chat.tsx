@@ -30,58 +30,19 @@ import {
   EMOTION_IMAGES,
   defaultSetting,
 } from "../data/agents";
-
-const monoFont = { fontFamily: "'Share Tech Mono', monospace" };
-const condensedFont = { fontFamily: "'Barlow Condensed', sans-serif" };
-const FULL_AGENT_NAMES: Record<AgentKey, string> = { A: "ChatbotA", B: "ChatbotB", C: "ChatbotC" };
-const LIMITED_POOL_ACCENT_MAP: Record<AgentPoolKey, string> = {
-  A: "#005f73",
-  B: "#e9d8a6",
-  C: "#ae2012",
-  D: "#94d2bd",
-  E: "#ee9b00",
-  F: "#bb3e03",
-};
-type EmotionEmojiPalette = {
-  primary: string[];
-  accent: string[];
-  replaceable: string[];
-};
-
-const EMOTION_EMOJI_VARIANTS: Record<string, EmotionEmojiPalette> = {
-  joy: {
-    primary: ["😊", "😄", "🙂", "😌", "😁", "😎"],
-    accent: ["✨", "🎉", "💫", "🌟", "🥳", "🙌"],
-    replaceable: ["😊", "😄", "🙂", "😌", "😁", "😃", "😎", "✨", "🎉", "💫", "🌟", "🥳", "🙌"],
-  },
-  fear: {
-    primary: ["😟", "😰", "😬", "🫣", "😧", "😥"],
-    accent: ["⚠️", "💭", "🌀", "❗"],
-    replaceable: ["😟", "😰", "😬", "🫣", "😧", "😥", "⚠️", "💭", "🌀", "❗"],
-  },
-  anger: {
-    primary: ["😠", "😤", "🙄", "😒", "😑", "🤨"],
-    accent: ["🔥", "💥", "⚡", "‼️"],
-    replaceable: ["😠", "😤", "🙄", "😒", "😑", "🤨", "🔥", "💥", "⚡", "‼️"],
-  },
-  sadness: {
-    primary: ["😔", "😞", "🥲", "😢", "😕", "😪"],
-    accent: ["💧", "🌧️", "🫧", "🫠"],
-    replaceable: ["😔", "😞", "🥲", "😢", "😕", "😪", "💧", "🌧️", "🫧", "🫠"],
-  },
-  surprise: {
-    primary: ["😮", "😲", "🤯", "🫢", "😯", "😳"],
-    accent: ["✨", "⚡", "❗", "🪄"],
-    replaceable: ["😮", "😲", "🤯", "🫢", "😯", "😳", "✨", "⚡", "❗", "🪄"],
-  },
-  disgust: {
-    primary: ["😬", "🙃", "😑", "🤢", "😖", "😵"],
-    accent: ["🚫", "🛑", "⚠️", "🧪"],
-    replaceable: ["😬", "🙃", "😑", "🤢", "😖", "😵", "🚫", "🛑", "⚠️", "🧪"],
-  },
-};
-
-const EMOJI_REGEX = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu;
+import {
+  monoFont,
+  condensedFont,
+  FULL_AGENT_NAMES,
+  type GuideGradientPalette,
+  type GuideGradientColorKey,
+  DEFAULT_GUIDE_GRADIENT,
+  GUIDE_FRAME_FILL,
+  LIMITED_POOL_ACCENT_MAP,
+  EMOTION_EMOJI_VARIANTS,
+  EMOJI_REGEX,
+  WELCOME_TUTORIAL_STEPS,
+} from "./chatConstants";
 
 function hashSeed(value: string): number {
   let hash = 0;
@@ -108,6 +69,176 @@ function EmotionIcon({ emotion, size = 20 }: { emotion: string; size?: number })
     );
   }
   return <span className="leading-none" style={{ fontSize: size }}>{emoji}</span>;
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return `rgba(0,0,0,${alpha})`;
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function clampGuideCycle(value: number) {
+  return Math.min(10, Math.max(2.5, value));
+}
+
+function AnimatedGuideFrame({
+  active,
+  palette,
+  rounded = "rounded-[14px]",
+  inset = "inset-0",
+  fillColor = "rgba(255,255,255,0)",
+  pulse = false,
+}: {
+  active: boolean;
+  palette: GuideGradientPalette;
+  rounded?: string;
+  inset?: string;
+  fillColor?: string;
+  pulse?: boolean;
+}) {
+  if (!active) return null;
+  const frameStyle = {
+    border: "2px solid transparent",
+    backgroundImage: `linear-gradient(${fillColor}, ${fillColor}), linear-gradient(90deg, ${hexToRgba(palette.edge, 0.08)}, ${hexToRgba(palette.primary, 0.34)}, ${hexToRgba(palette.accent, 0.18)}, ${hexToRgba(palette.edge, 0.08)})`,
+    backgroundOrigin: "border-box",
+    backgroundClip: "padding-box, border-box",
+    backgroundSize: "100% 100%, 100% 100%",
+    boxShadow: `0 0 0 1px ${hexToRgba(palette.primary, 0.14)}, 0 8px 18px ${hexToRgba(palette.shadow, 0.05)}`,
+  } as const;
+
+  if (!pulse) {
+    return (
+      <div
+        aria-hidden="true"
+        className={`pointer-events-none absolute ${inset} ${rounded} z-0 overflow-hidden`}
+        style={frameStyle}
+      />
+    );
+  }
+
+  return (
+    <motion.div
+      aria-hidden="true"
+      className={`pointer-events-none absolute ${inset} ${rounded} z-0 overflow-hidden`}
+      animate={{
+        opacity: [0.74, 1, 0.74],
+        boxShadow: [
+          `0 0 0 1px ${hexToRgba(palette.primary, 0.14)}, 0 8px 18px ${hexToRgba(palette.shadow, 0.05)}`,
+          `0 0 0 1px ${hexToRgba(palette.primary, 0.3)}, 0 14px 28px ${hexToRgba(palette.shadow, 0.1)}, 0 0 0 1px ${hexToRgba(palette.accent, 0.08)}`,
+          `0 0 0 1px ${hexToRgba(palette.primary, 0.14)}, 0 8px 18px ${hexToRgba(palette.shadow, 0.05)}`,
+        ],
+      }}
+      transition={{ duration: clampGuideCycle(palette.speed), repeat: Infinity, ease: "easeInOut" }}
+      style={frameStyle}
+    />
+  );
+}
+
+function GuideGradientWidget({
+  palette,
+  onChange,
+  onSpeedChange,
+  onReset,
+}: {
+  palette: GuideGradientPalette;
+  onChange: (key: GuideGradientColorKey, value: string) => void;
+  onSpeedChange: (value: number) => void;
+  onReset: () => void;
+}) {
+  const rows: Array<{ key: GuideGradientColorKey; label: string }> = [
+    { key: "edge", label: "Edge" },
+    { key: "primary", label: "Primary" },
+    { key: "accent", label: "Accent" },
+    { key: "shadow", label: "Shadow" },
+  ];
+  const [drafts, setDrafts] = useState<GuideGradientPalette>(palette);
+  useEffect(() => {
+    setDrafts(palette);
+  }, [palette]);
+  const commitDraft = (key: keyof GuideGradientPalette) => {
+    if (key === "speed") return;
+    const value = drafts[key];
+    if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value)) {
+      onChange(key, value);
+    } else {
+      setDrafts((prev) => ({ ...prev, [key]: palette[key] }));
+    }
+  };
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="fixed right-4 bottom-6 z-[70] w-[230px] rounded-[14px] border border-black/10 bg-white/95 p-3 shadow-[0_14px_36px_rgba(0,0,0,0.12)] backdrop-blur-sm"
+    >
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <p className="text-[10px] uppercase tracking-widest text-black/80" style={monoFont}>Guide Tint</p>
+        <button
+          type="button"
+          onClick={onReset}
+          className="text-[10px] text-[var(--app-muted-text)] hover:text-black transition-colors"
+          style={monoFont}
+        >
+          reset
+        </button>
+      </div>
+      <div
+        className="h-8 rounded-[10px] mb-3"
+        style={{
+          backgroundImage: `linear-gradient(90deg, ${hexToRgba(palette.edge, 0.18)}, ${hexToRgba(palette.primary, 0.96)}, ${hexToRgba(palette.accent, 0.9)}, ${hexToRgba(palette.edge, 0.18)})`,
+          boxShadow: `0 8px 22px ${hexToRgba(palette.shadow, 0.12)}`,
+        }}
+      />
+      <div className="flex flex-col gap-2">
+        {rows.map(({ key, label }) => (
+          <div key={key} className="flex items-center gap-2">
+            <span className="w-12 text-[10px] text-[var(--app-muted-text)]" style={monoFont}>{label}</span>
+            <input
+              type="color"
+              value={palette[key]}
+              onChange={(e) => {
+                setDrafts((prev) => ({ ...prev, [key]: e.target.value }));
+                onChange(key, e.target.value);
+              }}
+              className="h-7 w-8 rounded-[6px] border border-black/10 p-0"
+            />
+            <input
+              type="text"
+              value={drafts[key]}
+              onChange={(e) => setDrafts((prev) => ({ ...prev, [key]: e.target.value }))}
+              onBlur={() => commitDraft(key)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitDraft(key);
+                }
+              }}
+              className="flex-1 rounded-[8px] border border-black/10 px-2 py-1 text-[10px] outline-none focus:border-black/30"
+              style={monoFont}
+              maxLength={7}
+            />
+          </div>
+        ))}
+        <div className="mt-1 pt-2 border-t border-black/8">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>Cycle</span>
+            <span className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>{clampGuideCycle(palette.speed).toFixed(1)}s</span>
+          </div>
+          <input
+            type="range"
+            min={2.5}
+            max={10}
+            step={0.1}
+            value={clampGuideCycle(palette.speed)}
+            onChange={(e) => onSpeedChange(parseFloat(e.target.value))}
+            className="w-full h-[3px] accent-black"
+          />
+        </div>
+      </div>
+    </motion.div>
+  );
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -453,7 +584,7 @@ function AgentEmotionPopover({
   );
 }
 
-function AgentMessage({
+const AgentMessage = React.memo(function AgentMessage({
   message,
   agentNames,
   agentBackendNames,
@@ -630,9 +761,9 @@ function AgentMessage({
       </div>
     </motion.div>
   );
-}
+});
 
-function UserMessage({ message, nickname }: { message: Message; nickname: string }) {
+const UserMessage = React.memo(function UserMessage({ message, nickname }: { message: Message; nickname: string }) {
   return (
     <motion.div
       layout
@@ -657,16 +788,16 @@ function UserMessage({ message, nickname }: { message: Message; nickname: string
       </div>
     </motion.div>
   );
-}
+});
 
 const MODE_LABELS: Record<ExperimentMode, string> = { full: "Full", limited: "Limited", single: "Single" };
 
-function ConvItem({ conv, isActive, onClick }: { conv: Conversation; isActive: boolean; onClick: () => void }) {
+const ConvItem = React.memo(function ConvItem({ conv, isActive, onSelectConv }: { conv: Conversation; isActive: boolean; onSelectConv: (id: string) => void }) {
   const mode = conv.settings?.mode ?? "full";
   const modeLabel = MODE_LABELS[mode];
   return (
     <button
-      onClick={onClick}
+      onClick={() => onSelectConv(conv.id)}
       className={`w-full text-left px-3 py-3 rounded-[8px] transition-colors flex flex-col gap-1 ${
         isActive ? "bg-black text-white" : "hover:bg-black/5"
       }`}
@@ -684,7 +815,7 @@ function ConvItem({ conv, isActive, onClick }: { conv: Conversation; isActive: b
       </span>
     </button>
   );
-}
+});
 
 // ─── Attach menu (+ button, upload file etc.) ───────────────────────────────────
 
@@ -802,7 +933,20 @@ function UserMenu({ nickname, onAccount, onHelp, onLogout, onClose }: {
 
 const CARD_LABELS = ["Basic", "Emotion", "Behavior"] as const;
 
-function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, onClose, onAnalyze, initialOpenCard = null }: {
+function CustomizerModal({
+  agentNames,
+  agentSettings,
+  experimentMode,
+  onSave,
+  onClose,
+  onAnalyze,
+  initialOpenCard = null,
+  tutorialStep = null,
+  onTutorialBack,
+  onTutorialNext,
+  onTutorialSkip,
+  guideGradientPalette,
+}: {
   agentNames: Record<AgentKey, string>;
   agentSettings: Record<AgentKey, AgentCustomSetting>;
   experimentMode: ExperimentMode;
@@ -810,6 +954,11 @@ function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, on
   onClose: () => void;
   onAnalyze: (key: AgentKey, v: number, a: number, c: number, text?: string) => Promise<{ emotion_tag: string; confidence: number } | null>;
   initialOpenCard?: AgentKey | null;
+  tutorialStep?: number | null;
+  onTutorialBack?: () => void;
+  onTutorialNext?: () => void;
+  onTutorialSkip?: () => void;
+  guideGradientPalette: GuideGradientPalette;
 }) {
   const [localNames, setLocalNames] = useState<Record<AgentKey, string>>({ ...agentNames });
   const [localSettings, setLocalSettings] = useState<Record<AgentKey, AgentCustomSetting>>({ A: { ...agentSettings.A }, B: { ...agentSettings.B }, C: { ...agentSettings.C } });
@@ -821,10 +970,14 @@ function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, on
   const canEditAdvanced = experimentMode === "full";
   const agentOptions = experimentMode === "single" ? [("A" as AgentKey)] : AGENT_KEYS;
   const totalCards = canEditAdvanced ? 3 : 1;
+  const tutorialCardIndex = tutorialStep !== null && tutorialStep >= 1 && tutorialStep <= 3 ? tutorialStep - 1 : null;
 
   useEffect(() => { if (initialOpenCard) setSelectedAgent(initialOpenCard); }, [initialOpenCard]);
   useEffect(() => { setPage(0); }, [selectedAgent]);
   useEffect(() => { analyze(selectedAgent); }, [selectedAgent]);
+  useEffect(() => {
+    if (tutorialCardIndex !== null) setPage(tutorialCardIndex);
+  }, [tutorialCardIndex]);
 
   const upd = (key: AgentKey, field: keyof AgentCustomSetting, value: unknown) =>
     setLocalSettings((prev) => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
@@ -958,6 +1111,49 @@ function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, on
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
         transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
         className="w-full max-w-[480px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        {tutorialCardIndex !== null && (
+          <div className="px-5 pt-5 pb-0">
+            <div className="relative rounded-[14px] bg-[#fffdfa] p-4 shadow-[0_10px_28px_rgba(52,94,148,0.12)]">
+              <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} />
+              <div className="relative z-10">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <p className="text-[11px] tracking-widest text-black uppercase" style={monoFont}>
+                    {tutorialStep}/{WELCOME_TUTORIAL_STEPS.length} · {WELCOME_TUTORIAL_STEPS[tutorialCardIndex].title}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onTutorialSkip}
+                    className="text-[10px] text-[var(--app-muted-text)] hover:text-black transition-colors"
+                    style={monoFont}
+                  >
+                    skip
+                  </button>
+                </div>
+                <p className="text-[12px] text-black/75 leading-relaxed" style={monoFont}>
+                  {WELCOME_TUTORIAL_STEPS[tutorialCardIndex].body}
+                </p>
+                <div className="flex items-center justify-between mt-4">
+                  <button
+                    type="button"
+                    onClick={onTutorialBack}
+                    className="px-3 py-2 rounded-[10px] border border-black/10 text-[11px] text-[var(--app-muted-text)] hover:text-black hover:border-black/20 transition-colors"
+                    style={monoFont}
+                  >
+                    back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onTutorialNext}
+                    className="px-3 py-2 rounded-[10px] bg-black text-white text-[11px] hover:bg-neutral-800 transition-colors"
+                    style={monoFont}
+                  >
+                    {tutorialStep === 3 ? "continue" : "next"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-between px-5 py-4 border-b border-black/8 flex-shrink-0">
           <div>
             <h2 className="text-[15px]" style={{ ...monoFont, fontWeight: 600 }}>Customize Agent</h2>
@@ -993,18 +1189,19 @@ function CustomizerModal({ agentNames, agentSettings, experimentMode, onSave, on
             </div>
             {totalCards > 1 && (
               <div className="flex items-center justify-between px-4 py-3 border-t border-black/8 bg-white/50">
-                <button onClick={goPrev} disabled={page === 0}
+                <button onClick={goPrev} disabled={page === 0 || tutorialCardIndex !== null}
                   className="p-2 rounded-[8px] hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
                 </button>
                 <div className="flex gap-1.5">
                   {Array.from({ length: totalCards }).map((_, i) => (
-                    <button key={i} onClick={() => setPage(i)}
-                      className={`w-2 h-2 rounded-full transition-all ${i === page ? "bg-black scale-125" : "bg-black/25 hover:bg-black/40"}`}
+                    <button key={i} onClick={() => tutorialCardIndex === null && setPage(i)}
+                      disabled={tutorialCardIndex !== null}
+                      className={`w-2 h-2 rounded-full transition-all ${i === page ? "bg-black scale-125" : "bg-black/25 hover:bg-black/40"} disabled:cursor-not-allowed`}
                       aria-label={`Card ${i + 1}`} />
                   ))}
                 </div>
-                <button onClick={goNext} disabled={page === totalCards - 1}
+                <button onClick={goNext} disabled={page === totalCards - 1 || tutorialCardIndex !== null}
                   className="p-2 rounded-[8px] hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
                 </button>
@@ -1167,11 +1364,18 @@ export default function Chat() {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
   const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full");
+  const [showWelcomeGuideChoice, setShowWelcomeGuideChoice] = useState(false);
+  const [welcomeTutorialStep, setWelcomeTutorialStep] = useState<number | null>(null);
+  const [welcomeGuideDismissed, setWelcomeGuideDismissed] = useState(false);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesContentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const welcomeAgentsRef = useRef<HTMLDivElement>(null);
+  const welcomeSceneRef = useRef<HTMLDivElement>(null);
+  const welcomePromptsRef = useRef<HTMLDivElement>(null);
+  const welcomeInputRef = useRef<HTMLDivElement>(null);
   const currentConv = conversations.find((c) => c.id === currentConvId) || null;
   const appearance = useAppearanceContext();
   const activeSceneId = selectedScene?.id || "scene1";
@@ -1199,6 +1403,17 @@ export default function Chat() {
     fetch(`${API_BASE}/health`).then((r) => { if (r.ok) setBackendOnline(true); }).catch(() => {});
     fetch("/scenes_config.json").then((r) => r.json()).then((d) => setScenes(d.scenes || [])).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (currentConv) {
+      setShowWelcomeGuideChoice(false);
+      setWelcomeTutorialStep(null);
+      return;
+    }
+    if (!welcomeGuideDismissed && welcomeTutorialStep === null) {
+      setShowWelcomeGuideChoice(true);
+    }
+  }, [currentConv, welcomeTutorialStep, welcomeGuideDismissed]);
 
   useEffect(() => {
     const c = messagesContainerRef.current;
@@ -1230,6 +1445,22 @@ export default function Chat() {
 
   useEffect(() => { agentNamesRef.current = agentNames; }, [agentNames]);
   useEffect(() => { agentSettingsRef.current = agentSettings; }, [agentSettings]);
+
+  useEffect(() => {
+    if (welcomeTutorialStep === null || currentConv) return;
+    const targetMap: Partial<Record<number, HTMLDivElement | null>> = {
+      0: welcomeAgentsRef.current,
+      4: welcomeSceneRef.current,
+      5: welcomePromptsRef.current,
+      6: welcomeInputRef.current,
+    };
+    const target = targetMap[welcomeTutorialStep];
+    if (!target) return;
+    const frame = window.requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [welcomeTutorialStep, currentConv]);
 
   // Queue processor: typing dot → message → next
   useEffect(() => {
@@ -1614,14 +1845,18 @@ export default function Chat() {
     setSidebarOpen(false);
     inputRef.current?.focus();
   };
-  const handleSelectConv = (id: string) => {
+  const handleSelectConv = useCallback((id: string) => {
     const conv = conversations.find((c) => c.id === id);
     setCurrentConvId(id);
     loadConvSettings(conv || null);
     setTypingKeys([]);
     setMsgQueue([]);
     setSidebarOpen(false);
-  };
+  }, [conversations, loadConvSettings]);
+  const handleOpenAdvancedAgent = useCallback((key: AgentKey) => {
+    setCustomizerInitialAgent(key);
+    setShowCustomizer(true);
+  }, []);
   const handleLogout = () => { localStorage.removeItem("agora_auth"); navigate("/"); };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } };
   const autoResizeInput = useCallback((el: HTMLTextAreaElement | null) => {
@@ -1652,6 +1887,72 @@ export default function Chat() {
     autoResizeInput(inputRef.current);
   }, [inputValue, autoResizeInput]);
 
+  const dismissWelcomeGuide = useCallback(() => {
+    setWelcomeGuideDismissed(true);
+    setShowWelcomeGuideChoice(false);
+    setWelcomeTutorialStep(null);
+    setShowCustomizer(false);
+    setCustomizerInitialAgent(null);
+  }, []);
+
+  const startWelcomeTutorial = useCallback(() => {
+    setShowWelcomeGuideChoice(false);
+    setWelcomeTutorialStep(0);
+  }, []);
+
+  const openCustomizerTutorial = useCallback((agent: AgentKey = "A") => {
+    setCustomizerInitialAgent(agent);
+    setShowCustomizer(true);
+    setShowWelcomeGuideChoice(false);
+    setWelcomeTutorialStep(1);
+  }, []);
+
+  const advanceWelcomeTutorial = useCallback(() => {
+    setWelcomeTutorialStep((prev) => {
+      if (prev === null) return prev;
+      if (prev === 0) {
+        setCustomizerInitialAgent("A");
+        setShowCustomizer(true);
+        return 1;
+      }
+      if (prev >= 1 && prev <= 2) {
+        return prev + 1;
+      }
+      if (prev === 3) {
+        setShowCustomizer(false);
+        setCustomizerInitialAgent(null);
+        return 4;
+      }
+      if (prev >= WELCOME_TUTORIAL_STEPS.length - 1) {
+        setWelcomeGuideDismissed(true);
+        return null;
+      }
+      return prev + 1;
+    });
+  }, []);
+
+  const rewindWelcomeTutorial = useCallback(() => {
+    setWelcomeTutorialStep((prev) => {
+      if (prev === null) return prev;
+      if (prev === 1) {
+        setShowCustomizer(false);
+        setCustomizerInitialAgent(null);
+        return 0;
+      }
+      return Math.max(0, prev - 1);
+    });
+  }, []);
+
+  const isWelcomeStepActive = (stepIndex: number) => welcomeTutorialStep === stepIndex;
+  const shouldGuideThroughCustomizer = experimentMode !== "limited";
+  const currentWelcomeTutorialBody =
+    welcomeTutorialStep === 0 && !shouldGuideThroughCustomizer
+      ? "In limited mode, choose exactly three preset agents first. After that, the guide moves on to the scene and prompts."
+      : welcomeTutorialStep !== null
+        ? WELCOME_TUTORIAL_STEPS[welcomeTutorialStep].body
+        : "";
+  const guideGradientPalette = DEFAULT_GUIDE_GRADIENT;
+
   return (
     <div className="h-screen bg-white flex overflow-hidden">
       <AnimatePresence>
@@ -1679,8 +1980,21 @@ export default function Chat() {
               agentNamesRef.current = { ...names };
               agentSettingsRef.current = { A: { ...settings.A }, B: { ...settings.B }, C: { ...settings.C } };
             }}
-            onClose={() => { setShowCustomizer(false); setCustomizerInitialAgent(null); }}
-            onAnalyze={analyzeEmotionForAgent} initialOpenCard={customizerInitialAgent} />
+            onClose={() => {
+              setShowCustomizer(false);
+              setCustomizerInitialAgent(null);
+              if (welcomeTutorialStep !== null && welcomeTutorialStep >= 1 && welcomeTutorialStep <= 3) {
+                setWelcomeTutorialStep(0);
+              }
+            }}
+            onAnalyze={analyzeEmotionForAgent}
+            initialOpenCard={customizerInitialAgent}
+            tutorialStep={welcomeTutorialStep}
+            onTutorialBack={rewindWelcomeTutorial}
+            onTutorialNext={advanceWelcomeTutorial}
+            onTutorialSkip={dismissWelcomeGuide}
+            guideGradientPalette={guideGradientPalette}
+          />
         )}
         {showSceneSelector && (
           <SceneSelectorModal scenes={scenes} selectedScene={selectedScene} onSelect={setSelectedScene} onClose={() => setShowSceneSelector(false)} />
@@ -1744,7 +2058,7 @@ export default function Chat() {
             <p className="text-center text-[var(--app-muted-text)] text-[11px] mt-8" style={monoFont}>no conversations yet</p>
           ) : (
             <div className="flex flex-col gap-1">
-              {conversations.map((conv) => <ConvItem key={conv.id} conv={conv} isActive={conv.id === currentConvId} onClick={() => handleSelectConv(conv.id)} />)}
+              {conversations.map((conv) => <ConvItem key={conv.id} conv={conv} isActive={conv.id === currentConvId} onSelectConv={handleSelectConv} />)}
             </div>
           )}
         </div>
@@ -1763,6 +2077,86 @@ export default function Chat() {
 
       {/* Main */}
       <div className="relative flex-1 flex flex-col min-w-0">
+      <AnimatePresence>
+          {!currentConv && (showWelcomeGuideChoice || (welcomeTutorialStep !== null && !(showCustomizer && welcomeTutorialStep >= 1 && welcomeTutorialStep <= 3))) && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="absolute top-[72px] right-4 sm:right-8 z-30 w-[300px] rounded-[14px] bg-[#fffdfa] p-4 shadow-[0_18px_40px_rgba(0,0,0,0.12)]"
+            >
+              <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} />
+              <div className="relative z-10">
+              {showWelcomeGuideChoice ? (
+                <>
+                  <p className="text-[11px] tracking-widest text-black uppercase mb-2" style={monoFont}>First time here?</p>
+                  <p className="text-[12px] text-black/75 leading-relaxed" style={monoFont}>
+                    I can show a quick walkthrough for agents, scene, prompts, and chat controls. You can change modes later from the side menu.
+                  </p>
+                  <div className="flex items-center justify-end gap-2 mt-4">
+                    <button
+                      type="button"
+                      onClick={dismissWelcomeGuide}
+                      className="px-3 py-2 rounded-[10px] border border-black/10 text-[11px] text-[var(--app-muted-text)] hover:text-black hover:border-black/20 transition-colors"
+                      style={monoFont}
+                    >
+                      skip
+                    </button>
+                    <button
+                      type="button"
+                      onClick={startWelcomeTutorial}
+                      className="px-3 py-2 rounded-[10px] bg-black text-white text-[11px] hover:bg-neutral-800 transition-colors"
+                      style={monoFont}
+                    >
+                      ok
+                    </button>
+                  </div>
+                </>
+              ) : welcomeTutorialStep !== null ? (
+                <>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <p className="text-[11px] tracking-widest text-black uppercase" style={monoFont}>
+                      {welcomeTutorialStep + 1}/{WELCOME_TUTORIAL_STEPS.length} · {WELCOME_TUTORIAL_STEPS[welcomeTutorialStep].title}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={dismissWelcomeGuide}
+                      className="text-[10px] text-[var(--app-muted-text)] hover:text-black transition-colors"
+                      style={monoFont}
+                    >
+                      skip
+                    </button>
+                  </div>
+                  <p className="text-[12px] text-black/75 leading-relaxed" style={monoFont}>
+                    {currentWelcomeTutorialBody}
+                  </p>
+                  <div className="flex items-center justify-between mt-4">
+                    <button
+                      type="button"
+                      onClick={rewindWelcomeTutorial}
+                      disabled={welcomeTutorialStep === 0}
+                      className="px-3 py-2 rounded-[10px] border border-black/10 text-[11px] text-[var(--app-muted-text)] hover:text-black hover:border-black/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      style={monoFont}
+                    >
+                      back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={welcomeTutorialStep === 0 && shouldGuideThroughCustomizer ? () => openCustomizerTutorial("A") : advanceWelcomeTutorial}
+                      className="px-3 py-2 rounded-[10px] bg-black text-white text-[11px] hover:bg-neutral-800 transition-colors"
+                      style={monoFont}
+                    >
+                      {welcomeTutorialStep === 0 && shouldGuideThroughCustomizer ? "open" : welcomeTutorialStep === WELCOME_TUTORIAL_STEPS.length - 1 ? "done" : "next"}
+                    </button>
+                  </div>
+                </>
+              ) : null}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <header className="h-[56px] border-b border-black/8 flex items-center px-4 gap-4 flex-shrink-0">
           <button className="p-1.5 hover:bg-black/5 rounded-md transition-colors" onClick={() => setSidebarOpen(true)}>
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 4.5H16M2 9H16M2 13.5H16" stroke="black" strokeWidth="1.5" strokeLinecap="round"/></svg>
@@ -1813,119 +2207,148 @@ export default function Chat() {
                   </p>
                 )}
               </div>
-              <div className="w-full">
-                <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>AGENTS</p>
-                {experimentMode === "limited" ? (
-                  <>
+              <div
+                ref={welcomeAgentsRef}
+                className="relative isolate w-full transition-all duration-200"
+              >
+                <AnimatedGuideFrame active={isWelcomeStepActive(0)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
+                <div className="relative z-10 px-2 py-2">
+                  <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>AGENTS</p>
+                  {experimentMode === "limited" ? (
+                    <>
+                      <motion.div
+                        key={`agent-grid-${experimentMode}`}
+                        className="grid gap-3 w-full grid-cols-2"
+                        initial="hidden"
+                        animate="visible"
+                        variants={{ visible: { transition: { staggerChildren: 0.06, delayChildren: 0.08 } } }}
+                      >
+                        {LIMITED_AGENT_POOL.map((profile) => {
+                          const selected = limitedSelectedAgents.includes(profile.key);
+                          const atLimit = limitedSelectedAgents.length >= 3 && !selected;
+                          return (
+                            <motion.button
+                              key={`${experimentMode}-${profile.key}`}
+                              variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } } }}
+                              whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
+                              whileTap={{ scale: 0.98 }}
+                              onClick={() => {
+                                if (isWelcomeStepActive(0) && shouldGuideThroughCustomizer) {
+                                  openCustomizerTutorial("A");
+                                  return;
+                                }
+                                setLimitedSelectedAgents((prev) => {
+                                  const has = prev.includes(profile.key);
+                                  if (has) return prev.filter((k) => k !== profile.key);
+                                  if (prev.length >= 3) return prev;
+                                  return [...prev, profile.key];
+                                });
+                              }}
+                              className={`border rounded-[10px] px-3 py-3 text-left transition-colors group ${selected ? "border-black bg-black/[0.03]" : "border-black/8"} ${atLimit ? "opacity-50" : ""}`}
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0 mb-1">
+                                <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: LIMITED_POOL_ACCENT_MAP[profile.key] || "#000000" }} />
+                                <span className="text-[10px] tracking-widest text-black truncate" style={monoFont}>{profile.defaultName}</span>
+                              </div>
+                              <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{profile.roleDescription}</p>
+                            </motion.button>
+                          );
+                        })}
+                      </motion.div>
+                      <p className="text-[10px] text-center text-[var(--app-muted-text)] mt-2" style={monoFont}>Selected {limitedSelectedAgents.length}/3</p>
+                    </>
+                  ) : (
                     <motion.div
                       key={`agent-grid-${experimentMode}`}
-                      className="grid gap-3 w-full grid-cols-2"
+                      className={`grid gap-3 w-full ${experimentMode === "single" ? "grid-cols-1" : "grid-cols-2"}`}
                       initial="hidden"
                       animate="visible"
-                      variants={{ visible: { transition: { staggerChildren: 0.06, delayChildren: 0.08 } } }}
+                      variants={{ visible: { transition: { staggerChildren: 0.07, delayChildren: 0.1 } } }}
                     >
-                      {LIMITED_AGENT_POOL.map((profile) => {
-                        const selected = limitedSelectedAgents.includes(profile.key);
-                        const atLimit = limitedSelectedAgents.length >= 3 && !selected;
-                        return (
-                          <motion.button
-                            key={`${experimentMode}-${profile.key}`}
-                            variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } } }}
-                            whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => {
-                              setLimitedSelectedAgents((prev) => {
-                                const has = prev.includes(profile.key);
-                                if (has) return prev.filter((k) => k !== profile.key);
-                                if (prev.length >= 3) return prev;
-                                return [...prev, profile.key];
-                              });
-                            }}
-                            className={`border rounded-[10px] px-3 py-3 text-left transition-colors group ${selected ? "border-black bg-black/[0.03]" : "border-black/8"} ${atLimit ? "opacity-50" : ""}`}
-                          >
-                            <div className="flex items-center gap-1.5 min-w-0 mb-1">
-                              <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: LIMITED_POOL_ACCENT_MAP[profile.key] || "#000000" }} />
-                              <span className="text-[10px] tracking-widest text-black truncate" style={monoFont}>{profile.defaultName}</span>
-                            </div>
-                            <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{profile.roleDescription}</p>
-                          </motion.button>
-                        );
-                      })}
+                      {(experimentMode === "single" ? ["A"] : AGENT_KEYS).map((key) => (
+                        <motion.button
+                          key={`${experimentMode}-${key}`}
+                          variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } } }}
+                          whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={() => {
+                            if (isWelcomeStepActive(0)) {
+                              openCustomizerTutorial(key as AgentKey);
+                              return;
+                            }
+                            setCustomizerInitialAgent(key as AgentKey);
+                            setShowCustomizer(true);
+                          }}
+                          className="border border-black/8 rounded-[10px] px-3 py-3 text-left transition-colors group"
+                        >
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: agentSettings[key as AgentKey]?.accentColor || DEFAULT_AGENT_COLORS[key as AgentKey] }} />
+                            <span className="text-[10px] tracking-widest text-black" style={monoFont}>{agentNames[key as AgentKey]}</span>
+                          </div>
+                          <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{agentSettings[key as AgentKey]?.roleDescription || DEFAULT_AGENT_ROLES[key as AgentKey]}</p>
+                          <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>click to customize →</p>
+                        </motion.button>
+                      ))}
+                      {experimentMode !== "single" && (
+                        <motion.button
+                          variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } } }}
+                          whileHover={{ y: -2 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={() => { setCustomizerInitialAgent(null); setShowCustomizer(true); }}
+                          className="border border-dashed border-black/15 rounded-[10px] px-3 py-3 flex flex-col items-center justify-center gap-1 hover:border-black/40 hover:bg-black/2 transition-colors group min-h-[72px]"
+                        >
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="opacity-20 group-hover:opacity-50 transition-opacity">
+                            <path d="M8 1V15M1 8H15" stroke="black" strokeWidth="1.5" strokeLinecap="round"/>
+                          </svg>
+                          <span className="text-[9px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>customize</span>
+                        </motion.button>
+                      )}
                     </motion.div>
-                    <p className="text-[10px] text-center text-[var(--app-muted-text)] mt-2" style={monoFont}>Selected {limitedSelectedAgents.length}/3</p>
-                  </>
-                ) : (
-                  <motion.div
-                    key={`agent-grid-${experimentMode}`}
-                    className={`grid gap-3 w-full ${experimentMode === "single" ? "grid-cols-1" : "grid-cols-2"}`}
-                    initial="hidden"
-                    animate="visible"
-                    variants={{ visible: { transition: { staggerChildren: 0.07, delayChildren: 0.1 } } }}
+                  )}
+                </div>
+              </div>
+              <div
+                ref={welcomeSceneRef}
+                className="relative isolate w-full transition-all duration-200"
+              >
+                <AnimatedGuideFrame active={isWelcomeStepActive(4)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
+                <div className="relative z-10 px-2 py-2">
+                  <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>SCENE</p>
+                  <motion.button
+                    whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setShowSceneSelector(true)}
+                    className="w-full text-left px-4 py-3 border border-black/8 rounded-[10px] transition-colors group"
                   >
-                    {(experimentMode === "single" ? ["A"] : AGENT_KEYS).map((key) => (
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: selectedScene?.color || "#000000" }} />
+                      <span className="text-[10px] tracking-widest text-black" style={monoFont}>{selectedScene?.title || scenes[0]?.title || "Laptop Purchase Advisory"}</span>
+                    </div>
+                    <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{selectedScene?.description || scenes[0]?.description || "Professional advice for Black Friday laptop shopping. Three AI agents analyze from different perspectives."}</p>
+                    <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>click to customize →</p>
+                  </motion.button>
+                </div>
+              </div>
+              <div
+                ref={welcomePromptsRef}
+                className="relative isolate w-full transition-all duration-200"
+              >
+                <AnimatedGuideFrame active={isWelcomeStepActive(5)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
+                <div className="relative z-10 px-2 py-2">
+                  <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>SUGGESTED PROMPTS</p>
+                  <div className="flex flex-col gap-2">
+                    {suggestedPrompts.map((prompt, i) => (
                       <motion.button
-                        key={`${experimentMode}-${key}`}
-                        variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } } }}
+                        key={i}
                         whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                         whileTap={{ scale: 0.98 }}
-                        onClick={() => { setCustomizerInitialAgent(key as AgentKey); setShowCustomizer(true); }}
-                        className="border border-black/8 rounded-[10px] px-3 py-3 text-left transition-colors group"
+                        onClick={() => { setInputValue(prompt); inputRef.current?.focus(); }}
+                        className="text-left px-4 py-3 border border-black/8 rounded-[10px] hover:border-black hover:bg-black/[0.03] transition-colors group"
                       >
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: agentSettings[key as AgentKey]?.accentColor || DEFAULT_AGENT_COLORS[key as AgentKey] }} />
-                          <span className="text-[10px] tracking-widest text-black" style={monoFont}>{agentNames[key as AgentKey]}</span>
-                        </div>
-                        <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{agentSettings[key as AgentKey]?.roleDescription || DEFAULT_AGENT_ROLES[key as AgentKey]}</p>
-                        <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>click to customize →</p>
+                        <span className="text-[12px] text-[var(--app-muted-text)] group-hover:text-black/80 transition-colors" style={monoFont}>{prompt}</span>
                       </motion.button>
                     ))}
-                    {experimentMode !== "single" && (
-                      <motion.button
-                        variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } } }}
-                        whileHover={{ y: -2 }}
-                        whileTap={{ scale: 0.98 }}
-                        onClick={() => { setCustomizerInitialAgent(null); setShowCustomizer(true); }}
-                        className="border border-dashed border-black/15 rounded-[10px] px-3 py-3 flex flex-col items-center justify-center gap-1 hover:border-black/40 hover:bg-black/2 transition-colors group min-h-[72px]"
-                      >
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="opacity-20 group-hover:opacity-50 transition-opacity">
-                          <path d="M8 1V15M1 8H15" stroke="black" strokeWidth="1.5" strokeLinecap="round"/>
-                        </svg>
-                        <span className="text-[9px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>customize</span>
-                      </motion.button>
-                    )}
-                  </motion.div>
-                )}
-              </div>
-              <div className="w-full">
-                <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>SCENE</p>
-                <motion.button
-                  whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setShowSceneSelector(true)}
-                  className="w-full text-left px-4 py-3 border border-black/8 rounded-[10px] transition-colors group"
-                >
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: selectedScene?.color || "#000000" }} />
-                    <span className="text-[10px] tracking-widest text-black" style={monoFont}>{selectedScene?.title || scenes[0]?.title || "Laptop Purchase Advisory"}</span>
                   </div>
-                  <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{selectedScene?.description || scenes[0]?.description || "Professional advice for Black Friday laptop shopping. Three AI agents analyze from different perspectives."}</p>
-                  <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>click to customize →</p>
-                </motion.button>
-              </div>
-              <div className="w-full">
-                <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>SUGGESTED PROMPTS</p>
-                <div className="flex flex-col gap-2">
-                  {suggestedPrompts.map((prompt, i) => (
-                    <motion.button
-                      key={i}
-                      whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={() => { setInputValue(prompt); inputRef.current?.focus(); }}
-                      className="text-left px-4 py-3 border border-black/8 rounded-[10px] hover:border-black hover:bg-black/[0.03] transition-colors group"
-                    >
-                      <span className="text-[12px] text-[var(--app-muted-text)] group-hover:text-black/80 transition-colors" style={monoFont}>{prompt}</span>
-                    </motion.button>
-                  ))}
                 </div>
               </div>
             </motion.div>
@@ -1968,7 +2391,7 @@ export default function Chat() {
                       getPopoverSafeRect={getPopoverSafeRect}
                       compactRepeatedIntro={compactRepeatedIntro}
                       emojiRepeatIndex={emojiRepeatIndex}
-                      onOpenAdvancedAgent={(key) => { setCustomizerInitialAgent(key); setShowCustomizer(true); }}
+                      onOpenAdvancedAgent={handleOpenAdvancedAgent}
                       onQuickEmotionAdjust={handleQuickEmotionAdjust}
                       onQuickAdjustCommit={commitQuickAdjustChanges}
                     />
@@ -1982,7 +2405,9 @@ export default function Chat() {
         </div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-[148px] z-20 px-4 sm:px-8">
-          <div className={`mx-auto ${currentConv ? "max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px]" : "max-w-[440px] sm:max-w-[560px] lg:max-w-[680px] xl:max-w-[800px]"}`}>
+          <div
+            className={`mx-auto transition-all duration-200 ${currentConv ? "max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px]" : "max-w-[440px] sm:max-w-[560px] lg:max-w-[680px] xl:max-w-[800px]"}`}
+          >
             <AnimatePresence initial={false} mode="wait">
               {currentConv && typingKeys[0] && (
                 <TypingDots
@@ -2000,7 +2425,19 @@ export default function Chat() {
             {sessionCreateError && (
               <p className="text-center text-[11px] text-amber-600 bg-amber-50 border border-amber-200 px-3 py-2 rounded-[8px] mb-3" style={monoFont}>{sessionCreateError}</p>
             )}
-            <div className="flex gap-2 items-end min-h-[48px]">
+            <div
+              ref={!currentConv ? welcomeInputRef : undefined}
+              className="relative"
+            >
+              <AnimatedGuideFrame
+                active={!currentConv && isWelcomeStepActive(6)}
+                palette={guideGradientPalette}
+                rounded="rounded-[16px]"
+                inset="-inset-[3px]"
+                fillColor={GUIDE_FRAME_FILL}
+                pulse
+              />
+              <div className="relative z-10 flex gap-2 items-end min-h-[48px]">
               <div className="relative flex">
                 <motion.button ref={attachBtnRef} onClick={() => setAttachMenuOpen((v) => !v)} type="button"
                   whileTap={{ scale: 0.95 }}
@@ -2047,6 +2484,7 @@ export default function Chat() {
                     onReloadHistory={handleLoadHistory} onExportLog={handleExportLog} hasRoomId={!!currentConv?.roomId}
                     showFontColor={showFontColorInSettings} onToggleFontColor={() => setShowFontColorInSettings((v) => !v)} />
                 </AnimatePresence>
+              </div>
               </div>
             </div>
             <p className="text-center text-[10px] text-[var(--app-muted-text)] mt-2" style={monoFont}>shift+enter for new line · enter to send</p>

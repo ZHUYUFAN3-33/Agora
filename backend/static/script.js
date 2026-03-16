@@ -639,10 +639,10 @@ function hideTypingIndicator() {
     }
 }
 
-// Enter key to send message
-messageInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && !sendButton.disabled) {
-        // Animate button press
+// Cmd+Enter (Mac) or Alt+Enter (Win) to send - avoids accidental send when confirming IME input
+messageInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.altKey) && !sendButton.disabled) {
+        e.preventDefault();
         anime({
             targets: sendButton,
             scale: [1, 0.95, 1],

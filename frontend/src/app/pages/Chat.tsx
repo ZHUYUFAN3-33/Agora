@@ -1859,7 +1859,7 @@ export default function Chat() {
     setShowCustomizer(true);
   }, []);
   const handleLogout = () => { localStorage.removeItem("agora_auth"); navigate("/"); };
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } };
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { if (e.key === "Enter" && (e.metaKey || e.altKey)) { e.preventDefault(); handleSend(); } };
   const autoResizeInput = useCallback((el: HTMLTextAreaElement | null) => {
     if (!el) return;
     const maxHeight = 120;
@@ -2494,7 +2494,7 @@ export default function Chat() {
               </div>
               </div>
             </div>
-            <p className="text-center text-[10px] text-[var(--app-muted-text)] mt-2" style={monoFont}>shift+enter for new line · enter to send</p>
+            <p className="text-center text-[10px] text-[var(--app-muted-text)] mt-2" style={monoFont}>Enter for new line · ⌘+Enter / Alt+Enter to send</p>
           </div>
         </div>
       </div>

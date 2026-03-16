@@ -2252,6 +2252,12 @@ export default function Chat() {
                                 <span className="text-[10px] tracking-widest text-black truncate" style={monoFont}>{profile.defaultName}</span>
                               </div>
                               <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{profile.roleDescription}</p>
+                              <p
+                                className="mt-1.5 text-[8px] leading-relaxed text-[var(--app-muted-text)]/80 group-hover:text-black/55 transition-colors"
+                                style={monoFont}
+                              >
+                                {profile.behaviorSummary}
+                              </p>
                             </motion.button>
                           );
                         })}

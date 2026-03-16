@@ -11,15 +11,46 @@ export interface LimitedAgentProfile {
   key: AgentPoolKey;
   defaultName: string;
   roleDescription: string;
+  behaviorSummary: string;
 }
 
 export const LIMITED_AGENT_POOL: LimitedAgentProfile[] = [
-  { key: "A", defaultName: "Mia", roleDescription: "Opportunity Spotter" },
-  { key: "B", defaultName: "Ethan", roleDescription: "Evidence Analyzer" },
-  { key: "C", defaultName: "Noah", roleDescription: "Constraint Checker" },
-  { key: "D", defaultName: "Olivia", roleDescription: "Scope Keeper" },
-  { key: "E", defaultName: "Grace", roleDescription: "Policy Enforcer" },
-  { key: "F", defaultName: "Liam", roleDescription: "System Protector" },
+  {
+    key: "A",
+    defaultName: "Mia",
+    roleDescription: "Opportunity Spotter",
+    behaviorSummary: "Bright, upbeat, and quick to spot upside.",
+  },
+  {
+    key: "B",
+    defaultName: "Ethan",
+    roleDescription: "Evidence Analyzer",
+    behaviorSummary: "Cool-headed, skeptical, and hungry for proof.",
+  },
+  {
+    key: "C",
+    defaultName: "Noah",
+    roleDescription: "Constraint Checker",
+    behaviorSummary: "Cautious, tense, and quick to flag risk.",
+  },
+  {
+    key: "D",
+    defaultName: "Olivia",
+    roleDescription: "Scope Keeper",
+    behaviorSummary: "Calm but firm when the group starts drifting.",
+  },
+  {
+    key: "E",
+    defaultName: "Grace",
+    roleDescription: "Policy Enforcer",
+    behaviorSummary: "Strict, uneasy with blur, and checks the rules.",
+  },
+  {
+    key: "F",
+    defaultName: "Liam",
+    roleDescription: "System Protector",
+    behaviorSummary: "Guarded, steady, and protective of stability.",
+  },
 ];
 
 export const DEFAULT_AGENT_NAMES: Record<AgentKey, string> = {

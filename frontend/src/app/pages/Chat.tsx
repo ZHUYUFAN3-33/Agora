@@ -29,13 +29,13 @@ import {
   EMOTION_EXAMPLES,
   EMOTION_IMAGES,
   defaultSetting,
+  getEmotionDecisionSummary,
 } from "../data/agents";
 import {
   monoFont,
   condensedFont,
   FULL_AGENT_NAMES,
   type GuideGradientPalette,
-  type GuideGradientColorKey,
   DEFAULT_GUIDE_GRADIENT,
   GUIDE_FRAME_FILL,
   LIMITED_POOL_ACCENT_MAP,
@@ -101,12 +101,8 @@ function AnimatedGuideFrame({
 }) {
   if (!active) return null;
   const frameStyle = {
-    border: "2px solid transparent",
-    backgroundImage: `linear-gradient(${fillColor}, ${fillColor}), linear-gradient(90deg, ${hexToRgba(palette.edge, 0.08)}, ${hexToRgba(palette.primary, 0.34)}, ${hexToRgba(palette.accent, 0.18)}, ${hexToRgba(palette.edge, 0.08)})`,
-    backgroundOrigin: "border-box",
-    backgroundClip: "padding-box, border-box",
-    backgroundSize: "100% 100%, 100% 100%",
-    boxShadow: `0 0 0 1px ${hexToRgba(palette.primary, 0.14)}, 0 8px 18px ${hexToRgba(palette.shadow, 0.05)}`,
+    border: "2px solid rgba(0,0,0,0.08)",
+    background: fillColor,
   } as const;
 
   if (!pulse) {
@@ -123,121 +119,13 @@ function AnimatedGuideFrame({
     <motion.div
       aria-hidden="true"
       className={`pointer-events-none absolute ${inset} ${rounded} z-0 overflow-hidden`}
+      initial={{ borderColor: "rgba(0,0,0,0.06)" }}
       animate={{
-        opacity: [0.74, 1, 0.74],
-        boxShadow: [
-          `0 0 0 1px ${hexToRgba(palette.primary, 0.14)}, 0 8px 18px ${hexToRgba(palette.shadow, 0.05)}`,
-          `0 0 0 1px ${hexToRgba(palette.primary, 0.3)}, 0 14px 28px ${hexToRgba(palette.shadow, 0.1)}, 0 0 0 1px ${hexToRgba(palette.accent, 0.08)}`,
-          `0 0 0 1px ${hexToRgba(palette.primary, 0.14)}, 0 8px 18px ${hexToRgba(palette.shadow, 0.05)}`,
-        ],
+        borderColor: ["rgba(0,0,0,0.06)", "rgba(0,0,0,0.28)", "rgba(0,0,0,0.06)"],
       }}
-      transition={{ duration: clampGuideCycle(palette.speed), repeat: Infinity, ease: "easeInOut" }}
-      style={frameStyle}
+      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+      style={{ background: fillColor, border: "2px solid" }}
     />
-  );
-}
-
-function GuideGradientWidget({
-  palette,
-  onChange,
-  onSpeedChange,
-  onReset,
-}: {
-  palette: GuideGradientPalette;
-  onChange: (key: GuideGradientColorKey, value: string) => void;
-  onSpeedChange: (value: number) => void;
-  onReset: () => void;
-}) {
-  const rows: Array<{ key: GuideGradientColorKey; label: string }> = [
-    { key: "edge", label: "Edge" },
-    { key: "primary", label: "Primary" },
-    { key: "accent", label: "Accent" },
-    { key: "shadow", label: "Shadow" },
-  ];
-  const [drafts, setDrafts] = useState<GuideGradientPalette>(palette);
-  useEffect(() => {
-    setDrafts(palette);
-  }, [palette]);
-  const commitDraft = (key: keyof GuideGradientPalette) => {
-    if (key === "speed") return;
-    const value = drafts[key];
-    if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value)) {
-      onChange(key, value);
-    } else {
-      setDrafts((prev) => ({ ...prev, [key]: palette[key] }));
-    }
-  };
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="fixed right-4 bottom-6 z-[70] w-[230px] rounded-[14px] border border-black/10 bg-white/95 p-3 shadow-[0_14px_36px_rgba(0,0,0,0.12)] backdrop-blur-sm"
-    >
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <p className="text-[10px] uppercase tracking-widest text-black/80" style={monoFont}>Guide Tint</p>
-        <button
-          type="button"
-          onClick={onReset}
-          className="text-[10px] text-[var(--app-muted-text)] hover:text-black transition-colors"
-          style={monoFont}
-        >
-          reset
-        </button>
-      </div>
-      <div
-        className="h-8 rounded-[10px] mb-3"
-        style={{
-          backgroundImage: `linear-gradient(90deg, ${hexToRgba(palette.edge, 0.18)}, ${hexToRgba(palette.primary, 0.96)}, ${hexToRgba(palette.accent, 0.9)}, ${hexToRgba(palette.edge, 0.18)})`,
-          boxShadow: `0 8px 22px ${hexToRgba(palette.shadow, 0.12)}`,
-        }}
-      />
-      <div className="flex flex-col gap-2">
-        {rows.map(({ key, label }) => (
-          <div key={key} className="flex items-center gap-2">
-            <span className="w-12 text-[10px] text-[var(--app-muted-text)]" style={monoFont}>{label}</span>
-            <input
-              type="color"
-              value={palette[key]}
-              onChange={(e) => {
-                setDrafts((prev) => ({ ...prev, [key]: e.target.value }));
-                onChange(key, e.target.value);
-              }}
-              className="h-7 w-8 rounded-[6px] border border-black/10 p-0"
-            />
-            <input
-              type="text"
-              value={drafts[key]}
-              onChange={(e) => setDrafts((prev) => ({ ...prev, [key]: e.target.value }))}
-              onBlur={() => commitDraft(key)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  commitDraft(key);
-                }
-              }}
-              className="flex-1 rounded-[8px] border border-black/10 px-2 py-1 text-[10px] outline-none focus:border-black/30"
-              style={monoFont}
-              maxLength={7}
-            />
-          </div>
-        ))}
-        <div className="mt-1 pt-2 border-t border-black/8">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>Cycle</span>
-            <span className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>{clampGuideCycle(palette.speed).toFixed(1)}s</span>
-          </div>
-          <input
-            type="range"
-            min={2.5}
-            max={10}
-            step={0.1}
-            value={clampGuideCycle(palette.speed)}
-            onChange={(e) => onSpeedChange(parseFloat(e.target.value))}
-            className="w-full h-[3px] accent-black"
-          />
-        </div>
-      </div>
-    </motion.div>
   );
 }
 
@@ -478,20 +366,21 @@ function AgentEmotionPopover({
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: placeAbove ? -4 : 4, scale: 0.98 }}
           transition={{ duration: 0.16 }}
-          className="relative z-30 w-[252px] rounded-[14px] border border-black/20 bg-[#fffdfa] px-3 py-3 shadow-[0_14px_36px_rgba(0,0,0,0.16)]"
+          className="relative z-30 w-[252px] rounded-[14px] border border-foreground/[0.08] bg-[var(--background)] px-3 py-3"
+          style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.06)" }}
         >
-          <div className={`absolute left-5 h-3.5 w-3.5 rotate-45 border-black/20 bg-[#fffdfa] ${placeAbove ? "bottom-[-7px] border-b border-r" : "top-[-7px] border-l border-t"}`} />
+          <div className={`absolute left-5 h-3.5 w-3.5 rotate-45 border-foreground/[0.08] bg-[var(--background)] ${placeAbove ? "bottom-[-7px] border-b border-r" : "top-[-7px] border-l border-t"}`} />
           <div className="mb-3 px-0.5">
-            <span className="text-[10px] tracking-widest text-black/85 uppercase" style={monoFont}>Emotion</span>
+            <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Emotion</span>
           </div>
-          <div className="rounded-[12px] border border-black/10 bg-black/[0.02] px-3 py-3">
+          <div className="rounded-[12px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-3">
             <div className="mb-3">
               <div
                 className="flex items-center justify-between gap-2 rounded-[10px] border px-2.5 py-2 text-[10px]"
                 style={{
                   ...monoFont,
-                  borderColor: emotionColor + "66",
-                  background: emotionColor + "22",
+                  borderColor: emotionColor + "44",
+                  background: emotionColor + "12",
                   color: emotionColor,
                 }}
               >
@@ -501,7 +390,7 @@ function AgentEmotionPopover({
                 </div>
               </div>
             </div>
-            <div className="border-t border-black/8 pt-3">
+            <div className="border-t border-foreground/[0.06] pt-3">
               <div className="flex flex-col gap-2">
                 {([
                   { label: "Valence", field: "valence" as const, value: settings.valence },
@@ -509,7 +398,7 @@ function AgentEmotionPopover({
                   { label: "Control", field: "control" as const, value: settings.control },
                 ] as const).map(({ label, field, value }) => (
                   <div key={field} className="flex min-w-0 items-center gap-2 rounded-[8px] px-1 py-0.5">
-                    <span className="w-[54px] flex-shrink-0 text-[10px] text-black/80" style={monoFont}>{label}</span>
+                    <span className="w-[54px] flex-shrink-0 text-[10px] text-foreground/80" style={monoFont}>{label}</span>
                     <input
                       type="range"
                       min={0}
@@ -520,18 +409,18 @@ function AgentEmotionPopover({
                       onTouchEnd={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
                       className="min-w-0 flex-1 h-[4px] accent-black"
                     />
-                    <span className="w-[34px] flex-shrink-0 text-right text-[10px] text-black/80" style={monoFont}>{value.toFixed(2)}</span>
+                    <span className="w-[34px] flex-shrink-0 text-right text-[10px] text-foreground/80" style={monoFont}>{value.toFixed(2)}</span>
                   </div>
                 ))}
               </div>
             </div>
-            <div className="mt-3 border-t border-black/8 pt-3">
-              <div className="mb-1 text-[9px] uppercase tracking-widest text-black/55" style={monoFont}>Decision</div>
+            <div className="mt-3 border-t border-foreground/[0.06] pt-3">
+              <div className="mb-1 text-[9px] uppercase tracking-widest text-foreground/55" style={monoFont}>Decision</div>
               <div className="flex items-center gap-2 px-1 py-1">
                 <button
                   type="button"
                   onClick={() => cycleDecision(-1)}
-                  className="flex h-7 w-7 items-center justify-center rounded-[7px] text-black/70 transition-colors hover:bg-black/[0.03] hover:text-black"
+                  className="flex h-7 w-7 items-center justify-center rounded-[7px] text-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
                   aria-label="Previous decision style"
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -539,12 +428,12 @@ function AgentEmotionPopover({
                   </svg>
                 </button>
                 <div className="min-w-0 flex-1 text-center">
-                  <div className="text-[11px] text-black" style={monoFont}>{settings.decisionBlock}</div>
+                  <div className="text-[11px] text-foreground" style={monoFont}>{settings.decisionBlock}</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => cycleDecision(1)}
-                  className="flex h-7 w-7 items-center justify-center rounded-[7px] text-black/70 transition-colors hover:bg-black/[0.03] hover:text-black"
+                  className="flex h-7 w-7 items-center justify-center rounded-[7px] text-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
                   aria-label="Next decision style"
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -554,7 +443,7 @@ function AgentEmotionPopover({
               </div>
             </div>
           </div>
-          <div className="mt-3 flex items-center justify-between gap-2 border-t border-black/10 pt-2.5">
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-foreground/[0.06] pt-2.5">
             <button
               onClick={() => onAdjustEmotion(agentKey, {
                 emotionOn: true,
@@ -564,14 +453,14 @@ function AgentEmotionPopover({
                 control: emotionDefaults.control,
                 emotionText: "",
               }, false)}
-              className="text-[10px] text-black/65 transition-colors hover:text-black"
+              className="text-[10px] text-foreground/65 transition-colors hover:text-foreground"
               style={monoFont}
             >
               reset tag
             </button>
             <button
               onClick={() => onOpenAdvanced(agentKey)}
-              className="rounded-[6px] border border-black/12 px-2 py-1 text-[10px] text-black transition-colors hover:border-black/25 hover:bg-black/[0.03]"
+              className="rounded-[6px] border border-foreground/[0.08] px-2 py-1 text-[10px] text-foreground transition-colors hover:border-foreground/20 hover:bg-foreground/[0.02]"
               style={monoFont}
             >
               advance setting
@@ -1114,8 +1003,8 @@ function CustomizerModal({
         className="w-full max-w-[480px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
         {tutorialCardIndex !== null && (
           <div className="px-5 pt-5 pb-0">
-            <div className="relative rounded-[14px] bg-[#fffdfa] p-4 shadow-[0_10px_28px_rgba(52,94,148,0.12)]">
-              <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} />
+            <div className="relative rounded-[14px] bg-[#fffdfa] p-4">
+              <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} pulse />
               <div className="relative z-10">
                 <div className="flex items-center justify-between gap-3 mb-2">
                   <p className="text-[11px] tracking-widest text-black uppercase" style={monoFont}>
@@ -2085,9 +1974,9 @@ export default function Chat() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.2 }}
-              className="absolute top-[72px] right-4 sm:right-8 z-30 w-[300px] rounded-[14px] bg-[#fffdfa] p-4 shadow-[0_18px_40px_rgba(0,0,0,0.12)]"
+              className="absolute top-[72px] right-4 sm:right-8 z-30 w-[300px] rounded-[14px] bg-[#fffdfa] p-4"
             >
-              <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} />
+              <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} pulse />
               <div className="relative z-10">
               {showWelcomeGuideChoice ? (
                 <>
@@ -2292,7 +2181,7 @@ export default function Chat() {
                             <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: agentSettings[key as AgentKey]?.accentColor || DEFAULT_AGENT_COLORS[key as AgentKey] }} />
                             <span className="text-[10px] tracking-widest text-black" style={monoFont}>{agentNames[key as AgentKey]}</span>
                           </div>
-                          <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{agentSettings[key as AgentKey]?.roleDescription || DEFAULT_AGENT_ROLES[key as AgentKey]}</p>
+                          <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{getEmotionDecisionSummary(agentSettings[key as AgentKey]?.emotionTag ?? null, agentSettings[key as AgentKey]?.decisionBlock ?? "Rational")}</p>
                           <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>click to customize →</p>
                         </motion.button>
                       ))}

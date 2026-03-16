@@ -167,6 +167,66 @@ export const DECISION_BLOCK_DESCRIPTIONS: Record<DecisionBlock, string> = {
   Spontaneous: "Fast action: choose quickly → minimal deliberation",
 };
 
+/** One-line summary for each emotion × decision combination. Used in full-mode agent cards. */
+export const EMOTION_DECISION_SUMMARIES: Record<string, Record<DecisionBlock, string>> = {
+  joy: {
+    Rational: "Upbeat and methodical; weighs pros and cons with clarity.",
+    Intuitive: "Cheerful and gut-driven; picks what feels right quickly.",
+    Dependent: "Warm and supportive; helps narrow options with care.",
+    Avoidant: "Positive and light; keeps it simple, two choices max.",
+    Spontaneous: "Eager and decisive; acts fast, minimal deliberation.",
+  },
+  anger: {
+    Rational: "Sharp and direct; cuts through noise with structured logic.",
+    Intuitive: "Impatient and instinctive; trusts gut, no second-guessing.",
+    Dependent: "Firm but guiding; pushes for clarity with few options.",
+    Avoidant: "Blunt and minimal; keeps options limited, moves on.",
+    Spontaneous: "Urgent and decisive; acts now, no hesitation.",
+  },
+  fear: {
+    Rational: "Cautious and analytical; weighs risk before deciding.",
+    Intuitive: "Anxious but trusting gut; picks despite uncertainty.",
+    Dependent: "Uncertain; seeks validation and guidance.",
+    Avoidant: "Wary and minimal; keeps choices few, reversible.",
+    Spontaneous: "Nervous but quick; decides fast to reduce anxiety.",
+  },
+  sadness: {
+    Rational: "Melancholic but thorough; weighs options carefully.",
+    Intuitive: "Gentle and intuitive; picks what feels less heavy.",
+    Dependent: "Tender and supportive; seeks shared direction.",
+    Avoidant: "Quiet and low; keeps it simple, two paths only.",
+    Spontaneous: "Muted but quick; decides fast to reduce burden.",
+  },
+  surprise: {
+    Rational: "Curious and methodical; explores new angles systematically.",
+    Intuitive: "Open and instinctive; picks what's unexpectedly right.",
+    Dependent: "Intrigued and collaborative; seeks guidance on novelty.",
+    Avoidant: "Startled but minimal; keeps choices few, reversible.",
+    Spontaneous: "Excited and snap; decides quickly on the twist.",
+  },
+  disgust: {
+    Rational: "Cold and analytical; cuts through what offends.",
+    Intuitive: "Dismissive and gut-driven; rejects what feels wrong.",
+    Dependent: "Firm but guiding; steers away from bad options.",
+    Avoidant: "Rejecting and minimal; keeps options few, clean.",
+    Spontaneous: "Sharp and decisive; rejects fast, no fuss.",
+  },
+  neutral: {
+    Rational: "Balanced and methodical; weighs options objectively.",
+    Intuitive: "Calm and instinctive; picks what fits context.",
+    Dependent: "Even and supportive; helps narrow with guidance.",
+    Avoidant: "Neutral and minimal; keeps it simple, reversible.",
+    Spontaneous: "Calm and quick; decides fast without bias.",
+  },
+};
+
+export function getEmotionDecisionSummary(emotionTag: string | null, decisionBlock: DecisionBlock): string {
+  const key = (emotionTag || "neutral").toLowerCase();
+  const row = EMOTION_DECISION_SUMMARIES[key];
+  if (!row) return EMOTION_DECISION_SUMMARIES.neutral[decisionBlock];
+  return row[decisionBlock] ?? EMOTION_DECISION_SUMMARIES.neutral[decisionBlock];
+}
+
 export const DECISION_BLOCK_EXAMPLES: Record<DecisionBlock, string[]> = {
   Rational: ["Let's weigh the pros and cons first.", "Here are the main criteria to consider.", "Based on the trade-offs, I'd recommend...", "We need to compare options systematically.", "The objective is clear—now let's evaluate."],
   Intuitive: ["This one just feels right.", "I'd go with that—it fits.", "Trust your gut on this.", "Something about this option clicks.", "It aligns with what you need."],

@@ -227,6 +227,66 @@ export function getEmotionDecisionSummary(emotionTag: string | null, decisionBlo
   return row[decisionBlock] ?? EMOTION_DECISION_SUMMARIES.neutral[decisionBlock];
 }
 
+/** Short role labels for each emotion × decision, used in test-mode agent cards. */
+export const EMOTION_DECISION_ROLES: Record<string, Record<DecisionBlock, string>> = {
+  joy: {
+    Rational: "Opportunity Spotter",
+    Intuitive: "Momentum Seeker",
+    Dependent: "Encouragement Giver",
+    Avoidant: "Lightweight Simplifier",
+    Spontaneous: "Energy Booster",
+  },
+  anger: {
+    Rational: "Inefficiency Cutter",
+    Intuitive: "Gut Enforcer",
+    Dependent: "Pressure Driver",
+    Avoidant: "Noise Trimmer",
+    Spontaneous: "Action Forcer",
+  },
+  fear: {
+    Rational: "Risk Assessor",
+    Intuitive: "Caution Checker",
+    Dependent: "Reassurance Seeker",
+    Avoidant: "Safety Keeper",
+    Spontaneous: "Tension Releaser",
+  },
+  sadness: {
+    Rational: "Burden Weigher",
+    Intuitive: "Gentle Guider",
+    Dependent: "Support Holder",
+    Avoidant: "Load Minimizer",
+    Spontaneous: "Relief Seeker",
+  },
+  surprise: {
+    Rational: "Angle Explorer",
+    Intuitive: "Novelty Finder",
+    Dependent: "Discovery Partner",
+    Avoidant: "Scope Containment Keeper",
+    Spontaneous: "Twist Chaser",
+  },
+  disgust: {
+    Rational: "Quality Filter",
+    Intuitive: "Red-Flag Caller",
+    Dependent: "Boundary Setter",
+    Avoidant: "Clarity Protector",
+    Spontaneous: "Fast Rejector",
+  },
+  neutral: {
+    Rational: "Evidence Balancer",
+    Intuitive: "Fit Matcher",
+    Dependent: "Steady Supporter",
+    Avoidant: "Option Reducer",
+    Spontaneous: "Calm Decider",
+  },
+};
+
+export function getEmotionDecisionRole(emotionTag: string | null, decisionBlock: DecisionBlock): string {
+  const key = (emotionTag || "neutral").toLowerCase();
+  const row = EMOTION_DECISION_ROLES[key];
+  if (!row) return EMOTION_DECISION_ROLES.neutral[decisionBlock];
+  return row[decisionBlock] ?? EMOTION_DECISION_ROLES.neutral[decisionBlock];
+}
+
 export const DECISION_BLOCK_EXAMPLES: Record<DecisionBlock, string[]> = {
   Rational: ["Let's weigh the pros and cons first.", "Here are the main criteria to consider.", "Based on the trade-offs, I'd recommend...", "We need to compare options systematically.", "The objective is clear—now let's evaluate."],
   Intuitive: ["This one just feels right.", "I'd go with that—it fits.", "Trust your gut on this.", "Something about this option clicks.", "It aligns with what you need."],

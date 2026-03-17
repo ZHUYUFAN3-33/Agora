@@ -118,8 +118,6 @@ Agora/
 │   ├── src/
 │   ├── public/
 │   └── package.json
-├── config/              # 配置模块
-├── agent-module/        # Agent 逻辑模块
 └── README.md
 ```
 

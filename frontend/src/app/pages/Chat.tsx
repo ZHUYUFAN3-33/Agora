@@ -30,6 +30,7 @@ import {
   EMOTION_IMAGES,
   defaultSetting,
   getEmotionDecisionSummary,
+  getEmotionDecisionRole,
 } from "../data/agents";
 import {
   monoFont,
@@ -313,6 +314,119 @@ function TypingDots({
   );
 }
 
+/** Test mode: click agent name to show read-only info card. Uses getEmotionDecisionSummary for role description. */
+const ENABLE_AGENT_INFO_CARD = import.meta.env.DEV;
+
+function AgentInfoCard({
+  agentKey,
+  name,
+  settings,
+  anchorRect,
+  anchorRef,
+  onClose,
+}: {
+  agentKey: AgentKey;
+  name: string;
+  settings: AgentCustomSetting;
+  anchorRect: DOMRect | null;
+  anchorRef: React.RefObject<HTMLElement | null>;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const inCard = ref.current?.contains(target);
+      const inAnchor = anchorRef.current?.contains(target);
+      if (!inCard && !inAnchor) onClose();
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [onClose, anchorRef]);
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  if (!anchorRect || typeof window === "undefined") return null;
+  const emotionTag = settings.emotionTag || "joy";
+  const decisionBlock = settings.decisionBlock || "Rational";
+  const roleLabel = getEmotionDecisionRole(emotionTag, decisionBlock);
+  const behaviorDescription = getEmotionDecisionSummary(emotionTag, decisionBlock);
+  const panelWidth = 252;
+  const viewportPad = 12;
+  const left = Math.min(Math.max(anchorRect.left, viewportPad), Math.max(viewportPad, window.innerWidth - panelWidth - viewportPad));
+  const top = anchorRect.bottom + 12;
+  const placeAbove = false;
+
+  return createPortal(
+    <div className="fixed z-50" style={{ left, top }}>
+      <div className={placeAbove ? "-translate-y-full" : ""}>
+        <motion.div
+          ref={ref}
+          initial={{ opacity: 0, y: 6, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 4, scale: 0.98 }}
+          transition={{ duration: 0.16 }}
+          className="relative z-30 w-[252px] rounded-[14px] border border-foreground/[0.08] bg-[var(--background)] px-3 py-3"
+          style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.06)" }}
+        >
+          <div className={`absolute left-5 h-3.5 w-3.5 rotate-45 border-foreground/[0.08] bg-[var(--background)] ${placeAbove ? "bottom-[-7px] border-b border-r" : "top-[-7px] border-l border-t"}`} />
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: settings.accentColor || DEFAULT_AGENT_COLORS[agentKey] }} />
+            <span className="text-[11px] tracking-widest text-foreground" style={monoFont}>{name}</span>
+          </div>
+          <div className="mb-3">
+            <div className="mb-2 px-0.5">
+              <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Emotion</span>
+            </div>
+            <div className="rounded-[10px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-2.5">
+              <div
+                className="flex items-center gap-2 rounded-[8px] border px-2.5 py-2 text-[10px]"
+                style={{
+                  ...monoFont,
+                  borderColor: (EMOTION_COLORS[emotionTag] || "#111111") + "44",
+                  background: (EMOTION_COLORS[emotionTag] || "#111111") + "12",
+                  color: EMOTION_COLORS[emotionTag] || "#111111",
+                }}
+              >
+                <EmotionIcon emotion={emotionTag} size={14} />
+                <span className="capitalize font-semibold">{emotionTag}</span>
+              </div>
+            </div>
+          </div>
+          <div className="mb-3">
+            <div className="mb-2 px-0.5">
+              <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Decision</span>
+            </div>
+            <div className="rounded-[10px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-2.5">
+              <div className="text-[10px] text-foreground" style={monoFont}>{decisionBlock}</div>
+            </div>
+          </div>
+          <div className="mb-3">
+            <div className="mb-2 px-0.5">
+              <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Role</span>
+            </div>
+            <div className="rounded-[10px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-2.5">
+              <div className="text-[10px] text-foreground" style={monoFont}>{roleLabel}</div>
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 px-0.5">
+              <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Behavior description</span>
+            </div>
+            <div className="rounded-[10px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-2.5">
+              <div className="text-[10px] text-foreground/90 leading-relaxed" style={monoFont}>{behaviorDescription}</div>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function AgentEmotionPopover({
   agentKey,
   settings,
@@ -370,13 +484,14 @@ function AgentEmotionPopover({
           style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.06)" }}
         >
           <div className={`absolute left-5 h-3.5 w-3.5 rotate-45 border-foreground/[0.08] bg-[var(--background)] ${placeAbove ? "bottom-[-7px] border-b border-r" : "top-[-7px] border-l border-t"}`} />
-          <div className="mb-3 px-0.5">
-            <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Emotion</span>
-          </div>
-          <div className="rounded-[12px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-3">
-            <div className="mb-3">
+          {/* EMOTION section */}
+          <div className="mb-3">
+            <div className="mb-2 px-0.5">
+              <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Emotion</span>
+            </div>
+            <div className="rounded-[10px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-2.5">
               <div
-                className="flex items-center justify-between gap-2 rounded-[10px] border px-2.5 py-2 text-[10px]"
+                className="flex items-center justify-between gap-2 rounded-[8px] border px-2.5 py-2 text-[10px]"
                 style={{
                   ...monoFont,
                   borderColor: emotionColor + "44",
@@ -389,9 +504,7 @@ function AgentEmotionPopover({
                   <span className="capitalize font-semibold">{emotionTag}</span>
                 </div>
               </div>
-            </div>
-            <div className="border-t border-foreground/[0.06] pt-3">
-              <div className="flex flex-col gap-2">
+              <div className="mt-2.5 flex flex-col gap-2">
                 {([
                   { label: "Valence", field: "valence" as const, value: settings.valence },
                   { label: "Arousal", field: "arousal" as const, value: settings.arousal },
@@ -414,8 +527,13 @@ function AgentEmotionPopover({
                 ))}
               </div>
             </div>
-            <div className="mt-3 border-t border-foreground/[0.06] pt-3">
-              <div className="mb-1 text-[9px] uppercase tracking-widest text-foreground/55" style={monoFont}>Decision</div>
+          </div>
+          {/* DECISION section */}
+          <div>
+            <div className="mb-2 px-0.5">
+              <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Decision</span>
+            </div>
+            <div className="rounded-[10px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-2.5">
               <div className="flex items-center gap-2 px-1 py-1">
                 <button
                   type="button"
@@ -501,10 +619,12 @@ const AgentMessage = React.memo(function AgentMessage({
   emojiRepeatIndex?: number;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [infoCardOpen, setInfoCardOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const [safeRect, setSafeRect] = useState<DOMRect | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLDivElement | null>(null);
+  const hoveredRef = useRef(false);
   const dirtyBaselineRef = useRef<AgentCustomSetting | null>(null);
   const name = message.agentKey ? agentNames[message.agentKey] : "Agent";
   const role = message.agentKey
@@ -568,6 +688,24 @@ const AgentMessage = React.memo(function AgentMessage({
     clearCloseTimer();
     commitQuickAdjust();
   }, [commitQuickAdjust]);
+
+  useEffect(() => {
+    if (!ENABLE_AGENT_INFO_CARD || !message.agentKey) return;
+    const h = (e: KeyboardEvent) => {
+      if ((e.key === "t" || e.key === "T") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (infoCardOpen) {
+          e.preventDefault();
+          setInfoCardOpen(false);
+        } else if (hoveredRef.current) {
+          e.preventDefault();
+          updatePopoverPosition();
+          setInfoCardOpen(true);
+        }
+      }
+    };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [message.agentKey, infoCardOpen, updatePopoverPosition]);
   useLayoutEffect(() => {
     if (!popoverOpen) return;
     updatePopoverPosition();
@@ -596,8 +734,14 @@ const AgentMessage = React.memo(function AgentMessage({
         <div
           ref={triggerRef}
           className="relative"
-          onMouseEnter={quickEmotionEnabled ? openPopover : undefined}
-          onMouseLeave={quickEmotionEnabled ? closePopoverSoon : undefined}
+          onMouseEnter={(e) => {
+            if (ENABLE_AGENT_INFO_CARD && message.agentKey) hoveredRef.current = true;
+            if (quickEmotionEnabled) openPopover();
+          }}
+          onMouseLeave={(e) => {
+            if (ENABLE_AGENT_INFO_CARD && message.agentKey) hoveredRef.current = false;
+            if (quickEmotionEnabled) closePopoverSoon();
+          }}
         >
           <button
             className={`text-[11px] tracking-widest leading-none ${
@@ -608,6 +752,16 @@ const AgentMessage = React.memo(function AgentMessage({
           >
             {name}
           </button>
+          {ENABLE_AGENT_INFO_CARD && infoCardOpen && message.agentKey && (
+            <AgentInfoCard
+              agentKey={message.agentKey}
+              name={name}
+              settings={currentSettings || defaultSetting(message.agentKey)}
+              anchorRect={anchorRect}
+              anchorRef={triggerRef}
+              onClose={() => setInfoCardOpen(false)}
+            />
+          )}
           <AnimatePresence>
             {quickEmotionEnabled && popoverOpen && message.agentKey && (
               <div onMouseEnter={openPopover} onMouseLeave={closePopoverSoon}>

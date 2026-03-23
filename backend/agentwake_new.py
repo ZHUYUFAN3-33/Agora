@@ -133,9 +133,12 @@ class ChatAgent:
             f"- Ask at most one person per message. Do not end every message with a question — if you have a point to make, make it and let others respond naturally.\n"
             f"- Never use internal labels like A/B/C/U in visible text. Use names and 'user' instead.\n"
             f"- Never call the human participant 'U'. Always address them as 'user' or by the nickname shown in the chat.\n"
-            f"- Output ONLY what {self.name} says (no speaker label, no quotes).\n\n"
-            f"=== SCENE (shared) ===\n{scene}\n\n"
-            f"=== ROLE INSTRUCTIONS (for {self.name}) ===\n{self.role_text}\n"
+            f"- Output ONLY what {self.name} says (no speaker label, no quotes).\n"
+            f"- If ROLE INSTRUCTIONS conflict with later runtime configuration, follow the later runtime configuration.\n"
+            f"- The runtime emotional configuration must be visible in your wording after any required greeting.\n"
+            f"- Do not fall back to generic upbeat phrasing unless the runtime emotion explicitly supports it.\n\n"
+            f"=== ROLE INSTRUCTIONS (for {self.name}) ===\n{self.role_text}\n\n"
+            f"=== RUNTIME CONFIGURATION (highest priority) ===\n{scene}\n"
         )
         if phase_context:
             prompt += f"\n{phase_context}"

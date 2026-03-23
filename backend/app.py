@@ -136,10 +136,31 @@ def get_openai_clients():
     return client_chat, client_admin
 
 # Load scene and agent profiles
+def _sanitize_runtime_controlled_role_text(agent_name: str, raw_text: str) -> str:
+    """Remove baked-in emotion/decision defaults so runtime config is the only source of tone."""
+    txt = (raw_text or "").strip()
+    markers = (
+        "[Selected Decision Block]",
+        "[Selected Emotion Block]",
+        "[Decision Block:",
+        "[Emotion Block:",
+    )
+    if txt and not any(marker in txt for marker in markers):
+        return txt
+    return (
+        f"You are {agent_name}, a collaborative discussion agent in a multi-agent conversation.\n"
+        "- Your emotional tone and decision style are controlled by the runtime configuration later in the prompt.\n"
+        "- Do not assume any fixed default emotion or decision style from prior sessions.\n"
+        "- After any required first-message greeting, make the runtime emotion visible in your wording, reactions, and emphasis.\n"
+        "- Do not fall back to generic cheerful or optimistic phrasing unless the runtime emotion explicitly supports it.\n"
+        "- Stay conversational, react to other agents naturally, and keep helping the user move the discussion forward."
+    )
+
+
 scene = read_text(SCENE_FILE) if os.path.exists(SCENE_FILE) else ""
-bot1 = read_text(BOT1_FILE) if os.path.exists(BOT1_FILE) else ""
-bot2 = read_text(BOT2_FILE) if os.path.exists(BOT2_FILE) else ""
-bot3 = read_text(BOT3_FILE) if os.path.exists(BOT3_FILE) else ""
+bot1 = _sanitize_runtime_controlled_role_text("ChatbotA", read_text(BOT1_FILE) if os.path.exists(BOT1_FILE) else "")
+bot2 = _sanitize_runtime_controlled_role_text("ChatbotB", read_text(BOT2_FILE) if os.path.exists(BOT2_FILE) else "")
+bot3 = _sanitize_runtime_controlled_role_text("ChatbotC", read_text(BOT3_FILE) if os.path.exists(BOT3_FILE) else "")
 SLOT_KEYS: List[str] = ["A", "B", "C"]
 POOL_KEYS: List[str] = ["A", "B", "C", "D", "E", "F"]
 PROFILE_FIXED_CONFIG: Dict[str, dict] = {
@@ -444,6 +465,9 @@ def send_message():
                     "\n\n" + "=" * 60
                     + f"\nEMOTIONAL CONTEXT — {override_tag.upper()} (agent-specific):\n"
                     + "=" * 60 + "\n" + ep
+                    + "\n\nVISIBLE EXPRESSION RULE:\n"
+                    + "- After any required greeting, your wording should clearly reflect this emotional tone.\n"
+                    + "- Do not default to generic upbeat phrasing unless this emotion block supports it."
                 )
         elif sidebar_emotion_prompt and emotion_target in (None, "all", agent_key):
             # 2. Sidebar emotion (global or targeted)
@@ -451,6 +475,9 @@ def send_message():
                 "\n\n" + "=" * 60
                 + f"\nEMOTIONAL CONTEXT — {emotion_tag.upper()} (applied to this agent):\n"
                 + "=" * 60 + "\n" + sidebar_emotion_prompt
+                + "\n\nVISIBLE EXPRESSION RULE:\n"
+                + "- After any required greeting, your wording should clearly reflect this emotional tone.\n"
+                + "- Do not default to generic upbeat phrasing unless this emotion block supports it."
             )
 
         # 3. Decision block (frontend overrides info.jsonl default)
@@ -709,7 +736,11 @@ def send_message():
         phase_ctx = _get_phase_context(speaker)
         stall = session["moderator_state"].get("stall", False)
         temp = 0.8 if not (stall or stall_mode) else min(1.05, 1.4)
-        extra = f"\n\n(Important) This is your FIRST message. Start with: Hi, I'm {agent.name}" if force_intro else ""
+        extra = (
+            f"\n\n(Important) This is your FIRST message. Start with: Hi, I'm {agent.name}."
+            " After that opening, the rest of your message must follow the current runtime emotional tone and decision style."
+            " Do not default to cheerful language unless the runtime configuration supports it."
+        ) if force_intro else ""
         history_str = clamp_history(transcript_lines, max_history_chars)
         if stall_mode:
             user_prompt = (
@@ -919,7 +950,7 @@ def get_agent_prompt(agent_key):
                 'B': BOT2_FILE,
                 'C': BOT3_FILE,
             }
-            prompt = read_text(bot_file_map[agent_key]) if os.path.exists(bot_file_map[agent_key]) else ""
+            prompt = AGENT_POOL[agent_key]["role_text"]
         else:
             prompt = AGENT_POOL[agent_key]["role_text"]
         return jsonify({"prompt": prompt})

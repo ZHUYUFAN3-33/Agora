@@ -1009,6 +1009,7 @@ function CustomizerModal({
   const [custTags, setCustTags] = useState<Partial<Record<AgentKey, string>>>({});
   const [custConfs, setCustConfs] = useState<Partial<Record<AgentKey, number>>>({});
   const [page, setPage] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
 
   const canEditAdvanced = experimentMode === "full";
   const agentOptions = experimentMode === "single" ? [("A" as AgentKey)] : AGENT_KEYS;
@@ -1026,10 +1027,47 @@ function CustomizerModal({
   const upd = (key: AgentKey, field: keyof AgentCustomSetting, value: unknown) =>
     setLocalSettings((prev) => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
 
-  const analyze = async (key: AgentKey) => {
-    const s = localSettings[key];
+  const analyze = async (key: AgentKey, snapshot?: AgentCustomSetting) => {
+    const s = snapshot ?? localSettings[key];
     const r = await onAnalyze(key, s.valence, s.arousal, s.control, s.emotionText || "");
-    if (r) { setCustTags((p) => ({ ...p, [key]: r.emotion_tag })); setCustConfs((p) => ({ ...p, [key]: r.confidence })); upd(key, "emotionTag", r.emotion_tag); }
+    if (r) {
+      setCustTags((p) => ({ ...p, [key]: r.emotion_tag }));
+      setCustConfs((p) => ({ ...p, [key]: r.confidence }));
+      upd(key, "emotionTag", r.emotion_tag);
+    }
+    return r;
+  };
+
+  const handleSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      let settingsToSave: Record<AgentKey, AgentCustomSetting> = {
+        A: { ...localSettings.A },
+        B: { ...localSettings.B },
+        C: { ...localSettings.C },
+      };
+      if (canEditAdvanced) {
+        await Promise.all(agentOptions.map(async (key) => {
+          const snapshot = settingsToSave[key];
+          const r = await analyze(key, snapshot);
+          if (r?.emotion_tag) {
+            settingsToSave = {
+              ...settingsToSave,
+              [key]: {
+                ...settingsToSave[key],
+                emotionOn: true,
+                emotionTag: r.emotion_tag,
+              },
+            };
+          }
+        }));
+      }
+      onSave(localNames, settingsToSave);
+      onClose();
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const goPrev = () => setPage((p) => Math.max(0, p - 1));
@@ -1254,8 +1292,8 @@ function CustomizerModal({
           </div>
         </div>
         <div className="flex justify-end gap-2 px-5 py-4 border-t border-black/8">
-          <motion.button onClick={onClose} whileTap={{ scale: 0.97 }} className="px-4 py-2 text-[12px] border border-black/15 rounded-[8px] hover:bg-black/5 transition-colors" style={monoFont}>Cancel</motion.button>
-          <motion.button onClick={() => { onSave(localNames, localSettings); onClose(); }} whileTap={{ scale: 0.97 }} className="px-4 py-2 text-[12px] bg-black text-white rounded-[8px] hover:bg-neutral-800 transition-colors" style={monoFont}>Save</motion.button>
+          <motion.button onClick={onClose} whileTap={{ scale: 0.97 }} disabled={isSaving} className="px-4 py-2 text-[12px] border border-black/15 rounded-[8px] hover:bg-black/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style={monoFont}>Cancel</motion.button>
+          <motion.button onClick={handleSave} whileTap={{ scale: 0.97 }} disabled={isSaving} className="px-4 py-2 text-[12px] bg-black text-white rounded-[8px] hover:bg-neutral-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style={monoFont}>{isSaving ? "Saving..." : "Save"}</motion.button>
         </div>
       </motion.div>
     </motion.div>
@@ -1670,10 +1708,16 @@ export default function Chat() {
         // Apply agent defaults from info.jsonl (decision, emotion)
         const agentsFromApi = data.agents || [];
         if (agentsFromApi.length > 0) {
-          const applyApiDefaults = experimentMode !== "full";
           agentsFromApi.forEach((a: { key?: string; pool_key?: string; name?: string; decision?: string; emotion?: string; role?: string }) => {
             const k = a.key as AgentKey;
             if (k && (k === "A" || k === "B" || k === "C")) {
+              const defaultCfg = defaultSetting(k);
+              const shouldApplyApiBehaviorDefaults =
+                experimentMode !== "full" ||
+                (
+                  sameEmotionSnapshot(nextSettingsForConv[k], defaultCfg) &&
+                  nextSettingsForConv[k].decisionBlock === defaultCfg.decisionBlock
+                );
               if (a.name) nextBackendNamesForConv[k] = a.name;
               if (experimentMode === "limited") {
                 const profile = LIMITED_AGENT_POOL.find((p) => p.key === (a.pool_key as AgentPoolKey));
@@ -1681,10 +1725,10 @@ export default function Chat() {
               }
               nextSettingsForConv[k] = {
                 ...nextSettingsForConv[k],
-                decisionBlock: applyApiDefaults
+                decisionBlock: shouldApplyApiBehaviorDefaults
                   ? ((a.decision as AgentCustomSetting["decisionBlock"]) || nextSettingsForConv[k].decisionBlock || "Rational")
                   : nextSettingsForConv[k].decisionBlock,
-                emotionTag: applyApiDefaults
+                emotionTag: shouldApplyApiBehaviorDefaults
                   ? (a.emotion ? String(a.emotion).toLowerCase() : nextSettingsForConv[k].emotionTag)
                   : nextSettingsForConv[k].emotionTag,
                 roleDescription: experimentMode === "limited"
@@ -1719,6 +1763,9 @@ export default function Chat() {
     }
 
     const activeMode: ExperimentMode = isNewConv ? experimentMode : (currentConv?.settings?.mode ?? "full");
+    const requestAgentSettings: Record<AgentKey, AgentCustomSetting> = isNewConv
+      ? nextSettingsForConv
+      : agentSettingsRef.current;
     const agentEmotionOverrides: Record<string, string> = {};
     const additionalRules: Record<string, string> = {};
     const agentDecisionBlock: Record<string, string> = {};
@@ -1727,9 +1774,9 @@ export default function Chat() {
       if (activeMode === "single") agentDecisionBlock["A"] = "Rational";
     } else {
       AGENT_KEYS.forEach((k) => {
-        if (agentSettings[k].emotionOn && agentSettings[k].emotionTag) agentEmotionOverrides[k] = agentSettings[k].emotionTag!;
-        if (agentSettings[k].additionalPrompt) additionalRules[k] = agentSettings[k].additionalPrompt;
-        agentDecisionBlock[k] = agentSettings[k].decisionBlock;
+        if (requestAgentSettings[k].emotionOn && requestAgentSettings[k].emotionTag) agentEmotionOverrides[k] = requestAgentSettings[k].emotionTag!;
+        if (requestAgentSettings[k].additionalPrompt) additionalRules[k] = requestAgentSettings[k].additionalPrompt;
+        agentDecisionBlock[k] = requestAgentSettings[k].decisionBlock;
       });
     }
 

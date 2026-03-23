@@ -627,10 +627,8 @@ const AgentMessage = React.memo(function AgentMessage({
   const hoveredRef = useRef(false);
   const dirtyBaselineRef = useRef<AgentCustomSetting | null>(null);
   const name = message.agentKey ? agentNames[message.agentKey] : "Agent";
-  const role = message.agentKey
-    ? (mode === "limited"
-      ? (agentSettings?.[message.agentKey]?.roleDescription || DEFAULT_AGENT_ROLES[message.agentKey])
-      : DEFAULT_AGENT_ROLES[message.agentKey])
+  const role = message.agentKey && mode === "limited"
+    ? (agentSettings?.[message.agentKey]?.roleDescription || DEFAULT_AGENT_ROLES[message.agentKey])
     : "";
   const isError = !message.agentKey;
   const accentColor = message.agentKey && agentSettings?.[message.agentKey]?.accentColor

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { createPortal } from "react-dom";
@@ -254,6 +254,81 @@ function sameEmotionSnapshot(a: AgentCustomSetting, b: AgentCustomSetting): bool
     a.arousal === b.arousal &&
     a.control === b.control
   );
+}
+
+// ─── In-chat layer annotation (paper) ─────────────────────────────────────────
+
+type ChatLayerKind = "decision" | "expression" | "scene";
+type ChatLayerAnnotation = { id: string; start: number; end: number; layer: ChatLayerKind };
+
+function chatAnnotationOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+function getChatSelectionInElement(container: HTMLElement): { start: number; end: number; rect: DOMRect } | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  if (!container.contains(range.commonAncestorContainer)) return null;
+  const pre = range.cloneRange();
+  pre.selectNodeContents(container);
+  pre.setEnd(range.startContainer, range.startOffset);
+  const start = pre.toString().length;
+  pre.setEnd(range.endContainer, range.endOffset);
+  const end = pre.toString().length;
+  if (end <= start) return null;
+  if (!range.toString().trim()) return null;
+  const rect = range.getBoundingClientRect();
+  return { start, end, rect };
+}
+
+function layerSpanClass(layer: ChatLayerKind, variant: "agent" | "user"): string {
+  if (layer === "decision") {
+    return variant === "user"
+      ? "bg-[#7c3aed]/45 border-b-2 border-[#c4b5fd] text-white"
+      : "bg-[#7c3aed]/25 border-b-2 border-[#7c3aed]/80 text-black/80";
+  }
+  if (layer === "expression") {
+    return variant === "user"
+      ? "bg-[#e07a5f]/45 border-b-2 border-[#fdba74] text-white"
+      : "bg-[#e07a5f]/25 border-b-2 border-[#e07a5f]/80 text-black/80";
+  }
+  // scene — #7BC3FF
+  return variant === "user"
+    ? "bg-[#7BC3FF]/50 border-b-2 border-[#b8ddff] text-white"
+    : "bg-[#7BC3FF]/35 border-b-2 border-[#7BC3FF] text-black/85";
+}
+
+function layerTitle(layer: ChatLayerKind): string {
+  if (layer === "decision") return "Decision Layer";
+  if (layer === "expression") return "Emotion Layer";
+  return "Scene Layer";
+}
+
+function renderChatAnnotatedText(
+  text: string,
+  annotations: ChatLayerAnnotation[],
+  variant: "agent" | "user",
+): ReactNode {
+  if (!annotations.length) return text;
+  const sorted = [...annotations].sort((a, b) => a.start - b.start);
+  let cursor = 0;
+  const out: React.ReactNode[] = [];
+  sorted.forEach((a) => {
+    if (cursor < a.start) out.push(<span key={`p-${a.id}-${cursor}`}>{text.slice(cursor, a.start)}</span>);
+    out.push(
+      <span
+        key={a.id}
+        className={layerSpanClass(a.layer, variant)}
+        title={layerTitle(a.layer)}
+      >
+        {text.slice(a.start, a.end)}
+      </span>,
+    );
+    cursor = a.end;
+  });
+  if (cursor < text.length) out.push(<span key={`tail-${cursor}`}>{text.slice(cursor)}</span>);
+  return out;
 }
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
@@ -604,6 +679,9 @@ const AgentMessage = React.memo(function AgentMessage({
   getPopoverSafeRect,
   compactRepeatedIntro = false,
   emojiRepeatIndex = 0,
+  chatAnnotationMode = false,
+  layerAnnotations,
+  onChatAnnotationDraft,
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
@@ -617,6 +695,9 @@ const AgentMessage = React.memo(function AgentMessage({
   getPopoverSafeRect?: () => DOMRect | null;
   compactRepeatedIntro?: boolean;
   emojiRepeatIndex?: number;
+  chatAnnotationMode?: boolean;
+  layerAnnotations?: ChatLayerAnnotation[];
+  onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [infoCardOpen, setInfoCardOpen] = useState(false);
@@ -643,6 +724,8 @@ const AgentMessage = React.memo(function AgentMessage({
     ? diversifyEmotionEmoji(compactedContent, messageEmotionTag, emojiRepeatIndex, message.agentKey, message.id)
     : compactedContent;
   const quickEmotionEnabled = !isError && mode === "full" && !!message.agentKey && !!onQuickEmotionAdjust && !!onOpenAdvancedAgent;
+  const quickHover = quickEmotionEnabled && !chatAnnotationMode;
+  const contentRef = useRef<HTMLParagraphElement>(null);
   const currentSettings = message.agentKey ? agentSettings?.[message.agentKey] : null;
 
   const clearCloseTimer = () => {
@@ -734,16 +817,16 @@ const AgentMessage = React.memo(function AgentMessage({
           className="relative"
           onMouseEnter={(e) => {
             if (ENABLE_AGENT_INFO_CARD && message.agentKey) hoveredRef.current = true;
-            if (quickEmotionEnabled) openPopover();
+            if (quickHover) openPopover();
           }}
           onMouseLeave={(e) => {
             if (ENABLE_AGENT_INFO_CARD && message.agentKey) hoveredRef.current = false;
-            if (quickEmotionEnabled) closePopoverSoon();
+            if (quickHover) closePopoverSoon();
           }}
         >
           <button
             className={`text-[11px] tracking-widest leading-none ${
-              quickEmotionEnabled ? "cursor-default hover:underline underline-offset-2" : "cursor-default"
+              quickHover ? "cursor-default hover:underline underline-offset-2" : "cursor-default"
             }`}
             style={{ ...monoFont, color: isError ? "#ef4444" : "#000" }}
             type="button"
@@ -761,7 +844,7 @@ const AgentMessage = React.memo(function AgentMessage({
             />
           )}
           <AnimatePresence>
-            {quickEmotionEnabled && popoverOpen && message.agentKey && (
+            {quickHover && popoverOpen && message.agentKey && (
               <div onMouseEnter={openPopover} onMouseLeave={closePopoverSoon}>
                 <AgentEmotionPopover
                   agentKey={message.agentKey}
@@ -794,17 +877,45 @@ const AgentMessage = React.memo(function AgentMessage({
         style={isError ? { borderColor: "#fee2e2", background: "#fef2f2" } : {}}
       >
         <p
-          className="text-[13px] text-black/80 leading-relaxed whitespace-pre-wrap"
+          ref={contentRef}
+          onMouseUp={() => {
+            if (!chatAnnotationMode || !contentRef.current || !onChatAnnotationDraft) return;
+            const sel = getChatSelectionInElement(contentRef.current);
+            if (!sel) return;
+            onChatAnnotationDraft({
+              messageId: message.id,
+              start: sel.start,
+              end: sel.end,
+              x: sel.rect.left + sel.rect.width / 2,
+              y: sel.rect.top - 8,
+            });
+          }}
+          className={`text-[13px] text-black/80 leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""}`}
           style={{ ...monoFont, color: isError ? "#ef4444" : undefined }}
         >
-          {finalContent}
+          {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
+            ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent")
+            : finalContent}
         </p>
       </div>
     </motion.div>
   );
 });
 
-const UserMessage = React.memo(function UserMessage({ message, nickname }: { message: Message; nickname: string }) {
+const UserMessage = React.memo(function UserMessage({
+  message,
+  nickname,
+  chatAnnotationMode = false,
+  layerAnnotations,
+  onChatAnnotationDraft,
+}: {
+  message: Message;
+  nickname: string;
+  chatAnnotationMode?: boolean;
+  layerAnnotations?: ChatLayerAnnotation[];
+  onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
+}) {
+  const contentRef = useRef<HTMLParagraphElement>(null);
   return (
     <motion.div
       layout
@@ -823,15 +934,33 @@ const UserMessage = React.memo(function UserMessage({ message, nickname }: { mes
         </span>
       </div>
       <div className="px-4 py-3 bg-black rounded-[10px] rounded-tr-[2px] max-w-[85%]">
-        <p className="text-[13px] text-white leading-relaxed whitespace-pre-wrap" style={monoFont}>
-          {message.content}
+        <p
+          ref={contentRef}
+          onMouseUp={() => {
+            if (!chatAnnotationMode || !contentRef.current || !onChatAnnotationDraft) return;
+            const sel = getChatSelectionInElement(contentRef.current);
+            if (!sel) return;
+            onChatAnnotationDraft({
+              messageId: message.id,
+              start: sel.start,
+              end: sel.end,
+              x: sel.rect.left + sel.rect.width / 2,
+              y: sel.rect.top - 8,
+            });
+          }}
+          className={`text-[13px] text-white leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""}`}
+          style={monoFont}
+        >
+          {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
+            ? renderChatAnnotatedText(message.content, layerAnnotations!, "user")
+            : message.content}
         </p>
       </div>
     </motion.div>
   );
 });
 
-const MODE_LABELS: Record<ExperimentMode, string> = { full: "Full", limited: "Limited", single: "Single" };
+const MODE_LABELS: Record<ExperimentMode, string> = { full: "Multi-1", limited: "Multi-2", single: "Single" };
 
 const ConvItem = React.memo(function ConvItem({ conv, isActive, onSelectConv }: { conv: Conversation; isActive: boolean; onSelectConv: (id: string) => void }) {
   const mode = conv.settings?.mode ?? "full";
@@ -1448,6 +1577,16 @@ export default function Chat() {
   const [welcomeTutorialStep, setWelcomeTutorialStep] = useState<number | null>(null);
   const [welcomeGuideDismissed, setWelcomeGuideDismissed] = useState(false);
 
+  const [chatAnnotationMode, setChatAnnotationMode] = useState(false);
+  const [chatLayerAnnotations, setChatLayerAnnotations] = useState<Record<string, ChatLayerAnnotation[]>>({});
+  const [chatAnnotationDraft, setChatAnnotationDraft] = useState<{
+    messageId: string;
+    start: number;
+    end: number;
+    x: number;
+    y: number;
+  } | null>(null);
+
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesContentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -1477,7 +1616,65 @@ export default function Chat() {
     }).catch(() => {});
   }, [currentConv?.roomId, currentConv?.settings?.mode, experimentMode]);
 
+  const onChatAnnotationDraft = useCallback(
+    (d: { messageId: string; start: number; end: number; x: number; y: number }) => {
+      setChatAnnotationDraft(d);
+    },
+    [],
+  );
+
+  const clearChatAnnotations = useCallback(() => {
+    setChatLayerAnnotations({});
+    setChatAnnotationDraft(null);
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
+  const applyChatLayer = useCallback((layer: ChatLayerKind) => {
+    if (!chatAnnotationDraft) return;
+    const { messageId, start, end } = chatAnnotationDraft;
+    setChatLayerAnnotations((prev) => {
+      const existing = prev[messageId] ?? [];
+      if (existing.some((a) => chatAnnotationOverlap(a.start, a.end, start, end))) return prev;
+      const id = `ca-${messageId}-${start}-${end}-${Date.now()}`;
+      return { ...prev, [messageId]: [...existing, { id, start, end, layer }] };
+    });
+    setChatAnnotationDraft(null);
+    window.getSelection()?.removeAllRanges();
+  }, [chatAnnotationDraft]);
+
   useEffect(() => { if (!localStorage.getItem("agora_auth")) navigate("/"); }, [navigate]);
+
+  useEffect(() => {
+    setChatLayerAnnotations({});
+    setChatAnnotationDraft(null);
+    setChatAnnotationMode(false);
+  }, [currentConvId]);
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "x" && e.key !== "X") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) return;
+      if (t?.isContentEditable) return;
+      e.preventDefault();
+      setChatAnnotationMode((v) => !v);
+      setChatAnnotationDraft(null);
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
+  useEffect(() => {
+    if (!chatAnnotationDraft) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setChatAnnotationDraft(null);
+      window.getSelection()?.removeAllRanges();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [chatAnnotationDraft]);
 
   useEffect(() => {
     fetch(`${API_BASE}/health`).then((r) => { if (r.ok) setBackendOnline(true); }).catch(() => {});
@@ -2043,6 +2240,7 @@ export default function Chat() {
   const guideGradientPalette = DEFAULT_GUIDE_GRADIENT;
 
   return (
+    <>
     <div className="h-screen bg-white flex overflow-hidden">
       <AnimatePresence>
         {showCustomizer && (
@@ -2134,9 +2332,9 @@ export default function Chat() {
                   }`}
                   style={monoFont}
                 >
-                  {m === "full" && "Full — all options"}
-                  {m === "limited" && "Limited — choose 3 of 6"}
-                  {m === "single" && "Single — Agent A, neutral only"}
+                  {m === "full" && "Multi-1"}
+                  {m === "limited" && "Multi-2"}
+                  {m === "single" && "Single"}
                 </button>
               ))}
             </div>
@@ -2278,6 +2476,25 @@ export default function Chat() {
         </header>
 
         <div ref={messagesContainerRef} className="relative flex-1 overflow-y-auto px-4 sm:px-8 pt-6 pb-28">
+          {currentConv && chatAnnotationMode && (
+            <div
+              className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto mb-4 flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-[10px] border border-black/10 bg-white/95 text-[11px] text-neutral-700 shadow-sm"
+              style={monoFont}
+            >
+              <span>
+                Layer annotation: select text, then choose Decision, Emotion, or Scene. Press{" "}
+                <kbd className="px-1 rounded border border-black/15 bg-black/5 font-mono">x</kbd> to exit.
+              </span>
+              <button
+                type="button"
+                onClick={clearChatAnnotations}
+                className="shrink-0 rounded-md border border-black/15 bg-black/[0.04] px-2.5 py-1 text-[11px] hover:bg-black/[0.08] transition-colors"
+                style={monoFont}
+              >
+                Clear all
+              </button>
+            </div>
+          )}
           <AnimatePresence mode="wait" initial={false}>
           {!currentConv ? (
             <motion.div
@@ -2465,7 +2682,16 @@ export default function Chat() {
                 return currentConv.messages.map((msg) => {
                   if (msg.role === "user") {
                     userTurnCount += 1;
-                    return <UserMessage key={msg.id} message={msg} nickname={nickname} />;
+                    return (
+                      <UserMessage
+                        key={msg.id}
+                        message={msg}
+                        nickname={nickname}
+                        chatAnnotationMode={chatAnnotationMode}
+                        layerAnnotations={chatLayerAnnotations[msg.id]}
+                        onChatAnnotationDraft={onChatAnnotationDraft}
+                      />
+                    );
                   }
                   const compactRepeatedIntro = !!(msg.agentKey && userTurnCount === 1 && firstTurnAgentSeen[msg.agentKey]);
                   if (msg.agentKey && userTurnCount === 1) {
@@ -2489,6 +2715,9 @@ export default function Chat() {
                       onOpenAdvancedAgent={handleOpenAdvancedAgent}
                       onQuickEmotionAdjust={handleQuickEmotionAdjust}
                       onQuickAdjustCommit={commitQuickAdjustChanges}
+                      chatAnnotationMode={chatAnnotationMode}
+                      layerAnnotations={chatLayerAnnotations[msg.id]}
+                      onChatAnnotationDraft={onChatAnnotationDraft}
                     />
                   );
                 });
@@ -2587,5 +2816,45 @@ export default function Chat() {
         </div>
       </div>
     </div>
+    {chatAnnotationDraft &&
+      createPortal(
+        <div
+          className="fixed z-[300] -translate-x-1/2 -translate-y-full rounded-lg border border-neutral-300 bg-white shadow-xl p-2 min-w-[220px]"
+          style={{ left: chatAnnotationDraft.x, top: chatAnnotationDraft.y }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <p className="text-[11px] text-neutral-500 mb-2 line-clamp-2 px-1" style={monoFont}>
+            Select layer for this span
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => applyChatLayer("expression")}
+              className="min-w-[100px] flex-1 rounded-md border border-[#e07a5f]/40 bg-[#e07a5f]/10 px-2 py-1.5 text-xs font-medium text-[#9f3f26] hover:bg-[#e07a5f]/20"
+              style={monoFont}
+            >
+              Emotion Layer
+            </button>
+            <button
+              type="button"
+              onClick={() => applyChatLayer("decision")}
+              className="min-w-[100px] flex-1 rounded-md border border-[#7c3aed]/40 bg-[#7c3aed]/10 px-2 py-1 text-xs font-medium text-[#5b21b6] hover:bg-[#7c3aed]/20"
+              style={monoFont}
+            >
+              Decision Layer
+            </button>
+            <button
+              type="button"
+              onClick={() => applyChatLayer("scene")}
+              className="min-w-[100px] flex-1 rounded-md border border-[#7BC3FF]/70 bg-[#7BC3FF]/20 px-2 py-1.5 text-xs font-medium text-[#1560a8] hover:bg-[#7BC3FF]/35"
+              style={monoFont}
+            >
+              Scene Layer
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }

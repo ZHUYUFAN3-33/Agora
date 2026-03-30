@@ -24,6 +24,22 @@ npm run dev
 
 在浏览器打开：**http://localhost:5173**
 
+在 **Chat 页面**（`/chat`）且**不在输入框内**时，按 **`x`** 进入/退出 **对话内手动标注**：在消息里选中文本后选择 **Decision Layer**、**Emotion Layer** 或 **Scene Layer**（Scene 高亮色 `#7BC3FF`）；**Esc** 可关闭未确认的选区弹层。标注模式打开时，顶栏有 **Clear all** 可清空当前会话内所有标注。切换会话也会清空标注状态。
+
+---
+
+### 论文配图（独立页面）
+
+用于论文插图的标注示意（dummy 对话 + Decision / EXPRESSION 分层），按 **`x`** 切换标注显示：
+
+```bash
+cd paper
+npm install
+npm run dev
+```
+
+默认端口若与主前端冲突，可执行：`npm run dev -- --port 5174`。
+
 ---
 
 ### 方式二：旧版静态前端

@@ -1146,7 +1146,7 @@ function CustomizerModal({
   const canEditAdvanced = experimentMode === "full";
   const agentOptions = experimentMode === "single" ? [("A" as AgentKey)] : AGENT_KEYS;
   const totalCards = canEditAdvanced ? 3 : 1;
-  const tutorialCardIndex = tutorialStep !== null && tutorialStep >= 1 && tutorialStep <= 3 ? tutorialStep - 1 : null;
+  const tutorialCardIndex = tutorialStep !== null && tutorialStep >= 2 && tutorialStep <= 4 ? tutorialStep - 2 : null;
   const tutorialGuideStep = tutorialStep !== null ? WELCOME_TUTORIAL_STEPS[tutorialStep] : null;
 
   useEffect(() => { if (initialOpenCard) setSelectedAgent(initialOpenCard); }, [initialOpenCard]);
@@ -1731,8 +1731,8 @@ export default function Chat() {
   useEffect(() => {
     if (welcomeTutorialStep === null || currentConv) return;
     const targetMap: Partial<Record<number, HTMLDivElement | null>> = {
-      0: welcomeAgentsRef.current,
-      4: welcomeSceneRef.current,
+      0: welcomeSceneRef.current,
+      1: welcomeAgentsRef.current,
       5: welcomePromptsRef.current,
       6: welcomeInputRef.current,
     };
@@ -2190,29 +2190,36 @@ export default function Chat() {
     setShowWelcomeGuideChoice(false);
     setWelcomeTutorialStep(0);
   }, []);
+  const shouldGuideThroughCustomizer = experimentMode !== "limited";
 
   const openCustomizerTutorial = useCallback((agent: AgentKey = "A") => {
     setCustomizerInitialAgent(agent);
     setShowCustomizer(true);
     setShowWelcomeGuideChoice(false);
-    setWelcomeTutorialStep(1);
+    setWelcomeTutorialStep(2);
   }, []);
 
   const advanceWelcomeTutorial = useCallback(() => {
     setWelcomeTutorialStep((prev) => {
       if (prev === null) return prev;
       if (prev === 0) {
-        setCustomizerInitialAgent("A");
-        setShowCustomizer(true);
         return 1;
       }
-      if (prev >= 1 && prev <= 2) {
+      if (prev === 1) {
+        if (!shouldGuideThroughCustomizer) {
+          return 5;
+        }
+        setCustomizerInitialAgent("A");
+        setShowCustomizer(true);
+        return 2;
+      }
+      if (prev >= 2 && prev <= 3) {
         return prev + 1;
       }
-      if (prev === 3) {
+      if (prev === 4) {
         setShowCustomizer(false);
         setCustomizerInitialAgent(null);
-        return 4;
+        return 5;
       }
       if (prev >= WELCOME_TUTORIAL_STEPS.length - 1) {
         setWelcomeGuideDismissed(true);
@@ -2220,25 +2227,27 @@ export default function Chat() {
       }
       return prev + 1;
     });
-  }, []);
+  }, [shouldGuideThroughCustomizer]);
 
   const rewindWelcomeTutorial = useCallback(() => {
     setWelcomeTutorialStep((prev) => {
       if (prev === null) return prev;
-      if (prev === 1) {
+      if (!shouldGuideThroughCustomizer && prev === 5) {
+        return 1;
+      }
+      if (prev === 2) {
         setShowCustomizer(false);
         setCustomizerInitialAgent(null);
-        return 0;
+        return 1;
       }
       return Math.max(0, prev - 1);
     });
-  }, []);
+  }, [shouldGuideThroughCustomizer]);
 
   const isWelcomeStepActive = (stepIndex: number) => welcomeTutorialStep === stepIndex;
-  const shouldGuideThroughCustomizer = experimentMode !== "limited";
   const currentWelcomeTutorialBody =
-    welcomeTutorialStep === 0 && !shouldGuideThroughCustomizer
-      ? "In limited mode, choose exactly three preset agents first. After that, the guide moves on to the scene and prompts."
+    welcomeTutorialStep === 1 && !shouldGuideThroughCustomizer
+      ? "In limited mode, choose exactly three preset agents first. After that, the guide moves on to prompts and chat controls."
       : welcomeTutorialStep !== null
         ? WELCOME_TUTORIAL_STEPS[welcomeTutorialStep].body
         : "";
@@ -2275,8 +2284,8 @@ export default function Chat() {
             onClose={() => {
               setShowCustomizer(false);
               setCustomizerInitialAgent(null);
-              if (welcomeTutorialStep !== null && welcomeTutorialStep >= 1 && welcomeTutorialStep <= 3) {
-                setWelcomeTutorialStep(0);
+              if (welcomeTutorialStep !== null && welcomeTutorialStep >= 2 && welcomeTutorialStep <= 4) {
+                setWelcomeTutorialStep(1);
               }
             }}
             onAnalyze={analyzeEmotionForAgent}
@@ -2370,7 +2379,7 @@ export default function Chat() {
       {/* Main */}
       <div className="relative flex-1 flex flex-col min-w-0">
       <AnimatePresence>
-          {!currentConv && (showWelcomeGuideChoice || (welcomeTutorialStep !== null && !(showCustomizer && welcomeTutorialStep >= 1 && welcomeTutorialStep <= 3))) && (
+          {!currentConv && (showWelcomeGuideChoice || (welcomeTutorialStep !== null && !(showCustomizer && welcomeTutorialStep >= 2 && welcomeTutorialStep <= 4))) && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -2384,7 +2393,7 @@ export default function Chat() {
                 <>
                   <p className="text-[11px] tracking-widest text-black uppercase mb-2" style={monoFont}>First time here?</p>
                   <p className="text-[12px] text-black/75 leading-relaxed" style={monoFont}>
-                    I can show a quick walkthrough for agents, scene, prompts, and chat controls. You can change modes later from the side menu.
+                    I can show a quick walkthrough for scene, agents, prompts, and chat controls. You can change modes later from the side menu.
                   </p>
                   <div className="flex items-center justify-end gap-2 mt-4">
                     <button
@@ -2435,11 +2444,11 @@ export default function Chat() {
                     </button>
                     <button
                       type="button"
-                      onClick={welcomeTutorialStep === 0 && shouldGuideThroughCustomizer ? () => openCustomizerTutorial("A") : advanceWelcomeTutorial}
+                      onClick={welcomeTutorialStep === 1 && shouldGuideThroughCustomizer ? () => openCustomizerTutorial("A") : advanceWelcomeTutorial}
                       className="px-3 py-2 rounded-[10px] bg-black text-white text-[11px] hover:bg-neutral-800 transition-colors"
                       style={monoFont}
                     >
-                      {welcomeTutorialStep === 0 && shouldGuideThroughCustomizer ? "open" : welcomeTutorialStep === WELCOME_TUTORIAL_STEPS.length - 1 ? "done" : "next"}
+                      {welcomeTutorialStep === 1 && shouldGuideThroughCustomizer ? "open" : welcomeTutorialStep === WELCOME_TUTORIAL_STEPS.length - 1 ? "done" : "next"}
                     </button>
                   </div>
                 </>
@@ -2520,9 +2529,9 @@ export default function Chat() {
               </div>
               <div
                 ref={welcomeAgentsRef}
-                className="relative isolate w-full transition-all duration-200"
+                className="relative isolate order-2 w-full transition-all duration-200"
               >
-                <AnimatedGuideFrame active={isWelcomeStepActive(0)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
+                <AnimatedGuideFrame active={isWelcomeStepActive(1)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
                 <div className="relative z-10 px-2 py-2">
                   <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>AGENTS</p>
                   {experimentMode === "limited" ? (
@@ -2544,7 +2553,7 @@ export default function Chat() {
                               whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                               whileTap={{ scale: 0.98 }}
                               onClick={() => {
-                                if (isWelcomeStepActive(0) && shouldGuideThroughCustomizer) {
+                                if (isWelcomeStepActive(1) && shouldGuideThroughCustomizer) {
                                   openCustomizerTutorial("A");
                                   return;
                                 }
@@ -2589,7 +2598,7 @@ export default function Chat() {
                           whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                           whileTap={{ scale: 0.98 }}
                           onClick={() => {
-                            if (isWelcomeStepActive(0)) {
+                            if (isWelcomeStepActive(1)) {
                               openCustomizerTutorial(key as AgentKey);
                               return;
                             }
@@ -2626,9 +2635,9 @@ export default function Chat() {
               </div>
               <div
                 ref={welcomeSceneRef}
-                className="relative isolate w-full transition-all duration-200"
+                className="relative isolate order-1 w-full transition-all duration-200"
               >
-                <AnimatedGuideFrame active={isWelcomeStepActive(4)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
+                <AnimatedGuideFrame active={isWelcomeStepActive(0)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
                 <div className="relative z-10 px-2 py-2">
                   <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>SCENE</p>
                   <motion.button
@@ -2648,7 +2657,7 @@ export default function Chat() {
               </div>
               <div
                 ref={welcomePromptsRef}
-                className="relative isolate w-full transition-all duration-200"
+                className="relative isolate order-3 w-full transition-all duration-200"
               >
                 <AnimatedGuideFrame active={isWelcomeStepActive(5)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
                 <div className="relative z-10 px-2 py-2">

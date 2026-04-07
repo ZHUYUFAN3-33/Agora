@@ -808,13 +808,18 @@ const AgentMessage = React.memo(function AgentMessage({
       className="flex flex-col gap-1 mb-4"
     >
       <div className="flex items-center gap-2 mb-1">
-        <div
-          className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0"
-          style={{ backgroundColor: isError ? "#ef4444" : accentColor }}
-        />
+        <span
+          className="inline-flex h-[11px] w-[7px] flex-shrink-0 items-center justify-center"
+          aria-hidden
+        >
+          <span
+            className="block w-[7px] h-[7px] rounded-[1.5px]"
+            style={{ backgroundColor: isError ? "#ef4444" : accentColor }}
+          />
+        </span>
         <div
           ref={triggerRef}
-          className="relative"
+          className="relative flex items-center"
           onMouseEnter={(e) => {
             if (ENABLE_AGENT_INFO_CARD && message.agentKey) hoveredRef.current = true;
             if (quickHover) openPopover();
@@ -825,7 +830,7 @@ const AgentMessage = React.memo(function AgentMessage({
           }}
         >
           <button
-            className={`text-[11px] tracking-widest leading-none ${
+            className={`inline-flex items-center p-0 m-0 border-0 bg-transparent text-[11px] tracking-widest leading-none ${
               quickHover ? "cursor-default hover:underline underline-offset-2" : "cursor-default"
             }`}
             style={{ ...monoFont, color: isError ? "#ef4444" : "#000" }}

@@ -1578,9 +1578,7 @@ export default function Chat() {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
   const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full");
-  const [showWelcomeGuideChoice, setShowWelcomeGuideChoice] = useState(false);
   const [welcomeTutorialStep, setWelcomeTutorialStep] = useState<number | null>(null);
-  const [welcomeGuideDismissed, setWelcomeGuideDismissed] = useState(false);
 
   const [chatAnnotationMode, setChatAnnotationMode] = useState(false);
   const [chatLayerAnnotations, setChatLayerAnnotations] = useState<Record<string, ChatLayerAnnotation[]>>({});
@@ -1688,14 +1686,9 @@ export default function Chat() {
 
   useEffect(() => {
     if (currentConv) {
-      setShowWelcomeGuideChoice(false);
       setWelcomeTutorialStep(null);
-      return;
     }
-    if (!welcomeGuideDismissed && welcomeTutorialStep === null) {
-      setShowWelcomeGuideChoice(true);
-    }
-  }, [currentConv, welcomeTutorialStep, welcomeGuideDismissed]);
+  }, [currentConv]);
 
   useEffect(() => {
     const c = messagesContainerRef.current;
@@ -2179,23 +2172,39 @@ export default function Chat() {
   }, [inputValue, autoResizeInput]);
 
   const dismissWelcomeGuide = useCallback(() => {
-    setWelcomeGuideDismissed(true);
-    setShowWelcomeGuideChoice(false);
     setWelcomeTutorialStep(null);
     setShowCustomizer(false);
     setCustomizerInitialAgent(null);
   }, []);
 
   const startWelcomeTutorial = useCallback(() => {
-    setShowWelcomeGuideChoice(false);
     setWelcomeTutorialStep(0);
   }, []);
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "t" && e.key !== "T") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) return;
+      if (el?.isContentEditable) return;
+      if (currentConv) return;
+      e.preventDefault();
+      if (welcomeTutorialStep !== null) {
+        dismissWelcomeGuide();
+      } else {
+        startWelcomeTutorial();
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [currentConv, welcomeTutorialStep, dismissWelcomeGuide, startWelcomeTutorial]);
+
   const shouldGuideThroughCustomizer = experimentMode !== "limited";
 
   const openCustomizerTutorial = useCallback((agent: AgentKey = "A") => {
     setCustomizerInitialAgent(agent);
     setShowCustomizer(true);
-    setShowWelcomeGuideChoice(false);
     setWelcomeTutorialStep(2);
   }, []);
 
@@ -2222,7 +2231,6 @@ export default function Chat() {
         return 5;
       }
       if (prev >= WELCOME_TUTORIAL_STEPS.length - 1) {
-        setWelcomeGuideDismissed(true);
         return null;
       }
       return prev + 1;
@@ -2379,7 +2387,7 @@ export default function Chat() {
       {/* Main */}
       <div className="relative flex-1 flex flex-col min-w-0">
       <AnimatePresence>
-          {!currentConv && (showWelcomeGuideChoice || (welcomeTutorialStep !== null && !(showCustomizer && welcomeTutorialStep >= 2 && welcomeTutorialStep <= 4))) && (
+          {!currentConv && welcomeTutorialStep !== null && !(showCustomizer && welcomeTutorialStep >= 2 && welcomeTutorialStep <= 4) && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -2389,33 +2397,6 @@ export default function Chat() {
             >
               <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} pulse />
               <div className="relative z-10">
-              {showWelcomeGuideChoice ? (
-                <>
-                  <p className="text-[11px] tracking-widest text-black uppercase mb-2" style={monoFont}>First time here?</p>
-                  <p className="text-[12px] text-black/75 leading-relaxed" style={monoFont}>
-                    I can show a quick walkthrough for scene, agents, prompts, and chat controls. You can change modes later from the side menu.
-                  </p>
-                  <div className="flex items-center justify-end gap-2 mt-4">
-                    <button
-                      type="button"
-                      onClick={dismissWelcomeGuide}
-                      className="px-3 py-2 rounded-[10px] border border-black/10 text-[11px] text-[var(--app-muted-text)] hover:text-black hover:border-black/20 transition-colors"
-                      style={monoFont}
-                    >
-                      skip
-                    </button>
-                    <button
-                      type="button"
-                      onClick={startWelcomeTutorial}
-                      className="px-3 py-2 rounded-[10px] bg-black text-white text-[11px] hover:bg-neutral-800 transition-colors"
-                      style={monoFont}
-                    >
-                      ok
-                    </button>
-                  </div>
-                </>
-              ) : welcomeTutorialStep !== null ? (
-                <>
                   <div className="flex items-center justify-between gap-3 mb-2">
                     <p className="text-[11px] tracking-widest text-black uppercase" style={monoFont}>
                       {welcomeTutorialStep + 1}/{WELCOME_TUTORIAL_STEPS.length} · {WELCOME_TUTORIAL_STEPS[welcomeTutorialStep].title}
@@ -2451,14 +2432,12 @@ export default function Chat() {
                       {welcomeTutorialStep === 1 && shouldGuideThroughCustomizer ? "open" : welcomeTutorialStep === WELCOME_TUTORIAL_STEPS.length - 1 ? "done" : "next"}
                     </button>
                   </div>
-                </>
-              ) : null}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        <header className="h-[56px] border-b border-black/8 flex items-center px-4 gap-4 flex-shrink-0">
+        <header className="relative z-10 h-[56px] flex-shrink-0 flex items-center border-b border-black/8 bg-white px-4 gap-4">
           <button className="p-1.5 hover:bg-black/5 rounded-md transition-colors" onClick={() => setSidebarOpen(true)}>
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 4.5H16M2 9H16M2 13.5H16" stroke="black" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
@@ -2517,7 +2496,7 @@ export default function Chat() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -12, scale: 0.99 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              className="w-full max-w-[440px] sm:max-w-[560px] lg:max-w-[680px] xl:max-w-[800px] mx-auto flex flex-col items-center justify-center min-h-[60vh] gap-8"
+              className="w-full max-w-[440px] sm:max-w-[560px] lg:max-w-[680px] xl:max-w-[800px] mx-auto flex flex-col items-center justify-start gap-8 pt-2 pb-12"
             >
               <div className="flex flex-col items-center gap-4 w-full">
                 <AgoraLogo size={96} />

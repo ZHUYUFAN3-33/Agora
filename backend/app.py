@@ -983,13 +983,26 @@ def log_param_change():
     return jsonify({"ok": True, "change_count": change_count}), 200
 
 
+def _safe_room_id(room_id: str) -> Optional[str]:
+    """Reject path traversal; room ids are alphanumeric (see session create)."""
+    if not room_id or not re.fullmatch(r"[A-Za-z0-9_-]+", room_id):
+        return None
+    return room_id
+
+
 @app.route('/api/export-logs/<room_id>', methods=['GET'])
 def export_logs(room_id):
-    """Export current session logs as a zip file (chat, thinking, params)."""
-    if room_id not in chat_sessions:
+    """Export this session's logs as a zip (tied to room_id / log files on disk)."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    if room_id not in chat_sessions and not os.path.exists(chat_path):
         return jsonify({"error": "Session not found"}), 404
 
     buf = io.BytesIO()
+    wrote = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for name, filename in [
             (f"{room_id}.jsonl", f"{room_id}.jsonl"),
@@ -1001,6 +1014,10 @@ def export_logs(room_id):
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
                     zf.writestr(name, f.read())
+                wrote += 1
+
+    if wrote == 0:
+        return jsonify({"error": "No log files for this session"}), 404
 
     buf.seek(0)
     return send_file(
@@ -1009,6 +1026,43 @@ def export_logs(room_id):
         as_attachment=True,
         download_name=f"agora_logs_{room_id}.zip",
     )
+
+
+@app.route('/api/summary/<room_id>', methods=['POST', 'GET'])
+def session_summary(room_id):
+    """
+    Decision-direction summary for one chat session (transcript_summary.py).
+    Scoped to room_id; reads logs/{room_id}.jsonl (+ moderator phases when present).
+    Default language: en (UI is English).
+    """
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    if not os.path.exists(chat_path):
+        return jsonify({"error": "No chat log for this session yet"}), 404
+
+    lang = "en"
+    if request.method == "GET":
+        lang = (request.args.get("lang") or "en").strip().lower()
+    else:
+        body = request.get_json(silent=True) or {}
+        lang = (body.get("lang") or request.args.get("lang") or "en").strip().lower()
+    if lang not in ("en", "zh"):
+        lang = "en"
+
+    try:
+        from transcript_summary import build as build_summary
+        text = build_summary(chat_path, lang)
+    except Exception as e:
+        return jsonify({"error": f"Summary failed: {e}"}), 502
+
+    return jsonify({
+        "room_id": room_id,
+        "lang": lang,
+        "markdown": text,
+    })
 
 
 @app.route('/api/health', methods=['GET'])

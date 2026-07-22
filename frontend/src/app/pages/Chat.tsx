@@ -1016,12 +1016,99 @@ function AttachMenu({ open, onClose, anchorRef }: { open: boolean; onClose: () =
 }
 
 
+// ─── Session summary panel (decision-direction recap for current room) ─
+
+function SummaryPanel({
+  open,
+  onClose,
+  roomId,
+  markdown,
+  loading,
+  error,
+  onRefresh,
+}: {
+  open: boolean;
+  onClose: () => void;
+  roomId: string;
+  markdown: string | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <motion.div
+      className="fixed inset-0 z-[220] flex items-center justify-center p-4"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <button type="button" className="absolute inset-0 bg-black/30" aria-label="Close summary" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+        transition={{ duration: 0.2 }}
+        className="relative z-10 w-full max-w-[560px] max-h-[min(80vh,720px)] flex flex-col bg-white border border-black/10 rounded-[16px] shadow-[0_8px_40px_rgba(0,0,0,0.12)] overflow-hidden"
+      >
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-black/8">
+          <div className="min-w-0">
+            <p className="text-[13px] text-black" style={monoFont}>Decision summary</p>
+            <p className="text-[10px] text-[var(--app-muted-text)] mt-0.5 truncate" style={monoFont}>
+              Session {roomId}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={loading}
+              className="px-2.5 py-1.5 rounded-[8px] border border-black/10 text-[11px] text-black/70 hover:bg-black/5 disabled:opacity-40"
+              style={monoFont}
+            >
+              {loading ? "Generating…" : "Refresh"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-[8px] hover:bg-black/5 text-black/50"
+              aria-label="Close"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading && !markdown && (
+            <p className="text-[12px] text-[var(--app-muted-text)]" style={monoFont}>
+              Reading this session&apos;s log and drafting the direction summary…
+            </p>
+          )}
+          {error && (
+            <p className="text-[12px] text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded-[8px]" style={monoFont}>
+              {error}
+            </p>
+          )}
+          {markdown && (
+            <pre
+              className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-black/85"
+              style={monoFont}
+            >
+              {markdown}
+            </pre>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ─── Settings menu (Customize Agent, Customize Scene, Reload, Export) ─
 
-function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onExportLog, hasRoomId, showFontColor, onToggleFontColor }: {
+function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onSummary, onExportLog, hasRoomId, showFontColor, onToggleFontColor }: {
   open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLButtonElement | null>;
   onCustomize: () => void; onScene: () => void; onAppearance: () => void;
-  onReloadHistory: () => void; onExportLog: () => void; hasRoomId: boolean;
+  onReloadHistory: () => void; onSummary: () => void; onExportLog: () => void; hasRoomId: boolean;
   showFontColor: boolean; onToggleFontColor: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -1059,6 +1146,7 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
       {hasRoomId && (
         <>
           <Item icon={<svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="17.18 15 8.18 15 8.18 6"/><path d="M10.58,12A18,18,0,1,1,6.23,26.88"/></svg>} label="Reload history" onClick={onReloadHistory} />
+          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>} label="Decision summary" onClick={onSummary} />
           <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label="Export log" onClick={onExportLog} />
         </>
       )}
@@ -1571,6 +1659,11 @@ export default function Chat() {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [backendOnline, setBackendOnline] = useState(false);
   const [sessionCreateError, setSessionCreateError] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  /** Cached markdown per room_id — summary always follows the active session. */
+  const [summaryByRoom, setSummaryByRoom] = useState<Record<string, string>>({});
   const attachBtnRef = useRef<HTMLButtonElement>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -1662,6 +1755,8 @@ export default function Chat() {
     setChatLayerAnnotations({});
     setChatAnnotationDraft(null);
     setChatAnnotationMode(false);
+    setSummaryOpen(false);
+    setSummaryError(null);
   }, [currentConvId]);
 
   useEffect(() => {
@@ -2100,7 +2195,11 @@ export default function Chat() {
     if (!currentConv?.roomId) return;
     try {
       const res = await fetch(`${API_BASE}/export-logs/${currentConv.roomId}`);
-      if (!res.ok) throw new Error(res.statusText);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert((err as { error?: string }).error || "Export failed");
+        return;
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -2108,7 +2207,43 @@ export default function Chat() {
       a.download = `agora_logs_${currentConv.roomId}.zip`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {}
+    } catch {
+      alert("Export failed — is the backend running?");
+    }
+  };
+
+  const fetchSessionSummary = async (force = false) => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return;
+    if (!force && summaryByRoom[roomId]) {
+      setSummaryError(null);
+      setSummaryOpen(true);
+      return;
+    }
+    setSummaryOpen(true);
+    setSummaryLoading(true);
+    setSummaryError(null);
+    try {
+      const res = await fetch(`${API_BASE}/summary/${roomId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: "en" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSummaryError((data as { error?: string }).error || "Could not generate summary");
+        return;
+      }
+      setSummaryByRoom((prev) => ({ ...prev, [roomId]: (data as { markdown?: string }).markdown || "" }));
+    } catch {
+      setSummaryError("Summary failed — is the backend running?");
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const handleOpenSummary = () => {
+    void fetchSessionSummary(false);
   };
 
   const defaultConvSettings = (mode: ExperimentMode = "full"): ConvSettings => ({
@@ -2902,7 +3037,9 @@ export default function Chat() {
                   <SettingsMenu open={settingsMenuOpen} onClose={() => setSettingsMenuOpen(false)} anchorRef={settingsBtnRef}
                     onCustomize={() => setShowCustomizer(true)} onScene={() => setShowSceneSelector(true)}
                     onAppearance={() => setShowAppearanceModal(true)}
-                    onReloadHistory={handleLoadHistory} onExportLog={handleExportLog} hasRoomId={!!currentConv?.roomId}
+                    onReloadHistory={handleLoadHistory}
+                    onSummary={handleOpenSummary}
+                    onExportLog={handleExportLog} hasRoomId={!!currentConv?.roomId}
                     showFontColor={showFontColorInSettings} onToggleFontColor={() => setShowFontColorInSettings((v) => !v)} />
                 </AnimatePresence>
               </div>
@@ -2952,6 +3089,19 @@ export default function Chat() {
         </div>,
         document.body,
       )}
+    <AnimatePresence>
+      {summaryOpen && currentConv?.roomId && (
+        <SummaryPanel
+          open={summaryOpen}
+          onClose={() => setSummaryOpen(false)}
+          roomId={currentConv.roomId}
+          markdown={summaryByRoom[currentConv.roomId] || null}
+          loading={summaryLoading}
+          error={summaryError}
+          onRefresh={() => void fetchSessionSummary(true)}
+        />
+      )}
+    </AnimatePresence>
     </>
   );
 }

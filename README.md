@@ -122,6 +122,7 @@ Agora/
 | POST | `/api/message` | User message → agent replies |
 | GET | `/api/history/<room_id>` | History |
 | GET | `/api/export-logs/<room_id>` | Export zip |
+| POST/GET | `/api/summary/<room_id>` | Decision-direction summary for that session (`lang=en` default) |
 | POST | `/api/emotion/analyze` | Emotion helper |
 
 ---

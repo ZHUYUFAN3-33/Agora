@@ -335,6 +335,20 @@ def create_response_with_client(client, model: str, messages: List[dict], temper
     return extract_text(resp)
 
 
+def create_response(model: str, messages: List[dict], temperature: float, max_output_tokens: int) -> str:
+    """CLI / transcript_summary helper: build a client from OPENAI_API_KEY env."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    except Exception:
+        pass
+    from openai import OpenAI
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+    return create_response_with_client(OpenAI(api_key=api_key), model, messages, temperature, max_output_tokens)
+
+
 # -------------------------------
 # User facts (from old agent)
 # -------------------------------

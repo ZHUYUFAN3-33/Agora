@@ -10,15 +10,23 @@ Current focus: **English UI** + **Agora-2 scenarios** (Employment, Parent-Child)
 
 ## How to run / 如何运行 / 実行方法
 
-### 1. OpenAI key
+### 1. OpenAI key（各自本地配置 / set up locally yourself）
+
+`.env` **不会进仓库**，每人自己建：
 
 ```bash
 cp backend/.env.example backend/.env
-# Edit backend/.env and set a real key:
-# OPENAI_API_KEY=sk-...
 ```
 
-Do not commit `.env`. Chat will fail with 401 if the key is missing or invalid.
+然后编辑 `backend/.env`，把占位符换成你自己的密钥：
+
+```env
+OPENAI_API_KEY=sk-你的密钥
+```
+
+- Do this yourself on every machine / clone — nobody else’s key is shared via git.
+- Never commit `.env`.
+- Without a valid key, chat / Summary will fail (401 / API errors). Restart Flask after editing.
 
 ### 2. Backend (terminal 1)
 

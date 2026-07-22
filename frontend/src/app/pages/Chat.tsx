@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { AgoraLogo, AgoraLogoFull } from "../components/AgoraLogo";
 import { CustomDropdown } from "../components/ui/CustomDropdown";
 import { AppearanceModal } from "../components/AppearanceModal";
+import { IntakeModal, type Agora2IntakePayload } from "../components/IntakeModal";
 import { useAppearanceContext } from "../context/AppearanceContext";
 import {
   type AgentKey,
@@ -23,7 +24,6 @@ import {
   DECISION_BLOCKS,
   DECISION_BLOCK_DESCRIPTIONS,
   DECISION_BLOCK_EXAMPLES,
-  SCENE_SUGGESTED_PROMPTS,
   EMOTION_EMOJI,
   EMOTION_COLORS,
   EMOTION_EXAMPLES,
@@ -31,6 +31,7 @@ import {
   defaultSetting,
   getEmotionDecisionSummary,
   getEmotionDecisionRole,
+  isAgora2SceneId,
 } from "../data/agents";
 import {
   monoFont,
@@ -1434,7 +1435,12 @@ function CustomizerModal({
 
 // ─── Scene Selector ───────────────────────────────────────────────────────────
 
-function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scenes: Scene[]; selectedScene: Scene | null; onSelect: (s: Scene) => void; onClose: () => void }) {
+function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: {
+  scenes: Scene[];
+  selectedScene: Scene | null;
+  onSelect: (s: Scene) => void;
+  onClose: () => void;
+}) {
   const SCENE_PAGE_SIZE = 3;
   const scenePages: Scene[][] = Array.from(
     { length: Math.ceil((scenes?.length || 0) / SCENE_PAGE_SIZE) },
@@ -1452,14 +1458,14 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scen
   const goNext = () => setPage((p) => Math.min(Math.max(scenePages.length - 1, 0), p + 1));
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
-      className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6" onClick={onClose}>
       <motion.div
         initial={{ opacity: 0, scale: 0.97, y: 16 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
-        transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-[720px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-[720px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between px-6 py-5 border-b border-black/8">
           <div>
             <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>Customize Scene</h2>
@@ -1481,11 +1487,14 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scen
                   <div key={pageIdx} className="shrink-0 grow-0 basis-full p-4">
                     <div className="grid grid-cols-2 gap-3">
                       {pageScenes.map((s) => (
-                        <button key={s.id} onClick={() => { onSelect(s); onClose(); }}
+                        <button key={s.id} onClick={() => onSelect(s)}
                           className={`text-left p-4 border-2 rounded-[12px] transition-all hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)] ${selectedScene?.id === s.id ? "border-black" : "border-black/10 hover:border-black/30"}`}>
                           <div className="text-2xl mb-2">{s.icon}</div>
                           <div className="text-[13px] mb-1" style={{ ...monoFont, fontWeight: 500 }}>{s.title}</div>
                           <div className="text-[10px] text-[var(--app-muted-text)] leading-relaxed" style={monoFont}>{s.description}</div>
+                          {isAgora2SceneId(s.id) && (
+                            <div className="text-[9px] text-[var(--app-muted-text)] mt-2 tracking-widest uppercase" style={monoFont}>intake required</div>
+                          )}
                         </button>
                       ))}
                       <motion.button
@@ -1527,11 +1536,10 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scen
         </div>
         {selectedScene && (
           <div className="px-6 pb-4">
-            <button onClick={() => { onSelect(null as unknown as Scene); onClose(); }} className="text-[11px] text-[var(--app-muted-text)] hover:text-black transition-colors" style={monoFont}>Clear selection</button>
+            <button onClick={() => { onSelect(null as unknown as Scene); }} className="text-[11px] text-[var(--app-muted-text)] hover:text-black transition-colors" style={monoFont}>Clear selection</button>
           </div>
         )}
       </motion.div>
-    </motion.div>
   );
 }
 
@@ -1577,6 +1585,8 @@ export default function Chat() {
   const [limitedSelectedAgents, setLimitedSelectedAgents] = useState<AgentPoolKey[]>([...LIMITED_DEFAULT_SELECTED]);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
+  const [pendingIntakeScene, setPendingIntakeScene] = useState<Scene | null>(null);
+  const [agora2Intake, setAgora2Intake] = useState<Agora2IntakePayload | null>(null);
   const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full");
   const [welcomeTutorialStep, setWelcomeTutorialStep] = useState<number | null>(null);
 
@@ -1600,8 +1610,9 @@ export default function Chat() {
   const welcomeInputRef = useRef<HTMLDivElement>(null);
   const currentConv = conversations.find((c) => c.id === currentConvId) || null;
   const appearance = useAppearanceContext();
-  const activeSceneId = selectedScene?.id || "scene1";
-  const suggestedPrompts = SCENE_SUGGESTED_PROMPTS[activeSceneId] || SCENE_SUGGESTED_PROMPTS.scene1;
+  const suggestedPrompts = selectedScene?.suggestedPrompts?.length
+    ? selectedScene.suggestedPrompts
+    : [];
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const c = messagesContainerRef.current;
@@ -1681,7 +1692,23 @@ export default function Chat() {
 
   useEffect(() => {
     fetch(`${API_BASE}/health`).then((r) => { if (r.ok) setBackendOnline(true); }).catch(() => {});
-    fetch("/scenes_config.json").then((r) => r.json()).then((d) => setScenes(d.scenes || [])).catch(() => {});
+    fetch(`${API_BASE}/agora2/scenarios?lang=en`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`scenarios ${r.status}`);
+        return r.json();
+      })
+      .then((d) => {
+        const list = (d.scenes || d.scenarios || []) as Scene[];
+        setScenes(list);
+        setSelectedScene((prev) => {
+          if (prev) {
+            const fresh = list.find((s) => s.id === prev.id);
+            if (fresh) return fresh;
+          }
+          return list[0] || null;
+        });
+      })
+      .catch(() => setScenes([]));
   }, []);
 
   useEffect(() => {
@@ -1874,6 +1901,13 @@ export default function Chat() {
     };
 
     if (!convId) {
+      if (isAgora2SceneId(selectedScene?.id) && !agora2Intake) {
+        setSessionCreateError("Complete session intake for this scene before chatting.");
+        if (selectedScene) setPendingIntakeScene(selectedScene);
+        setInputValue(text);
+        setIsLoading(false);
+        return;
+      }
       try {
         const res = await fetch(`${API_BASE}/start`, {
           method: "POST",
@@ -1882,6 +1916,16 @@ export default function Chat() {
             scene_id: selectedScene?.id || "scene1",
             mode: experimentMode,
             limited_selected_agent_keys: experimentMode === "limited" ? limitedSelectedAgents : undefined,
+            ...(isAgora2SceneId(selectedScene?.id) && agora2Intake
+              ? {
+                  scenario_type: selectedScene!.id,
+                  lang: "en",
+                  profile: agora2Intake.profile,
+                  intake: agora2Intake.intake,
+                  user_id: (nickname || "web_user").replace(/\s+/g, "_"),
+                  use_demo_intake: false,
+                }
+              : {}),
           }),
         });
         const data = await res.json();
@@ -1977,8 +2021,10 @@ export default function Chat() {
     setTypingKeys(activeMode === "single" ? ["A"] : ["A"]);
     try {
       const res = await fetch(`${API_BASE}/message`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: roomId, message: text, scene_id: selectedScene?.id || "scene1", emotion_tag: null, emotion_target: null, agent_emotion_overrides: agentEmotionOverrides, additional_rules: additionalRules, agent_decision_block: agentDecisionBlock, max_agent_turns_before_user: maxTurns, max_user_gap: maxUserGap, single_mode: activeMode === "single" }) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string })?.error || `HTTP ${res.status}`);
+      }
       setCurrentPhase(data.phase || null);
       const responses: Array<{ agent_key: string; message: string }> = data.responses || [];
       if (responses.length === 0) { setTypingKeys([]); }
@@ -1996,9 +2042,10 @@ export default function Chat() {
         const filtered = activeMode === "single" ? mapped.filter((m) => m.agentKey === "A").slice(0, 1) : mapped;
         setMsgQueue(filtered);
       }
-    } catch {
+    } catch (err) {
       setTypingKeys([]);
-      const errMsg: Message = { id: `msg-err-${Date.now()}`, role: "agent", content: backendOnline ? "Something went wrong. Please try again." : "Backend is not running. Start with: python app.py", timestamp: Date.now() };
+      const detail = err instanceof Error && err.message ? err.message : "Something went wrong. Please try again.";
+      const errMsg: Message = { id: `msg-err-${Date.now()}`, role: "agent", content: backendOnline ? detail : "Backend is not running. Start with: python app.py", timestamp: Date.now() };
       setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, messages: [...c.messages, errMsg] } : c));
     } finally {
       setIsLoading(false);
@@ -2305,9 +2352,66 @@ export default function Chat() {
             guideGradientPalette={guideGradientPalette}
           />
         )}
-        {showSceneSelector && (
-          <SceneSelectorModal scenes={scenes} selectedScene={selectedScene} onSelect={setSelectedScene} onClose={() => setShowSceneSelector(false)} />
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {(showSceneSelector || !!pendingIntakeScene) && (
+          <motion.div
+            key="scene-flow-overlay"
+            className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              if (pendingIntakeScene) setPendingIntakeScene(null);
+              else setShowSceneSelector(false);
+            }}
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              {pendingIntakeScene ? (
+                <IntakeModal
+                  key={`intake-${pendingIntakeScene.id}`}
+                  scene={pendingIntakeScene}
+                  onClose={() => setPendingIntakeScene(null)}
+                  onConfirm={(payload) => {
+                    setSelectedScene(pendingIntakeScene);
+                    setAgora2Intake(payload);
+                    setPendingIntakeScene(null);
+                    setShowSceneSelector(false);
+                  }}
+                />
+              ) : (
+                <SceneSelectorModal
+                  key="scene-selector"
+                  scenes={scenes}
+                  selectedScene={selectedScene}
+                  onSelect={(s) => {
+                    if (!s) {
+                      setSelectedScene(null);
+                      setAgora2Intake(null);
+                      setShowSceneSelector(false);
+                      return;
+                    }
+                    if (isAgora2SceneId(s.id)) {
+                      // Overlay stays; only the panel swaps — no backdrop flicker
+                      setPendingIntakeScene(s);
+                      setShowSceneSelector(false);
+                      return;
+                    }
+                    setAgora2Intake(null);
+                    setSelectedScene(s);
+                    setShowSceneSelector(false);
+                  }}
+                  onClose={() => setShowSceneSelector(false)}
+                />
+              )}
+            </AnimatePresence>
+          </motion.div>
         )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {showAppearanceModal && (
           <AppearanceModal
             open={showAppearanceModal}

@@ -80,6 +80,18 @@ export const BACKEND_NAME_TO_KEY: Record<string, AgentKey> = {
 };
 
 export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
+  employment: [
+    "I'm choosing between two offers. Can you help me compare growth vs stability vs work-life balance?",
+    "What risks am I underweighting if I switch companies within two weeks?",
+    "How should I rank salary, growth, and location for this decision?",
+    "What clarifying questions should I ask each company before deciding?",
+  ],
+  parent_child: [
+    "I need to decide on a rule for my child's phone use. How do we balance autonomy and safety?",
+    "How should I weigh what my child wants against practical constraints?",
+    "What does a respectful decision process look like for this parenting choice?",
+    "Can you help me separate my child's stated preference from typical age-based assumptions?",
+  ],
   scene1: [
     "I need a Black Friday laptop under $1200 for coding and light gaming. What should I prioritize?",
     "Should I buy now during Black Friday or wait for next-gen models in spring?",
@@ -336,4 +348,13 @@ export interface Scene {
   description: string;
   icon: string;
   color: string;
+  suggestedPrompts?: string[];
+}
+
+/** Scenes that use the Agora-2 profile + intake pipeline before /api/start. */
+export const AGORA2_SCENE_IDS = ["employment", "parent_child"] as const;
+export type Agora2SceneId = (typeof AGORA2_SCENE_IDS)[number];
+
+export function isAgora2SceneId(id: string | null | undefined): id is Agora2SceneId {
+  return !!id && (AGORA2_SCENE_IDS as readonly string[]).includes(id);
 }

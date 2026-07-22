@@ -1,0 +1,213 @@
+{
+  "label": {
+    "zh": "就职决策",
+    "en": "Employment Decision"
+  },
+  "profile_fields": [
+    {
+      "key": "age",
+      "type": "number",
+      "optional": false,
+      "question": {
+        "zh": "您的年龄是？",
+        "en": "What is your age?"
+      }
+    },
+    {
+      "key": "education",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "您的教育背景（学历、专业）是？",
+        "en": "What is your educational background (degree, major)?"
+      }
+    },
+    {
+      "key": "industry_experience",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "您目前所在行业及工作年限是？",
+        "en": "What is your current industry and years of experience?"
+      }
+    },
+    {
+      "key": "career_stage",
+      "type": "select",
+      "optional": false,
+      "question": {
+        "zh": "您目前的职业阶段是？",
+        "en": "What is your current career stage?"
+      },
+      "options": [
+        {
+          "value": "fresh_grad",
+          "label": {
+            "zh": "应届生",
+            "en": "Fresh graduate"
+          }
+        },
+        {
+          "value": "job_change",
+          "label": {
+            "zh": "跳槽",
+            "en": "Job change"
+          }
+        },
+        {
+          "value": "career_pivot",
+          "label": {
+            "zh": "转行",
+            "en": "Career pivot"
+          }
+        },
+        {
+          "value": "promotion",
+          "label": {
+            "zh": "晋升考虑",
+            "en": "Considering promotion"
+          }
+        }
+      ]
+    },
+    {
+      "key": "family_situation",
+      "type": "text",
+      "optional": true,
+      "sensitive": true,
+      "question": {
+        "zh": "是否需要考虑家庭因素（如伴侣工作地、子女教育）？可跳过。",
+        "en": "Any family factors to consider (e.g. partner's work location, children's education)? Optional."
+      }
+    },
+    {
+      "key": "long_term_goal",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "您的长期职业目标是什么？（简述）",
+        "en": "What is your long-term career goal? (brief)"
+      }
+    },
+    {
+      "key": "risk_tolerance",
+      "type": "select",
+      "optional": false,
+      "question": {
+        "zh": "您对不确定性/风险的基线态度是？",
+        "en": "What is your baseline attitude toward uncertainty/risk?"
+      },
+      "options": [
+        {
+          "value": "low",
+          "label": {
+            "zh": "偏保守",
+            "en": "Conservative"
+          }
+        },
+        {
+          "value": "medium",
+          "label": {
+            "zh": "中等",
+            "en": "Medium"
+          }
+        },
+        {
+          "value": "high",
+          "label": {
+            "zh": "偏冒险",
+            "en": "Risk-taking"
+          }
+        }
+      ]
+    }
+  ],
+  "scenario_fields": [
+    {
+      "key": "decision_field",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "本次考虑的具体领域/岗位方向是？",
+        "en": "What field/role are you considering for this decision?"
+      }
+    },
+    {
+      "key": "options",
+      "type": "list",
+      "optional": false,
+      "question": {
+        "zh": "目前在比较的选项有哪些？（公司名、职级、薪酬、地点，可多条）",
+        "en": "What options are you comparing? (company, level, salary, location — multiple allowed)"
+      }
+    },
+    {
+      "key": "deadline",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "距离需要做决定还有多久？",
+        "en": "How much time until you need to decide?"
+      }
+    },
+    {
+      "key": "current_status",
+      "type": "select",
+      "optional": false,
+      "question": {
+        "zh": "您当前的状态是？",
+        "en": "What is your current status?"
+      },
+      "options": [
+        {
+          "value": "employed",
+          "label": {
+            "zh": "在职",
+            "en": "Currently employed"
+          }
+        },
+        {
+          "value": "unemployed",
+          "label": {
+            "zh": "已离职",
+            "en": "Currently unemployed"
+          }
+        },
+        {
+          "value": "pending_grad",
+          "label": {
+            "zh": "应届待定",
+            "en": "Graduating, undecided"
+          }
+        }
+      ]
+    },
+    {
+      "key": "priority_ranking",
+      "type": "list",
+      "optional": false,
+      "question": {
+        "zh": "本次最看重的因素排序是？（如：薪酬、成长、稳定、地点、文化）",
+        "en": "Rank what matters most this time (e.g. salary, growth, stability, location, culture)"
+      }
+    },
+    {
+      "key": "comparison_anchor",
+      "type": "text",
+      "optional": true,
+      "question": {
+        "zh": "您心里是否已经有一个默认倾向的选项？可跳过。",
+        "en": "Do you already lean toward one option? Optional."
+      }
+    },
+    {
+      "key": "external_pressure",
+      "type": "text",
+      "optional": true,
+      "question": {
+        "zh": "是否有外部时间/人为压力（如家人催促、offer 即将过期）？可跳过。",
+        "en": "Any external time or personal pressure (e.g. family urging, offer expiring)? Optional."
+      }
+    }
+  ]
+}

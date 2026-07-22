@@ -17,7 +17,8 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from openai import OpenAI
+from openai import OpenAI, AuthenticationError, APIError
+from dotenv import load_dotenv
 
 # Import from agentwake_new (agent-module - phase-based deliberation)
 import sys
@@ -49,6 +50,16 @@ if os.path.exists(_emotion_module_path):
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 import agentwake_new as agent_module
+
+# Agora-2 adapter (friend backend: profile/intake/stance/assembly)
+try:
+    import agora2_http
+    HAVE_AGORA2 = True
+    print("✓ Agora-2 adapter loaded")
+except Exception as _agora2_err:
+    agora2_http = None  # type: ignore
+    HAVE_AGORA2 = False
+    print(f"⚠ Agora-2 adapter not loaded: {_agora2_err}")
 
 now_local_iso = agent_module.now_local_iso
 read_text = agent_module.read_text
@@ -83,8 +94,10 @@ TZ = ZoneInfo("Asia/Tokyo")
 Speaker = Literal["A", "B", "C", "U"]
 PREFER_AGENTS = 0.85  # When admin chooses U, override to random agent with this probability
 
-# Load API key from environment or use default (should be set in .env)
-API_KEY = os.getenv("OPENAI_API_KEY", "sk-tnIxDvUFzbMtFbnGpiLC5FXqep9dRMRdsdvUWs2g9hT3BlbkFJmfl6UE3khKvUqT_xeZpq66twaUika-kvxbrc-srSQA")
+# Load API key from environment (.env supported). No hardcoded fallback key.
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(os.path.dirname(BASE_DIR), ".env"))
+API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
@@ -106,6 +119,7 @@ BOT1_FILE = os.path.join(BASE_DIR, "chatbot1.txt")
 BOT2_FILE = os.path.join(BASE_DIR, "chatbot2.txt")
 BOT3_FILE = os.path.join(BASE_DIR, "chatbot3.txt")
 INFO_JSONL = os.path.join(BASE_DIR, "info.jsonl")
+INFO_EXAMPLE_JSONL = os.path.join(BASE_DIR, "info_example.jsonl")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 DECISION_BLOCK_DIR = os.path.join(SCENE_DIR, "decision block")
 EMOTION_BLOCK_DIR = os.path.join(SCENE_DIR, "emotion block")  # Newst: new/emotion block/
@@ -114,7 +128,8 @@ EMOTION_PROMPTS_LEGACY = os.path.join(BASE_DIR, "emotion block", "prompts")  # f
 ensure_dir(LOG_DIR)
 
 # Load agent configs from info.jsonl (default decision/emotion per agent)
-AGENT_CONFIGS = load_agent_configs(INFO_JSONL)
+_info_path = INFO_JSONL if os.path.exists(INFO_JSONL) else INFO_EXAMPLE_JSONL
+AGENT_CONFIGS = load_agent_configs(_info_path)
 
 # Initialize OpenAI clients (will be initialized on first use)
 client_chat = None
@@ -123,6 +138,10 @@ client_admin = None
 def get_openai_clients():
     """Lazy initialization of OpenAI clients"""
     global client_chat, client_admin
+    if not API_KEY:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not set. Create backend/.env with OPENAI_API_KEY=sk-... and restart the API."
+        )
     if client_chat is None:
         client_chat = OpenAI(api_key=API_KEY)
     if client_admin is None:
@@ -217,10 +236,14 @@ def _normalize_limited_keys(keys: List[str]) -> List[str]:
 
 def _make_session_agents(session: dict) -> Tuple[Dict[str, ChatAgent], List[ChatAgent], List[str]]:
     agents_map: Dict[str, ChatAgent] = {}
+    specs = session.get("agora2_specs") or {}
     for slot in SLOT_KEYS:
         profile_key = session["slot_to_profile"].get(slot, slot)
         prof = AGENT_POOL.get(profile_key, AGENT_POOL[slot])
-        agents_map[slot] = ChatAgent(slot, prof["name"], prof["role_text"])
+        role_text = prof["role_text"]
+        if slot in specs and specs[slot].get("role_text"):
+            role_text = specs[slot]["role_text"]
+        agents_map[slot] = ChatAgent(slot, prof["name"], role_text)
     agent_list = [agents_map[s] for s in SLOT_KEYS]
     all_names = [a.name for a in agent_list]
     return agents_map, agent_list, all_names
@@ -301,12 +324,26 @@ def start_chat():
     if mode not in {"full", "limited", "single"}:
         mode = "full"
     requested_limited_keys = data.get("limited_selected_agent_keys") or []
-    if scene_id not in SCENES:
-        scene_id = "scene1" if SCENES else ""
+
+    scenario_type = (data.get("scenario_type") or "").strip()
+    if not scenario_type and HAVE_AGORA2 and agora2_http.is_agora2_scenario(scene_id):
+        scenario_type = scene_id
+
+    use_agora2 = bool(
+        HAVE_AGORA2
+        and scenario_type
+        and agora2_http.is_agora2_scenario(scenario_type)
+    )
+
+    if not use_agora2:
+        if scene_id not in SCENES:
+            scene_id = "scene1" if SCENES else ""
+
     room_id = make_room_id_6()
     session = init_session(room_id)
-    session["scene_id"] = scene_id
+    session["scene_id"] = scenario_type if use_agora2 else scene_id
     session["mode"] = mode
+    session["pipeline"] = "agora2" if use_agora2 else "legacy"
 
     if mode == "limited":
         chosen_profiles = _normalize_limited_keys([str(k).upper() for k in requested_limited_keys if isinstance(k, str)])
@@ -320,25 +357,96 @@ def start_chat():
             "C": {"decision": AGENT_CONFIGS.get("C", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("C", {}).get("emotion", "Joy")},
         }
 
+    if use_agora2:
+        lang = (data.get("lang") or "en").strip() or "en"
+        profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+        intake = data.get("intake") if isinstance(data.get("intake"), dict) else {}
+        user_id = (data.get("user_id") or f"web_{room_id}").strip()
+        use_demo = bool(data.get("use_demo_intake"))
+
+        # Demo fallback only when explicitly requested (UI normally sends real intake)
+        if use_demo and not intake:
+            demo_path = os.path.join(
+                agora2_http.INTAKE_EXAMPLES_DIR, f"{scenario_type}_{normalize_lang_safe(lang)}.json"
+            )
+            if os.path.exists(demo_path):
+                with open(demo_path, "r", encoding="utf-8-sig") as f:
+                    intake = json.load(f)
+
+        if use_demo and not profile:
+            for demo_name in (f"demo_{scenario_type}_{normalize_lang_safe(lang)}.json", f"demo_{scenario_type}.json"):
+                demo_prof = os.path.join(agora2_http.PROFILES_DIR, demo_name)
+                if os.path.exists(demo_prof):
+                    with open(demo_prof, "r", encoding="utf-8-sig") as f:
+                        raw = json.load(f)
+                    profile = raw.get("profile", raw) if isinstance(raw, dict) else {}
+                    break
+
+        ctx = agora2_http.prepare_http_context(
+            scenario_type=scenario_type,
+            lang=lang,
+            profile=profile,
+            intake=intake,
+            user_id=user_id,
+            persist=True,
+        )
+        session["agora2"] = ctx
+        session["scenario_type"] = scenario_type
+        session["lang"] = ctx["lang"]
+
+        # Prefer Capitalized emotion names for preset files (Joy.txt)
+        assemble_cfg = {}
+        for slot in SLOT_KEYS:
+            conf = session["agent_runtime_config"].get(slot, {})
+            emotion = conf.get("emotion", "Joy")
+            if isinstance(emotion, str) and emotion:
+                emotion = emotion[:1].upper() + emotion[1:].lower()
+            assemble_cfg[slot] = {
+                "decision": conf.get("decision", "Rational"),
+                "emotion": emotion,
+            }
+        session["agora2_specs"] = agora2_http.assemble_session_agents(
+            assemble_cfg, scenario_type=scenario_type, lang=ctx["lang"]
+        )
+        # Sync runtime emotion/decision from assembled specs
+        for slot, spec in session["agora2_specs"].items():
+            session["agent_runtime_config"][slot] = {
+                "decision": spec.get("decision") or session["agent_runtime_config"][slot]["decision"],
+                "emotion": spec.get("emotion") or session["agent_runtime_config"][slot]["emotion"],
+                "stance": spec.get("stance"),
+            }
+
     session_agents, _, _ = _make_session_agents(session)
     chat_sessions[room_id] = session
+
+    agents_payload = []
+    for slot in SLOT_KEYS:
+        runtime = session["agent_runtime_config"].get(slot, {})
+        agents_payload.append({
+            "key": slot,
+            "pool_key": session["slot_to_profile"].get(slot, slot),
+            "name": session_agents[slot].name,
+            "role": session_agents[slot].role_text.splitlines()[0] if session_agents[slot].role_text else "",
+            "decision": runtime.get("decision", "Rational"),
+            "emotion": runtime.get("emotion", "Joy"),
+            "stance": runtime.get("stance"),
+        })
 
     return jsonify({
         "room_id": room_id,
         "message": "Chat session started",
         "mode": mode,
-        "agents": [
-            {
-                "key": slot,
-                "pool_key": session["slot_to_profile"].get(slot, slot),
-                "name": session_agents[slot].name,
-                "role": session_agents[slot].role_text.splitlines()[0] if session_agents[slot].role_text else "",
-                "decision": session["agent_runtime_config"].get(slot, {}).get("decision", "Rational"),
-                "emotion": session["agent_runtime_config"].get(slot, {}).get("emotion", "Joy"),
-            }
-            for slot in SLOT_KEYS
-        ]
+        "pipeline": session["pipeline"],
+        "scene_id": session["scene_id"],
+        "scenario_type": session.get("scenario_type"),
+        "lang": session.get("lang"),
+        "agents": agents_payload,
     })
+
+
+def normalize_lang_safe(lang: str) -> str:
+    lang = (lang or "zh").lower()
+    return "zh" if lang.startswith("zh") else "en"
 
 
 @app.route('/api/message', methods=['POST'])
@@ -380,9 +488,12 @@ def send_message():
 
     # Scene: update session if scene_id provided
     req_scene_id = (data.get("scene_id") or "").strip()
-    if req_scene_id and req_scene_id in SCENES:
-        session["scene_id"] = req_scene_id
-    base_scene = SCENES.get(session.get("scene_id", "scene1"), scene)
+    if session.get("pipeline") == "agora2":
+        base_scene = (session.get("agora2") or {}).get("scene_text") or ""
+    else:
+        if req_scene_id and req_scene_id in SCENES:
+            session["scene_id"] = req_scene_id
+        base_scene = SCENES.get(session.get("scene_id", "scene1"), scene)
 
     def _load_emotion_prompt(tag: str) -> str:
         """Load emotion prompt. Prefer Newst emotion block, fallback to legacy prompts."""
@@ -433,46 +544,49 @@ def send_message():
     def get_scene_for_agent(agent_key: str) -> str:
         """Return scene string with emotion prompt + decision block + additional rules injected."""
         result = base_scene
+        agora2_mode = session.get("pipeline") == "agora2"
 
-        # 1. Per-agent emotion override (from customizer) takes priority
-        override_tag = agent_emotion_overrides.get(agent_key)
-        if not override_tag and session_mode == "limited":
-            override_tag = session.get("agent_runtime_config", {}).get(agent_key, {}).get("emotion")
-        if override_tag:
-            ep = _load_emotion_prompt(override_tag)
-            if ep:
+        # Agora-2: decision/emotion already baked into assembled role_text; keep scene clean
+        if not agora2_mode:
+            # 1. Per-agent emotion override (from customizer) takes priority
+            override_tag = agent_emotion_overrides.get(agent_key)
+            if not override_tag and session_mode == "limited":
+                override_tag = session.get("agent_runtime_config", {}).get(agent_key, {}).get("emotion")
+            if override_tag:
+                ep = _load_emotion_prompt(override_tag)
+                if ep:
+                    result += (
+                        "\n\n" + "=" * 60
+                        + f"\nEMOTIONAL CONTEXT — {override_tag.upper()} (agent-specific):\n"
+                        + "=" * 60 + "\n" + ep
+                        + "\n\nVISIBLE EXPRESSION RULE:\n"
+                        + "- After any required greeting, your wording should clearly reflect this emotional tone.\n"
+                        + "- Do not default to generic upbeat phrasing unless this emotion block supports it."
+                    )
+            elif sidebar_emotion_prompt and emotion_target in (None, "all", agent_key):
+                # 2. Sidebar emotion (global or targeted)
                 result += (
                     "\n\n" + "=" * 60
-                    + f"\nEMOTIONAL CONTEXT — {override_tag.upper()} (agent-specific):\n"
-                    + "=" * 60 + "\n" + ep
+                    + f"\nEMOTIONAL CONTEXT — {emotion_tag.upper()} (applied to this agent):\n"
+                    + "=" * 60 + "\n" + sidebar_emotion_prompt
                     + "\n\nVISIBLE EXPRESSION RULE:\n"
                     + "- After any required greeting, your wording should clearly reflect this emotional tone.\n"
                     + "- Do not default to generic upbeat phrasing unless this emotion block supports it."
                 )
-        elif sidebar_emotion_prompt and emotion_target in (None, "all", agent_key):
-            # 2. Sidebar emotion (global or targeted)
-            result += (
-                "\n\n" + "=" * 60
-                + f"\nEMOTIONAL CONTEXT — {emotion_tag.upper()} (applied to this agent):\n"
-                + "=" * 60 + "\n" + sidebar_emotion_prompt
-                + "\n\nVISIBLE EXPRESSION RULE:\n"
-                + "- After any required greeting, your wording should clearly reflect this emotional tone.\n"
-                + "- Do not default to generic upbeat phrasing unless this emotion block supports it."
-            )
 
-        # 3. Decision block (frontend overrides info.jsonl default)
-        block_name = (
-            agent_decision_block.get(agent_key)
-            or session.get("agent_runtime_config", {}).get(agent_key, {}).get("decision")
-            or AGENT_CONFIGS.get(agent_key, {}).get("decision", "Rational")
-        )
-        block_prompt = _load_decision_block(block_name)
-        if block_prompt:
-            result += (
-                "\n\n" + "=" * 60
-                + f"\nDECISION ARCHITECTURE — {block_name}:\n"
-                + "=" * 60 + "\n" + block_prompt
+            # 3. Decision block (frontend overrides info.jsonl default)
+            block_name = (
+                agent_decision_block.get(agent_key)
+                or session.get("agent_runtime_config", {}).get(agent_key, {}).get("decision")
+                or AGENT_CONFIGS.get(agent_key, {}).get("decision", "Rational")
             )
+            block_prompt = _load_decision_block(block_name)
+            if block_prompt:
+                result += (
+                    "\n\n" + "=" * 60
+                    + f"\nDECISION ARCHITECTURE — {block_name}:\n"
+                    + "=" * 60 + "\n" + block_prompt
+                )
 
         # 4. Additional rules from customizer
         extra = (additional_rules.get(agent_key) or "").strip()
@@ -515,7 +629,10 @@ def send_message():
     session["user_turn_count"] = session.get("user_turn_count", 0) + 1
 
     # Initialize OpenAI clients on first use
-    client_chat, client_admin = get_openai_clients()
+    try:
+        client_chat, client_admin = get_openai_clients()
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 503
 
     # Merge agent config: frontend agent_decision_block overrides info.jsonl
     def _effective_decision(agent_key):
@@ -748,7 +865,15 @@ def send_message():
                 "[TRANSCRIPT END]\n"
                 f"{extra}"
             )
-        sys_prompt = agent.system_prompt(scene_for_agent, name_map, phase_ctx)
+        sys_prompt = agent.system_prompt(
+            scene_for_agent,
+            name_map,
+            phase_ctx,
+            known_context=(session.get("agora2") or {}).get("known_context", ""),
+            domain_background=(session.get("agora2") or {}).get("domain_background", ""),
+            stance_text=((session.get("agora2_specs") or {}).get(key) or {}).get("stance_text", ""),
+            lang=(session.get("lang") or (session.get("agora2") or {}).get("lang") or "en"),
+        )
         msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}]
         txt = create_response_with_client(client_chat, "gpt-4o", msgs, temp, 220)
         return sanitize_single_message((txt or "").strip() or "…", agent.name, all_agent_names)
@@ -765,34 +890,43 @@ def send_message():
             txt = _call_chat_agent_new(key, force_intro=not session["has_spoken"][key], stall_mode=True)
             _append_agent_response(key, txt)
 
-    for _ in range(max_agent_turns_before_user + 2):
-        if session["bots_since_user"] >= max_agent_turns_before_user:
-            break
-        if _user_gap(session["history"]) >= max_user_gap:
-            break
+    try:
+        for _ in range(max_agent_turns_before_user + 2):
+            if session["bots_since_user"] >= max_agent_turns_before_user:
+                break
+            if _user_gap(session["history"]) >= max_user_gap:
+                break
 
-        speaker = _admin_choose_next()
-        if speaker == "U":
-            break
+            speaker = _admin_choose_next()
+            if speaker == "U":
+                break
 
-        txt = _call_chat_agent_new(speaker, force_intro=not session["has_spoken"][speaker])
-        _append_agent_response(speaker, txt)
+            txt = _call_chat_agent_new(speaker, force_intro=not session["has_spoken"][speaker])
+            _append_agent_response(speaker, txt)
 
-        if session["moderator_state"].get("stall"):
-            _run_stall_burst(skip_key=speaker)
-            break
+            if session["moderator_state"].get("stall"):
+                _run_stall_burst(skip_key=speaker)
+                break
 
-    current_phase = session["moderator_state"].get("state", "Exploration")
-    return jsonify({
-        "room_id": room_id,
-        "user_message": user_message,
-        "responses": responses,
-        "known_facts": list(session["known_user_facts"].values()),
-        "emotion_tag": emotion_tag,
-        "emotion_target": emotion_target,
-        "phase": current_phase,
-        "stall": session["moderator_state"].get("stall", False),
-    })
+        current_phase = session["moderator_state"].get("state", "Exploration")
+        return jsonify({
+            "room_id": room_id,
+            "user_message": user_message,
+            "responses": responses,
+            "known_facts": list(session["known_user_facts"].values()),
+            "emotion_tag": emotion_tag,
+            "emotion_target": emotion_target,
+            "phase": current_phase,
+            "stall": session["moderator_state"].get("stall", False),
+        })
+    except AuthenticationError:
+        return jsonify({
+            "error": "OpenAI API key is invalid. Set OPENAI_API_KEY in backend/.env and restart the API."
+        }), 401
+    except APIError as e:
+        return jsonify({"error": f"OpenAI API error: {getattr(e, 'message', str(e))}"}), 502
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 503
 
 
 @app.route('/api/history/<room_id>', methods=['GET'])
@@ -883,8 +1017,29 @@ def health():
     return jsonify({
         "status": "ok",
         "sessions": len(chat_sessions),
-        "emotion_module": EMOTION_MODULE_LOADED
+        "emotion_module": EMOTION_MODULE_LOADED,
+        "agora2": HAVE_AGORA2,
+        "agora2_scenarios": list(agora2_http.SCENARIO_TYPES) if HAVE_AGORA2 else [],
     })
+
+
+@app.route('/api/agora2/scenarios', methods=['GET'])
+def agora2_scenarios():
+    if not HAVE_AGORA2:
+        return jsonify({"error": "Agora-2 adapter not available"}), 503
+    lang = (request.args.get("lang") or "en").strip()
+    return jsonify({"scenes": agora2_http.list_scenarios(lang)})
+
+
+@app.route('/api/agora2/template/<scenario_type>', methods=['GET'])
+def agora2_template(scenario_type):
+    if not HAVE_AGORA2:
+        return jsonify({"error": "Agora-2 adapter not available"}), 503
+    if not agora2_http.is_agora2_scenario(scenario_type):
+        return jsonify({"error": "Unknown scenario_type"}), 404
+    from profile_store import load_scenario_template
+    tmpl = load_scenario_template(scenario_type, agora2_http.TEMPLATES_DIR)
+    return jsonify(tmpl)
 
 
 @app.route('/api/emotion/analyze', methods=['POST'])
@@ -945,6 +1100,8 @@ if __name__ == '__main__':
     print("=" * 60)
     print(f"✓ Scenes loaded: {list(SCENES.keys())} ({sum(len(v) for v in SCENES.values())} chars total)")
     print(f"✓ Agent pool: {', '.join([AGENT_POOL[k]['name'] for k in POOL_KEYS])}")
+    print(f"✓ Agora-2 adapter: {'on' if HAVE_AGORA2 else 'off'}"
+          + (f" ({', '.join(agora2_http.SCENARIO_TYPES)})" if HAVE_AGORA2 else ""))
     print("✓ Mode: API only (use React frontend on :5173)")
     print("\n" + "=" * 60)
     # Port: use PORT env var, or find first available in 5000-5009

@@ -119,12 +119,27 @@ class ChatAgent:
     role_text: str
     spoke: int = 0
 
-    def system_prompt(self, scene: str, name_map: Dict[str, str], phase_context: str = "") -> str:
+    def system_prompt(
+        self,
+        scene: str,
+        name_map: Dict[str, str],
+        phase_context: str = "",
+        known_context: str = "",
+        domain_background: str = "",
+        stance_text: str = "",
+        lang: str = "en",
+    ) -> str:
         roster = "\n".join([f"- {v}" for _, v in name_map.items()])
+        lang_norm = (lang or "en").lower()
+        if lang_norm.startswith("zh"):
+            lang_line = "Write every message in Chinese (简体中文). Do not switch language mid-message."
+        else:
+            lang_line = "Write every message in English. Do not switch language mid-message."
         prompt = (
             f"You are {self.name} in a group chat.\n"
             f"Participants (remember their names):\n{roster}\n"
             f"- user (the human participant)\n\n"
+            f"LANGUAGE: {lang_line}\n\n"
             f"GROUP DYNAMICS (important):\n"
             f"- This is a FRIEND group chat. Actively talk WITH the other bots, not only the user.\n"
             f"- Frequently react to what another bot said, build on it, or gently disagree.\n"
@@ -140,6 +155,17 @@ class ChatAgent:
             f"=== ROLE INSTRUCTIONS (for {self.name}) ===\n{self.role_text}\n\n"
             f"=== RUNTIME CONFIGURATION (highest priority) ===\n{scene}\n"
         )
+        if stance_text:
+            prompt += (
+                f"\n=== YOUR STANCE (fixed for this scenario, do not switch) ===\n{stance_text}\n"
+                f"This stance is not a preference you may trade away to keep the peace. If the others are "
+                f"converging on an option your stance would not choose, say so explicitly and name what is "
+                f"being sacrificed.\n"
+            )
+        if known_context:
+            prompt += f"\n{known_context}\n"
+        if domain_background:
+            prompt += f"\n{domain_background}\n"
         if phase_context:
             prompt += f"\n{phase_context}"
         return prompt

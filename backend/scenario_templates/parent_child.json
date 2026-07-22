@@ -1,0 +1,258 @@
+{
+  "label": {
+    "zh": "亲子决策",
+    "en": "Parent-Child Decision"
+  },
+  "profile_fields": [
+    {
+      "key": "age",
+      "type": "number",
+      "optional": false,
+      "question": {
+        "zh": "您（家长）的年龄是？",
+        "en": "What is your (the parent's) age?"
+      }
+    },
+    {
+      "key": "child_age",
+      "type": "number",
+      "optional": false,
+      "question": {
+        "zh": "孩子的年龄是？",
+        "en": "What is your child's age?"
+      }
+    },
+    {
+      "key": "child_count",
+      "type": "number",
+      "optional": true,
+      "question": {
+        "zh": "如有多个孩子，共几个？可跳过。",
+        "en": "If you have multiple children, how many? Optional."
+      }
+    },
+    {
+      "key": "parenting_style_baseline",
+      "type": "select",
+      "optional": false,
+      "question": {
+        "zh": "您日常的教养风格自评是？",
+        "en": "How would you describe your everyday parenting style?"
+      },
+      "options": [
+        {
+          "value": "authoritative",
+          "label": {
+            "zh": "权威型",
+            "en": "Authoritative"
+          }
+        },
+        {
+          "value": "permissive",
+          "label": {
+            "zh": "放任型",
+            "en": "Permissive"
+          }
+        },
+        {
+          "value": "democratic",
+          "label": {
+            "zh": "民主型",
+            "en": "Democratic"
+          }
+        },
+        {
+          "value": "mixed",
+          "label": {
+            "zh": "混合",
+            "en": "Mixed"
+          }
+        }
+      ]
+    },
+    {
+      "key": "child_autonomy_baseline",
+      "type": "select",
+      "optional": false,
+      "question": {
+        "zh": "日常给孩子自主权的基线程度是？",
+        "en": "How much autonomy do you typically give your child day-to-day?"
+      },
+      "options": [
+        {
+          "value": "low",
+          "label": {
+            "zh": "低",
+            "en": "Low"
+          }
+        },
+        {
+          "value": "medium",
+          "label": {
+            "zh": "中",
+            "en": "Medium"
+          }
+        },
+        {
+          "value": "high",
+          "label": {
+            "zh": "高",
+            "en": "High"
+          }
+        }
+      ]
+    },
+    {
+      "key": "communication_habit",
+      "type": "select",
+      "optional": false,
+      "question": {
+        "zh": "您与孩子日常沟通的频率是？",
+        "en": "How often do you communicate with your child day-to-day?"
+      },
+      "options": [
+        {
+          "value": "daily",
+          "label": {
+            "zh": "每天",
+            "en": "Daily"
+          }
+        },
+        {
+          "value": "occasional",
+          "label": {
+            "zh": "偶尔",
+            "en": "Occasionally"
+          }
+        },
+        {
+          "value": "when_needed",
+          "label": {
+            "zh": "仅在必要时",
+            "en": "Only when necessary"
+          }
+        }
+      ]
+    },
+    {
+      "key": "past_conflict_pattern",
+      "type": "text",
+      "optional": true,
+      "question": {
+        "zh": "过去在类似决策上是否有过冲突经历？可跳过。",
+        "en": "Any past conflicts over similar decisions? Optional."
+      }
+    }
+  ],
+  "scenario_fields": [
+    {
+      "key": "decision_topic",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "这次要决定的具体事项是？（如择校、兴趣班、手机使用时间、升学方向）",
+        "en": "What specific decision are you facing? (e.g. school choice, extracurriculars, screen time, education path)"
+      }
+    },
+    {
+      "key": "decision_owner",
+      "type": "select",
+      "optional": false,
+      "question": {
+        "zh": "这次决策您打算给孩子多少决定权？",
+        "en": "How much decision-making power do you plan to give your child this time?"
+      },
+      "options": [
+        {
+          "value": "parent_decides",
+          "label": {
+            "zh": "家长主导",
+            "en": "Parent decides"
+          }
+        },
+        {
+          "value": "child_decides_with_guidance",
+          "label": {
+            "zh": "孩子主导，家长引导",
+            "en": "Child decides, with parental guidance"
+          }
+        },
+        {
+          "value": "joint",
+          "label": {
+            "zh": "共同决定",
+            "en": "Joint decision"
+          }
+        }
+      ]
+    },
+    {
+      "key": "child_stated_preference",
+      "type": "text",
+      "optional": true,
+      "question": {
+        "zh": "孩子自己表达过什么意愿吗？（家长转述视角，可跳过）",
+        "en": "Has your child expressed a preference? (from the parent's account; optional)"
+      }
+    },
+    {
+      "key": "parent_stated_concern",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "您自己的顾虑/担心点是什么？",
+        "en": "What are your own concerns about this decision?"
+      }
+    },
+    {
+      "key": "disagreement_exists",
+      "type": "select",
+      "optional": false,
+      "question": {
+        "zh": "目前家长和孩子是否已有分歧？",
+        "en": "Is there already a disagreement between you and your child?"
+      },
+      "options": [
+        {
+          "value": "yes",
+          "label": {
+            "zh": "是",
+            "en": "Yes"
+          }
+        },
+        {
+          "value": "no",
+          "label": {
+            "zh": "否",
+            "en": "No"
+          }
+        },
+        {
+          "value": "uncertain",
+          "label": {
+            "zh": "不确定",
+            "en": "Uncertain"
+          }
+        }
+      ]
+    },
+    {
+      "key": "urgency",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "这次决策的时间压力是？（如开学前、无固定期限）",
+        "en": "What is the time pressure? (e.g. before school starts, no fixed deadline)"
+      }
+    },
+    {
+      "key": "external_input",
+      "type": "text",
+      "optional": true,
+      "question": {
+        "zh": "是否有其他相关方的意见（老师/祖辈/伴侣）？可跳过。",
+        "en": "Any input from other parties (teacher/grandparents/spouse)? Optional."
+      }
+    }
+  ]
+}

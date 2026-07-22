@@ -1,0 +1,98 @@
+{
+  "profile": {
+    "age": 29,
+    "education": "硕士，机械工程",
+    "industry_experience": "结构工程行业，5年",
+    "career_stage": "job_change",
+    "family_situation": "",
+    "long_term_goal": "希望在35岁前成为项目技术负责人，积累大型项目的独立主导经验",
+    "risk_tolerance": "medium",
+    "last_updated": "2026-07-22T10:47:12+00:00"
+  },
+  "session_history": [
+    {
+      "session_id": "employment_20260722090943",
+      "scenario_type": "employment",
+      "intake": {
+        "decision_field": "结构工程",
+        "options": [
+          "甲公司（设计院，本地）",
+          "乙公司（施工总包，异地）"
+        ],
+        "deadline": "2周内",
+        "current_status": "employed",
+        "priority_ranking": [
+          "稳定",
+          "薪酬",
+          "成长"
+        ],
+        "comparison_anchor": "目前略微倾向甲公司，因为通勤更近",
+        "external_pressure": "乙公司的offer 10天后过期"
+      },
+      "date": "2026-07-22T09:09:43+00:00"
+    },
+    {
+      "session_id": "employment_20260722190200",
+      "scenario_type": "employment",
+      "intake": {
+        "decision_field": "结构工程",
+        "options": [
+          "甲公司（设计院，本地）",
+          "乙公司（施工总包，异地）"
+        ],
+        "deadline": "2周内",
+        "current_status": "employed",
+        "priority_ranking": [
+          "稳定",
+          "薪酬",
+          "成长"
+        ],
+        "comparison_anchor": "目前略微倾向甲公司，因为通勤更近",
+        "external_pressure": "乙公司的offer 10天后过期"
+      },
+      "date": "2026-07-22T10:02:00+00:00"
+    },
+    {
+      "session_id": "employment_20260722190255",
+      "scenario_type": "employment",
+      "intake": {
+        "decision_field": "结构工程",
+        "options": [
+          "甲公司（设计院，本地）",
+          "乙公司（施工总包，异地）"
+        ],
+        "deadline": "2周内",
+        "current_status": "employed",
+        "priority_ranking": [
+          "稳定",
+          "薪酬",
+          "成长"
+        ],
+        "comparison_anchor": "目前略微倾向甲公司，因为通勤更近",
+        "external_pressure": "乙公司的offer 10天后过期"
+      },
+      "date": "2026-07-22T10:02:55+00:00"
+    },
+    {
+      "session_id": "employment_20260722194712",
+      "scenario_type": "employment",
+      "intake": {
+        "decision_field": "结构工程",
+        "options": [
+          "甲公司（设计院，本地）",
+          "乙公司（施工总包，异地）"
+        ],
+        "deadline": "2周内",
+        "current_status": "employed",
+        "priority_ranking": [
+          "稳定",
+          "薪酬",
+          "成长"
+        ],
+        "comparison_anchor": "目前略微倾向甲公司，因为通勤更近",
+        "external_pressure": "乙公司的offer 10天后过期"
+      },
+      "date": "2026-07-22T10:47:12+00:00"
+    }
+  ]
+}

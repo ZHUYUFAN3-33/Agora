@@ -6,9 +6,7 @@
 
 ## 如何运行 / How to Run / 実行方法
 
-### 方式一：新版 React 前端（推荐）
-
-**终端 1 - 启动后端：**
+**终端 1 - 启动后端（API only）：**
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -22,7 +20,7 @@ npm install
 npm run dev
 ```
 
-在浏览器打开：**http://localhost:5173**
+在浏览器打开：**http://localhost:5173**（后端 API：`http://localhost:5001`）
 
 在 **Chat 页面**（`/chat`）且**不在输入框内**时，按 **`x`** 进入/退出 **对话内手动标注**：在消息里选中文本后选择 **Decision Layer**、**Emotion Layer** 或 **Scene Layer**（Scene 高亮色 `#7BC3FF`）；**Esc** 可关闭未确认的选区弹层。标注模式打开时，顶栏有 **Clear all** 可清空当前会话内所有标注。切换会话也会清空标注状态。
 
@@ -39,19 +37,6 @@ npm run dev
 ```
 
 默认端口若与主前端冲突，可执行：`npm run dev -- --port 5174`。
-
----
-
-### 方式二：旧版静态前端
-
-**单终端运行：**
-```bash
-cd backend
-pip install -r requirements.txt
-python app.py
-```
-
-后端会自动选择可用端口（5000–5009），在浏览器打开终端显示的地址（如 **http://localhost:5000**）。
 
 ---
 
@@ -121,19 +106,19 @@ python app.py
 
 ```
 Agora/
-├── backend/             # 后端 + 旧版静态前端
-│   ├── app.py           # Flask API
+├── backend/             # Flask API only
+│   ├── app.py           # HTTP API
 │   ├── agentwake_new.py
 │   ├── requirements.txt
 │   ├── chatbot1-3.txt
 │   ├── info.jsonl
 │   ├── new_module/new/  # 多场景、emotion、decision 配置
-│   ├── static/          # 旧版 HTML/CSS/JS
 │   └── logs/
-├── frontend/            # React 前端
+├── frontend/            # React (Vite) UI
 │   ├── src/
 │   ├── public/
 │   └── package.json
+├── paper/               # 论文配图独立页
 └── README.md
 ```
 

@@ -1,37 +1,25 @@
 #!/bin/bash
-# Anaconda环境启动脚本 / Anaconda Environment Startup Script
+# Start Agora API with a local Anaconda Python (machine-specific path)
 
-echo "🚀 使用Anaconda环境启动服务器..."
-echo "Starting server with Anaconda environment..."
+echo "Starting Agora API with Anaconda Python..."
 
-# 使用Anaconda的Python
 ANACONDA_PYTHON="/Users/ivrc23/anaconda3/bin/python"
 
-# 检查Python是否存在
 if [ ! -f "$ANACONDA_PYTHON" ]; then
-    echo "❌ 错误: 未找到Anaconda Python"
-    echo "Error: Anaconda Python not found"
+    echo "Error: Anaconda Python not found at $ANACONDA_PYTHON"
     exit 1
 fi
 
-# 检查依赖
-echo "📦 检查依赖..."
 $ANACONDA_PYTHON -c "import flask" 2>/dev/null || {
-    echo "⚠️  正在安装依赖..."
+    echo "Installing dependencies..."
     $ANACONDA_PYTHON -m pip install flask flask-cors openai -q
 }
 
-# 启动服务器
-echo "✅ 启动Web服务器..."
-echo "✅ Starting Web Server..."
-echo ""
-echo "🌐 请在浏览器中打开: http://localhost:5000"
-echo "🌐 Open in browser: http://localhost:5000"
-echo ""
-echo "按 Ctrl+C 停止服务器"
-echo "Press Ctrl+C to stop the server"
+export PORT="${PORT:-5001}"
+echo "API: http://localhost:${PORT}"
+echo "Health: http://localhost:${PORT}/api/health"
+echo "Frontend: cd ../frontend && npm run dev → http://localhost:5173"
 echo ""
 
 cd "$(dirname "$0")"
 $ANACONDA_PYTHON app.py
-

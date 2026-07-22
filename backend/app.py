@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Dict, List, Literal, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from flask import Flask, request, jsonify, send_from_directory, send_file
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from openai import OpenAI
 
@@ -74,14 +74,8 @@ MODERATOR_INTERVAL = agent_module.MODERATOR_INTERVAL
 MODERATOR_STALL_TURNS = agent_module.MODERATOR_STALL_TURNS
 extract_text = agent_module.extract_text
 
-# Get absolute path for static folder
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_FOLDER = os.path.join(BASE_DIR, 'static')
-
-# Configure Flask - use empty static_url_path so files are served from root
-app = Flask(__name__, 
-            static_folder=STATIC_FOLDER, 
-            static_url_path='')
+# API-only Flask app (React frontend lives in ../frontend)
+app = Flask(__name__)
 CORS(app)
 
 # Configuration
@@ -290,27 +284,13 @@ def append_jsonl(fp, obj: dict):
 
 @app.route('/')
 def index():
-    """Serve the main HTML page"""
-    try:
-        return send_from_directory(STATIC_FOLDER, 'index.html')
-    except Exception as e:
-        return f"Error: {str(e)}", 500
+    """API root — product UI is the React app on :5173"""
+    return jsonify({
+        "service": "agora-api",
+        "health": "/api/health",
+        "frontend": "http://localhost:5173",
+    })
 
-@app.route('/style.css')
-def style_css():
-    """Serve CSS file"""
-    return send_from_directory(STATIC_FOLDER, 'style.css', mimetype='text/css')
-
-@app.route('/script.js')
-def script_js():
-    """Serve JavaScript file"""
-    return send_from_directory(STATIC_FOLDER, 'script.js', mimetype='application/javascript')
-
-@app.route('/Assets/<path:filename>')
-def serve_assets(filename):
-    """Serve files from Assets folder"""
-    assets_folder = os.path.join(BASE_DIR, 'Assets')
-    return send_from_directory(assets_folder, filename)
 
 @app.route('/api/start', methods=['POST'])
 def start_chat():
@@ -965,8 +945,7 @@ if __name__ == '__main__':
     print("=" * 60)
     print(f"✓ Scenes loaded: {list(SCENES.keys())} ({sum(len(v) for v in SCENES.values())} chars total)")
     print(f"✓ Agent pool: {', '.join([AGENT_POOL[k]['name'] for k in POOL_KEYS])}")
-    print(f"✓ Static folder: {STATIC_FOLDER}")
-    print(f"✓ Static files exist: {os.path.exists(os.path.join(STATIC_FOLDER, 'index.html'))}")
+    print("✓ Mode: API only (use React frontend on :5173)")
     print("\n" + "=" * 60)
     # Port: use PORT env var, or find first available in 5000-5009
     import socket
@@ -986,9 +965,10 @@ if __name__ == '__main__':
                 break
         if port == 0:
             port = 5000  # fallback
-    
-    print(f"🌐 请在浏览器中打开: http://localhost:{port}")
-    print(f"🌐 Open in browser: http://localhost:{port}")
+
+    print(f"🔌 API listening: http://localhost:{port}")
+    print(f"💚 Health check:  http://localhost:{port}/api/health")
+    print("🖥️  Frontend:      http://localhost:5173  (npm run dev in frontend/)")
     print("=" * 60)
     print("\n按 Ctrl+C 停止服务器 / Press Ctrl+C to stop the server\n")
     app.run(debug=True, host='127.0.0.1', port=port, use_reloader=False)

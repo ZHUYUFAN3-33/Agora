@@ -1,11 +1,11 @@
-import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, type ReactNode } from "react";
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, useMemo, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { createPortal } from "react-dom";
 import { AgoraLogo, AgoraLogoFull } from "../components/AgoraLogo";
 import { CustomDropdown } from "../components/ui/CustomDropdown";
 import { AppearanceModal } from "../components/AppearanceModal";
-import { IntakeModal, type Agora2IntakePayload } from "../components/IntakeModal";
+import { IntakeModal, ProfileModal, type Agora2IntakePayload } from "../components/IntakeModal";
 import { useAppearanceContext } from "../context/AppearanceContext";
 import {
   type AgentKey,
@@ -1680,6 +1680,9 @@ export default function Chat() {
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
   const [pendingIntakeScene, setPendingIntakeScene] = useState<Scene | null>(null);
   const [agora2Intake, setAgora2Intake] = useState<Agora2IntakePayload | null>(null);
+  const [userProfile, setUserProfile] = useState<Record<string, unknown> | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [profileReady, setProfileReady] = useState(false);
   const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full");
   const [welcomeTutorialStep, setWelcomeTutorialStep] = useState<number | null>(null);
 
@@ -1703,9 +1706,61 @@ export default function Chat() {
   const welcomeInputRef = useRef<HTMLDivElement>(null);
   const currentConv = conversations.find((c) => c.id === currentConvId) || null;
   const appearance = useAppearanceContext();
+  const webUserId = useMemo(
+    () => (nickname || "web_user").replace(/\s+/g, "_").replace(/[^A-Za-z0-9_-]/g, "") || "web_user",
+    [nickname],
+  );
   const suggestedPrompts = selectedScene?.suggestedPrompts?.length
     ? selectedScene.suggestedPrompts
     : [];
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [tmpl, saved] = await Promise.all([
+          fetch(`${API_BASE}/agora2/profile-template`).then(async (r) => {
+            if (!r.ok) throw new Error("profile template");
+            return r.json();
+          }),
+          fetch(`${API_BASE}/agora2/profile/${encodeURIComponent(webUserId)}`).then(async (r) => {
+            if (!r.ok) return { profile: {} };
+            return r.json();
+          }),
+        ]);
+        if (cancelled) return;
+        const profile = (saved.profile || {}) as Record<string, unknown>;
+        const fields = (tmpl.profile_fields || []) as Array<{ key: string; optional?: boolean }>;
+        const complete = fields.every((f) => {
+          if (f.optional) return true;
+          const v = profile[f.key];
+          return v != null && String(v).trim() !== "";
+        });
+        if (complete && fields.length > 0) {
+          setUserProfile(profile);
+          setProfileReady(true);
+          setShowProfileModal(false);
+        } else {
+          setProfileReady(false);
+          setShowProfileModal(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setProfileReady(false);
+          setShowProfileModal(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [webUserId]);
+
+  const openSceneSelector = useCallback(() => {
+    if (!userProfile) {
+      setShowProfileModal(true);
+      return;
+    }
+    setShowSceneSelector(true);
+  }, [userProfile]);
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const c = messagesContainerRef.current;
@@ -1996,9 +2051,14 @@ export default function Chat() {
     };
 
     if (!convId) {
-      if (isAgora2SceneId(selectedScene?.id) && !agora2Intake) {
-        setSessionCreateError("Complete session intake for this scene before chatting.");
-        if (selectedScene) setPendingIntakeScene(selectedScene);
+      if (isAgora2SceneId(selectedScene?.id) && (!userProfile || !agora2Intake)) {
+        if (!userProfile) {
+          setSessionCreateError("Complete your profile before chatting.");
+          setShowProfileModal(true);
+        } else {
+          setSessionCreateError("Complete session intake for this scene before chatting.");
+          if (selectedScene) setPendingIntakeScene(selectedScene);
+        }
         setInputValue(text);
         setIsLoading(false);
         return;
@@ -2011,13 +2071,13 @@ export default function Chat() {
             scene_id: selectedScene?.id || "scene1",
             mode: experimentMode,
             limited_selected_agent_keys: experimentMode === "limited" ? limitedSelectedAgents : undefined,
-            ...(isAgora2SceneId(selectedScene?.id) && agora2Intake
+            ...(isAgora2SceneId(selectedScene?.id) && userProfile && agora2Intake
               ? {
                   scenario_type: selectedScene!.id,
                   lang: "en",
-                  profile: agora2Intake.profile,
+                  profile: userProfile,
                   intake: agora2Intake.intake,
-                  user_id: (nickname || "web_user").replace(/\s+/g, "_"),
+                  user_id: webUserId,
                   use_demo_intake: false,
                 }
               : {}),
@@ -2490,6 +2550,33 @@ export default function Chat() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {showProfileModal && (
+          <motion.div
+            key="profile-overlay"
+            className="fixed inset-0 bg-black/30 z-[60] flex items-center justify-center p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              if (profileReady && userProfile) setShowProfileModal(false);
+            }}
+          >
+            <ProfileModal
+              userId={webUserId}
+              dismissible={!!userProfile}
+              onClose={userProfile ? () => setShowProfileModal(false) : undefined}
+              onConfirm={(profile) => {
+                setUserProfile(profile);
+                setProfileReady(true);
+                setShowProfileModal(false);
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {(showSceneSelector || !!pendingIntakeScene) && (
           <motion.div
             key="scene-flow-overlay"
@@ -2526,6 +2613,11 @@ export default function Chat() {
                       setSelectedScene(null);
                       setAgora2Intake(null);
                       setShowSceneSelector(false);
+                      return;
+                    }
+                    if (!userProfile) {
+                      setShowSceneSelector(false);
+                      setShowProfileModal(true);
                       return;
                     }
                     if (isAgora2SceneId(s.id)) {
@@ -2861,7 +2953,7 @@ export default function Chat() {
                   <motion.button
                     whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={() => setShowSceneSelector(true)}
+                    onClick={openSceneSelector}
                     className="w-full text-left px-4 py-3 border border-black/8 rounded-[10px] transition-colors group"
                   >
                     <div className="flex items-center gap-1.5 mb-1">
@@ -3035,7 +3127,7 @@ export default function Chat() {
                 </motion.button>
                 <AnimatePresence>
                   <SettingsMenu open={settingsMenuOpen} onClose={() => setSettingsMenuOpen(false)} anchorRef={settingsBtnRef}
-                    onCustomize={() => setShowCustomizer(true)} onScene={() => setShowSceneSelector(true)}
+                    onCustomize={() => setShowCustomizer(true)} onScene={openSceneSelector}
                     onAppearance={() => setShowAppearanceModal(true)}
                     onReloadHistory={handleLoadHistory}
                     onSummary={handleOpenSummary}

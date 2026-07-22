@@ -1085,6 +1085,33 @@ def agora2_scenarios():
     return jsonify({"scenes": agora2_http.list_scenarios(lang)})
 
 
+@app.route('/api/agora2/profile-template', methods=['GET'])
+def agora2_profile_template():
+    """Shared basic profile fields (filled once when entering Chat)."""
+    if not HAVE_AGORA2:
+        return jsonify({"error": "Agora-2 adapter not available"}), 503
+    return jsonify(agora2_http.load_shared_profile_template())
+
+
+@app.route('/api/agora2/profile/<user_id>', methods=['GET', 'POST'])
+def agora2_user_profile(user_id):
+    """Load or save persistent user profile (shared fields)."""
+    if not HAVE_AGORA2:
+        return jsonify({"error": "Agora-2 adapter not available"}), 503
+    from profile_store import load_profile, save_profile
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", (user_id or "web_user").strip()) or "web_user"
+    if request.method == "GET":
+        data = load_profile(safe, agora2_http.PROFILES_DIR)
+        return jsonify({"user_id": safe, "profile": data.get("profile") or {}})
+    body = request.get_json(silent=True) or {}
+    profile = body.get("profile") if isinstance(body.get("profile"), dict) else {}
+    data = load_profile(safe, agora2_http.PROFILES_DIR)
+    merged = {**(data.get("profile") or {}), **profile}
+    data["profile"] = merged
+    save_profile(safe, data, agora2_http.PROFILES_DIR)
+    return jsonify({"user_id": safe, "profile": merged})
+
+
 @app.route('/api/agora2/template/<scenario_type>', methods=['GET'])
 def agora2_template(scenario_type):
     if not HAVE_AGORA2:
@@ -1093,7 +1120,12 @@ def agora2_template(scenario_type):
         return jsonify({"error": "Unknown scenario_type"}), 404
     from profile_store import load_scenario_template
     tmpl = load_scenario_template(scenario_type, agora2_http.TEMPLATES_DIR)
-    return jsonify(tmpl)
+    # UI intake form only needs scenario_fields; profile is shared separately.
+    return jsonify({
+        "label": tmpl.get("label"),
+        "scenario_fields": tmpl.get("scenario_fields") or [],
+        "profile_fields": [],  # shared profile lives at /api/agora2/profile-template
+    })
 
 
 @app.route('/api/emotion/analyze', methods=['POST'])

@@ -1,0 +1,54 @@
+{
+  "label": {
+    "zh": "基础信息",
+    "en": "Basic profile"
+  },
+  "profile_fields": [
+    {
+      "key": "age",
+      "type": "number",
+      "optional": false,
+      "question": {
+        "zh": "您的年龄是？",
+        "en": "What is your age?"
+      }
+    },
+    {
+      "key": "education",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "您的教育背景（学历、专业）是？",
+        "en": "What is your educational background (degree, major)?"
+      }
+    },
+    {
+      "key": "occupation",
+      "type": "text",
+      "optional": false,
+      "question": {
+        "zh": "您目前的职业或身份是？",
+        "en": "What is your current occupation or role?"
+      }
+    },
+    {
+      "key": "location",
+      "type": "text",
+      "optional": true,
+      "question": {
+        "zh": "您目前主要生活或工作的城市/地区？可跳过。",
+        "en": "Where do you mainly live or work (city / region)? Optional."
+      }
+    },
+    {
+      "key": "household_notes",
+      "type": "text",
+      "optional": true,
+      "sensitive": true,
+      "question": {
+        "zh": "需要补充的家庭或生活背景？可跳过。",
+        "en": "Any household or life context we should know? Optional."
+      }
+    }
+  ]
+}

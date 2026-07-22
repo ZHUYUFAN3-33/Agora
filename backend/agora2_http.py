@@ -51,6 +51,23 @@ def load_scene_text(scenario_type: str, lang: str = "zh") -> str:
         return f.read().strip()
 
 
+def load_shared_profile_template() -> dict:
+    path = os.path.join(TEMPLATES_DIR, "shared_profile.json")
+    with open(path, "r", encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def context_template_for_prompt(scenario_type: str) -> dict:
+    """Shared basic profile fields + scenario intake fields for KNOWN USER CONTEXT."""
+    shared = load_shared_profile_template()
+    scenario = load_scenario_template(scenario_type, TEMPLATES_DIR)
+    return {
+        "label": scenario.get("label", {}),
+        "profile_fields": shared.get("profile_fields", []),
+        "scenario_fields": scenario.get("scenario_fields", []),
+    }
+
+
 def prepare_http_context(
     scenario_type: str,
     lang: str = "zh",
@@ -69,7 +86,7 @@ def prepare_http_context(
     lang = normalize_lang(lang)
     profile = dict(profile or {})
     intake = dict(intake or {})
-    template = load_scenario_template(scenario_type, TEMPLATES_DIR)
+    template = context_template_for_prompt(scenario_type)
 
     if persist and user_id:
         data = load_profile(user_id, PROFILES_DIR)

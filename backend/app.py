@@ -61,6 +61,15 @@ except Exception as _agora2_err:
     HAVE_AGORA2 = False
     print(f"⚠ Agora-2 adapter not loaded: {_agora2_err}")
 
+try:
+    from user_store import get_user_store, profile_complete as user_profile_complete
+    HAVE_USER_STORE = True
+except Exception as _user_store_err:
+    get_user_store = None  # type: ignore
+    user_profile_complete = None  # type: ignore
+    HAVE_USER_STORE = False
+    print(f"⚠ User store not loaded: {_user_store_err}")
+
 now_local_iso = agent_module.now_local_iso
 read_text = agent_module.read_text
 ensure_dir = agent_module.ensure_dir
@@ -1093,9 +1102,159 @@ def agora2_profile_template():
     return jsonify(agora2_http.load_shared_profile_template())
 
 
+def _bearer_token() -> Optional[str]:
+    auth = request.headers.get("Authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip() or None
+    return None
+
+
+def _require_user():
+    if not HAVE_USER_STORE:
+        return None, (jsonify({"error": "User store not available"}), 503)
+    store = get_user_store()
+    user = store.resolve_token(_bearer_token())
+    if not user:
+        return None, (jsonify({"error": "Unauthorized"}), 401)
+    return user, None
+
+
+def _require_admin():
+    user, err = _require_user()
+    if err:
+        return None, err
+    if not user.get("is_admin"):
+        return None, (jsonify({"error": "Admin only"}), 403)
+    return user, None
+
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    if not HAVE_USER_STORE:
+        return jsonify({"error": "User store not available"}), 503
+    body = request.get_json(silent=True) or {}
+    data, err = get_user_store().register(body.get("user_id") or "", body.get("password") or "")
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify(data)
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    if not HAVE_USER_STORE:
+        return jsonify({"error": "User store not available"}), 503
+    body = request.get_json(silent=True) or {}
+    data, err = get_user_store().login(body.get("user_id") or "", body.get("password") or "")
+    if err:
+        return jsonify({"error": err}), 401
+    return jsonify(data)
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    if HAVE_USER_STORE:
+        get_user_store().logout(_bearer_token())
+    return jsonify({"ok": True})
+
+
+@app.route('/api/auth/me', methods=['GET'])
+def auth_me():
+    user, err = _require_user()
+    if err:
+        return err
+    return jsonify(user)
+
+
+@app.route('/api/me/profile', methods=['GET', 'POST'])
+def me_profile():
+    user, err = _require_user()
+    if err:
+        return err
+    store = get_user_store()
+    if request.method == "GET":
+        data = store.get_profile(user["user_id"])
+        complete = False
+        if HAVE_AGORA2:
+            tmpl = agora2_http.load_shared_profile_template()
+            complete = user_profile_complete(data.get("profile") or {}, tmpl.get("profile_fields") or [])
+        return jsonify({
+            "user_id": user["user_id"],
+            "profile": data.get("profile") or {},
+            "updated_at": data.get("updated_at"),
+            "complete": complete,
+        })
+    body = request.get_json(silent=True) or {}
+    profile = body.get("profile") if isinstance(body.get("profile"), dict) else {}
+    data = store.save_profile(user["user_id"], profile)
+    complete = False
+    if HAVE_AGORA2:
+        tmpl = agora2_http.load_shared_profile_template()
+        complete = user_profile_complete(data.get("profile") or {}, tmpl.get("profile_fields") or [])
+    return jsonify({
+        "user_id": user["user_id"],
+        "profile": data.get("profile") or {},
+        "updated_at": data.get("updated_at"),
+        "complete": complete,
+    })
+
+
+@app.route('/api/admin/users', methods=['GET'])
+def admin_list_users():
+    _, err = _require_admin()
+    if err:
+        return err
+    users = get_user_store().list_users()
+    if HAVE_AGORA2:
+        fields = (agora2_http.load_shared_profile_template().get("profile_fields") or [])
+        for u in users:
+            u["profile_complete"] = user_profile_complete(u.get("profile") or {}, fields)
+    return jsonify({"users": users})
+
+
+@app.route('/api/admin/users/<user_id>', methods=['GET'])
+def admin_user_detail(user_id):
+    _, err = _require_admin()
+    if err:
+        return err
+    detail = get_user_store().get_user_detail(user_id)
+    if not detail:
+        return jsonify({"error": "User not found"}), 404
+    if HAVE_AGORA2:
+        fields = (agora2_http.load_shared_profile_template().get("profile_fields") or [])
+        detail["profile_complete"] = user_profile_complete(detail.get("profile") or {}, fields)
+    return jsonify(detail)
+
+
+@app.route('/api/admin/users/<user_id>/password', methods=['POST'])
+def admin_reset_password(user_id):
+    _, err = _require_admin()
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    ok, msg = get_user_store().admin_set_password(user_id, body.get("password") or "")
+    if not ok:
+        return jsonify({"error": msg or "Failed"}), 400
+    return jsonify({"ok": True, "user_id": user_id})
+
+
 @app.route('/api/agora2/profile/<user_id>', methods=['GET', 'POST'])
 def agora2_user_profile(user_id):
-    """Load or save persistent user profile (shared fields)."""
+    """Legacy path: prefer /api/me/profile with Bearer token."""
+    if HAVE_USER_STORE:
+        store = get_user_store()
+        auth_user = store.resolve_token(_bearer_token())
+        safe = re.sub(r"[^A-Za-z0-9_-]", "_", (user_id or "").strip()) or ""
+        if not auth_user:
+            return jsonify({"error": "Unauthorized"}), 401
+        if auth_user["user_id"] != safe and not auth_user.get("is_admin"):
+            return jsonify({"error": "Forbidden"}), 403
+        if request.method == "GET":
+            data = store.get_profile(safe)
+            return jsonify({"user_id": safe, "profile": data.get("profile") or {}})
+        body = request.get_json(silent=True) or {}
+        profile = body.get("profile") if isinstance(body.get("profile"), dict) else {}
+        data = store.save_profile(safe, profile)
+        return jsonify({"user_id": safe, "profile": data.get("profile") or {}})
     if not HAVE_AGORA2:
         return jsonify({"error": "Agora-2 adapter not available"}), 503
     from profile_store import load_profile, save_profile
@@ -1188,6 +1347,11 @@ if __name__ == '__main__':
     print(f"✓ Agent pool: {', '.join([AGENT_POOL[k]['name'] for k in POOL_KEYS])}")
     print(f"✓ Agora-2 adapter: {'on' if HAVE_AGORA2 else 'off'}"
           + (f" ({', '.join(agora2_http.SCENARIO_TYPES)})" if HAVE_AGORA2 else ""))
+    if HAVE_USER_STORE:
+        get_user_store()  # init DB + bootstrap admin from env
+        print("✓ User store: SQLite (register/login + profiles)")
+    else:
+        print("⚠ User store: off")
     print("✓ Mode: API only (use React frontend on :5173)")
     print("\n" + "=" * 60)
     # Port: use PORT env var, or find first available in 5000-5009

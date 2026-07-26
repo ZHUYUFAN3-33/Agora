@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { LandingLogoSection, DEFAULT_LOGO_GAP, DEFAULT_TEXT_LOGO_OFFSET_X } from "../components/AgoraLogo";
+import { getAuth, loginRequest, registerRequest, setAuth } from "../auth";
 import svgPaths from "../../imports/svg-czrgecjots";
 
 const LOGO_MARK_URL = "/Assets/logo.png";
@@ -34,12 +35,20 @@ function AppleIcon() {
 
 export default function Landing() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [mode, setMode] = useState<"landing" | "signin">("landing");
+  const [userId, setUserId] = useState("");
+  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState<"landing" | "auth">("landing");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [splashVisible, setSplashVisible] = useState(true);
   const [logoGap, setLogoGap] = useState(DEFAULT_LOGO_GAP);
   const [textLogoOffsetX, setTextLogoOffsetX] = useState(DEFAULT_TEXT_LOGO_OFFSET_X);
   const [controlVisible, setControlVisible] = useState(false);
+
+  useEffect(() => {
+    if (getAuth()?.token) navigate("/chat");
+  }, [navigate]);
 
   useEffect(() => {
     const v1 = localStorage.getItem(LOGO_GAP_KEY);
@@ -79,16 +88,24 @@ export default function Landing() {
     localStorage.removeItem(TEXT_LOGO_OFFSET_KEY);
   };
 
-  const handleContinueWithEmail = () => {
-    if (email.trim()) setMode("signin");
-  };
-
-  const handleAuth = () => {
-    localStorage.setItem(
-      "agora_auth",
-      JSON.stringify({ email: email || "user@agora.app", nickname: "" })
-    );
-    navigate("/onboarding");
+  const submitAuth = async () => {
+    setError(null);
+    if (!userId.trim() || !password) {
+      setError("Enter user ID and password");
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = authMode === "login"
+        ? await loginRequest(userId.trim(), password)
+        : await registerRequest(userId.trim(), password);
+      setAuth(data);
+      navigate("/chat");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Auth failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const logoSection = (
@@ -113,19 +130,35 @@ export default function Landing() {
     </div>
   );
 
-  if (mode === "signin") {
+  if (mode === "auth") {
     return (
       <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 relative">
         {spacingControl}
         <div className="w-full max-w-[320px] flex flex-col gap-6">
           {logoSection}
+          <div className="flex gap-2">
+            {(["login", "register"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setAuthMode(m); setError(null); }}
+                className={`flex-1 h-[36px] rounded-[8px] text-[12px] border transition-colors ${
+                  authMode === m ? "bg-black text-white border-black" : "border-black/15 text-black/60 hover:bg-black/5"
+                }`}
+                style={monoFont}
+              >
+                {m === "login" ? "Login" : "Register"}
+              </button>
+            ))}
+          </div>
           <div className="flex flex-col gap-3">
             <div className="h-[48px] bg-black rounded-[10px] flex items-center px-4">
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Enter your email..."
+                type="text"
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                placeholder="User ID (3–32: a-z, 0-9, _ -)"
+                autoComplete="username"
                 className="bg-transparent w-full outline-none text-[#828282] placeholder-[#828282]"
                 style={{ ...monoFont, fontSize: "13px" }}
               />
@@ -133,20 +166,31 @@ export default function Landing() {
             <div className="h-[48px] bg-black rounded-[10px] flex items-center px-4">
               <input
                 type="password"
-                placeholder="Enter your password..."
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void submitAuth()}
+                placeholder="Password"
+                autoComplete={authMode === "login" ? "current-password" : "new-password"}
                 className="bg-transparent w-full outline-none text-[#828282] placeholder-[#828282]"
                 style={{ ...monoFont, fontSize: "13px" }}
               />
             </div>
+            {error && (
+              <p className="text-[11px] text-red-600" style={monoFont}>{error}</p>
+            )}
             <button
-              onClick={handleAuth}
-              className="h-[48px] bg-black rounded-[10px] flex items-center justify-center cursor-pointer hover:bg-neutral-800 transition-colors"
+              onClick={() => void submitAuth()}
+              disabled={busy}
+              className="h-[48px] bg-black rounded-[10px] flex items-center justify-center cursor-pointer hover:bg-neutral-800 transition-colors disabled:opacity-40"
             >
               <span className="text-white" style={{ ...monoFont, fontSize: "13px" }}>
-                Continue
+                {busy ? "Please wait…" : authMode === "login" ? "Login" : "Create account"}
               </span>
             </button>
           </div>
+          <p className="text-center text-[#828282]" style={{ ...monoFont, fontSize: "11px" }}>
+            Forgot password? Contact admin.
+          </p>
           <button
             onClick={() => setMode("landing")}
             className="text-center text-[#828282] hover:text-black transition-colors"
@@ -191,8 +235,9 @@ export default function Landing() {
 
             <div className="flex flex-col gap-3">
               <button
-                onClick={handleAuth}
-                className="h-[48px] bg-white border border-black/10 rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 cursor-pointer hover:bg-gray-50 transition-colors"
+                type="button"
+                disabled
+                className="h-[48px] bg-white border border-black/10 rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 opacity-40 cursor-not-allowed"
               >
                 <GoogleIcon />
                 <span style={{ fontFamily: "'Roboto', sans-serif", fontSize: "14px", color: "rgba(0,0,0,0.54)" }}>
@@ -201,8 +246,9 @@ export default function Landing() {
               </button>
 
               <button
-                onClick={handleAuth}
-                className="h-[48px] bg-black rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 cursor-pointer hover:bg-neutral-800 transition-colors"
+                type="button"
+                disabled
+                className="h-[48px] bg-black rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 opacity-40 cursor-not-allowed"
               >
                 <AppleIcon />
                 <span className="text-white" style={{ fontFamily: "'SF Pro Display', sans-serif", fontSize: "14px" }}>
@@ -216,24 +262,12 @@ export default function Landing() {
                 <div className="flex-1 h-px bg-black" />
               </div>
 
-              <div className="h-[48px] bg-black rounded-[10px] flex items-center px-4">
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleContinueWithEmail()}
-                  placeholder="Enter your email..."
-                  className="bg-transparent w-full outline-none text-[#828282] placeholder-[#828282]"
-                  style={{ ...monoFont, fontSize: "13px" }}
-                />
-              </div>
-
               <button
-                onClick={handleContinueWithEmail}
+                onClick={() => { setMode("auth"); setAuthMode("login"); setError(null); }}
                 className="h-[48px] bg-black rounded-[10px] flex items-center justify-center cursor-pointer hover:bg-neutral-800 transition-colors"
               >
                 <span className="text-white" style={{ ...monoFont, fontSize: "13px" }}>
-                  Continue
+                  Continue with User ID
                 </span>
               </button>
             </div>

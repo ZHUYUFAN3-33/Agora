@@ -38,6 +38,9 @@ Thumbs.db
 # Agora-2 runtime profiles (keep demo_* committed)
 backend/profiles/web_*.json
 
+# SQLite user DB
+backend/data/
+
 # Node
 node_modules/
 paper/.vite/

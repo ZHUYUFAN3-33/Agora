@@ -6,6 +6,7 @@ import { AgoraLogo, AgoraLogoFull } from "../components/AgoraLogo";
 import { CustomDropdown } from "../components/ui/CustomDropdown";
 import { AppearanceModal } from "../components/AppearanceModal";
 import { IntakeModal, ProfileModal, type Agora2IntakePayload } from "../components/IntakeModal";
+import { authFetch, getAuth, logoutRequest } from "../auth";
 import { useAppearanceContext } from "../context/AppearanceContext";
 import {
   type AgentKey,
@@ -1156,8 +1157,8 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
 
 // ─── User Menu (Account, Help, Logout) ─────────────────────────────────────────
 
-function UserMenu({ nickname, onAccount, onHelp, onLogout, onClose }: {
-  nickname: string; onAccount: () => void; onHelp: () => void; onLogout: () => void; onClose: () => void;
+function UserMenu({ nickname, isAdmin, onAccount, onHelp, onAdmin, onLogout, onClose }: {
+  nickname: string; isAdmin?: boolean; onAccount: () => void; onHelp: () => void; onAdmin?: () => void; onLogout: () => void; onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1180,14 +1181,13 @@ function UserMenu({ nickname, onAccount, onHelp, onLogout, onClose }: {
         <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500 flex-shrink-0" />
         <span className="text-[12px] tracking-widest text-black" style={monoFont}>{(nickname || "you").toUpperCase()}</span>
       </div>
-      <div className="h-px bg-black/8 mx-2 mb-1" />
       <div className="px-1">
         <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label="Account" onClick={() => { onClose(); onAccount(); }} />
+        {isAdmin && onAdmin && (
+          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>} label="Admin" onClick={() => { onClose(); onAdmin(); }} />
+        )}
         <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>} label="Help" onClick={() => { onClose(); onHelp(); }} />
-      </div>
-      <div className="h-px bg-black/8 mx-2 my-1" />
-      <div className="px-1">
-        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>} label="Log out" onClick={onLogout} danger />
+        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>} label="Logout" onClick={() => { onClose(); onLogout(); }} danger />
       </div>
     </motion.div>
   );
@@ -1635,8 +1635,9 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: {
 
 export default function Chat() {
   const navigate = useNavigate();
-  const authData = JSON.parse(localStorage.getItem("agora_auth") || "{}");
-  const nickname: string = authData.nickname || "You";
+  const auth = getAuth();
+  const nickname: string = auth?.user_id || "You";
+  const isAdmin = !!auth?.is_admin;
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
@@ -1707,14 +1708,18 @@ export default function Chat() {
   const currentConv = conversations.find((c) => c.id === currentConvId) || null;
   const appearance = useAppearanceContext();
   const webUserId = useMemo(
-    () => (nickname || "web_user").replace(/\s+/g, "_").replace(/[^A-Za-z0-9_-]/g, "") || "web_user",
-    [nickname],
+    () => auth?.user_id || "web_user",
+    [auth?.user_id],
   );
   const suggestedPrompts = selectedScene?.suggestedPrompts?.length
     ? selectedScene.suggestedPrompts
     : [];
 
   useEffect(() => {
+    if (!auth?.token) {
+      navigate("/", { replace: true });
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -1723,19 +1728,21 @@ export default function Chat() {
             if (!r.ok) throw new Error("profile template");
             return r.json();
           }),
-          fetch(`${API_BASE}/agora2/profile/${encodeURIComponent(webUserId)}`).then(async (r) => {
-            if (!r.ok) return { profile: {} };
+          authFetch("/me/profile").then(async (r) => {
+            if (!r.ok) return { profile: {}, complete: false };
             return r.json();
           }),
         ]);
         if (cancelled) return;
         const profile = (saved.profile || {}) as Record<string, unknown>;
         const fields = (tmpl.profile_fields || []) as Array<{ key: string; optional?: boolean }>;
-        const complete = fields.every((f) => {
-          if (f.optional) return true;
-          const v = profile[f.key];
-          return v != null && String(v).trim() !== "";
-        });
+        const complete = typeof saved.complete === "boolean"
+          ? saved.complete
+          : fields.every((f) => {
+              if (f.optional) return true;
+              const v = profile[f.key];
+              return v != null && String(v).trim() !== "";
+            });
         if (complete && fields.length > 0) {
           setUserProfile(profile);
           setProfileReady(true);
@@ -1752,7 +1759,7 @@ export default function Chat() {
       }
     })();
     return () => { cancelled = true; };
-  }, [webUserId]);
+  }, [webUserId, auth?.token, navigate]);
 
   const openSceneSelector = useCallback(() => {
     if (!userProfile) {
@@ -1804,7 +1811,7 @@ export default function Chat() {
     window.getSelection()?.removeAllRanges();
   }, [chatAnnotationDraft]);
 
-  useEffect(() => { if (!localStorage.getItem("agora_auth")) navigate("/"); }, [navigate]);
+  useEffect(() => { if (!getAuth()?.token) navigate("/"); }, [navigate]);
 
   useEffect(() => {
     setChatLayerAnnotations({});
@@ -2383,7 +2390,10 @@ export default function Chat() {
     setCustomizerInitialAgent(key);
     setShowCustomizer(true);
   }, []);
-  const handleLogout = () => { localStorage.removeItem("agora_auth"); navigate("/"); };
+  const handleLogout = async () => {
+    await logoutRequest();
+    navigate("/");
+  };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { if (e.key === "Enter" && (e.metaKey || e.altKey)) { e.preventDefault(); handleSend(); } };
   const autoResizeInput = useCallback((el: HTMLTextAreaElement | null) => {
     if (!el) return;
@@ -2704,7 +2714,17 @@ export default function Chat() {
         </div>
         <div className="relative flex-shrink-0">
           <AnimatePresence>
-            {userMenuOpen && <UserMenu nickname={nickname} onAccount={() => {}} onHelp={() => {}} onLogout={handleLogout} onClose={() => setUserMenuOpen(false)} />}
+            {userMenuOpen && (
+              <UserMenu
+                nickname={nickname}
+                isAdmin={isAdmin}
+                onAccount={() => setShowProfileModal(true)}
+                onHelp={() => {}}
+                onAdmin={() => navigate("/admin")}
+                onLogout={() => void handleLogout()}
+                onClose={() => setUserMenuOpen(false)}
+              />
+            )}
           </AnimatePresence>
           <button onClick={() => setUserMenuOpen((v) => !v)} className="w-full flex items-center gap-2 px-3 py-4 border-t border-black/8 hover:bg-black/3 transition-colors">
             <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500 flex-shrink-0" />

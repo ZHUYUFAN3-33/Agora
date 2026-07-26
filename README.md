@@ -28,6 +28,15 @@ OPENAI_API_KEY=sk-你的密钥
 - Never commit `.env`.
 - Without a valid key, chat / Summary will fail (401 / API errors). Restart Flask after editing.
 
+Optional admin bootstrap (same `.env`):
+
+```env
+AGORA_ADMIN_USER_ID=admin
+AGORA_ADMIN_PASSWORD=change-me
+```
+
+On Flask start, that User ID is created/promoted as admin. Open `/admin` after login. Forgot password → users contact admin (no self-reset). Accounts + profiles live in `backend/data/agora.db` (gitignored).
+
 ### 2. Backend (terminal 1)
 
 ```bash

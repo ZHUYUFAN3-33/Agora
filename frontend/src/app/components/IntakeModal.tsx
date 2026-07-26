@@ -312,7 +312,18 @@ export function ProfileModal({
         if (!r.ok) throw new Error(`Failed to load profile form (${r.status})`);
         return r.json();
       }),
-      fetch(`${API_BASE}/agora2/profile/${encodeURIComponent(userId)}`).then(async (r) => {
+      fetch(`${API_BASE}/me/profile`, {
+        headers: {
+          ...(typeof localStorage !== "undefined" && localStorage.getItem("agora_auth")
+            ? (() => {
+                try {
+                  const t = JSON.parse(localStorage.getItem("agora_auth") || "{}").token;
+                  return t ? { Authorization: `Bearer ${t}` } : {};
+                } catch { return {}; }
+              })()
+            : {}),
+        },
+      }).then(async (r) => {
         if (!r.ok) return { profile: {} };
         return r.json();
       }),
@@ -347,9 +358,16 @@ export function ProfileModal({
     setSaving(true);
     const profile = valuesToObject(template.profile_fields, values);
     try {
-      await fetch(`${API_BASE}/agora2/profile/${encodeURIComponent(userId)}`, {
+      let token = "";
+      try {
+        token = JSON.parse(localStorage.getItem("agora_auth") || "{}").token || "";
+      } catch { /* ignore */ }
+      await fetch(`${API_BASE}/me/profile`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ profile }),
       });
     } catch {

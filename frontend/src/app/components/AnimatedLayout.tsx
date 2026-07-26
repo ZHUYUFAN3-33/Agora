@@ -4,11 +4,13 @@ import { AnimatePresence, motion } from "motion/react";
 import Landing from "../pages/Landing";
 import Onboarding from "../pages/Onboarding";
 import Chat from "../pages/Chat";
+import Admin from "../pages/Admin";
 
 const ROUTES: Record<string, ComponentType> = {
   "/": Landing,
   "/onboarding": Onboarding,
   "/chat": Chat,
+  "/admin": Admin,
 };
 
 export function AnimatedLayout() {

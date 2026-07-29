@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { authFetch, getAuth, logoutRequest } from "../auth";
 import { monoFont } from "./chatConstants";
@@ -21,7 +21,31 @@ export default function Admin() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [newPassword, setNewPassword] = useState("");
-  const [resetMsg, setResetMsg] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [addId, setAddId] = useState("");
+  const [addPassword, setAddPassword] = useState("");
+  const [addAsAdmin, setAddAsAdmin] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const reloadUsers = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await authFetch("/admin/users");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to load users");
+      const list: AdminUser[] = data.users || [];
+      setUsers(list);
+      setSelected((prev) => {
+        if (!prev) return null;
+        return list.find((u) => u.user_id === prev.user_id) || null;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!auth?.token) {
@@ -32,42 +56,129 @@ export default function Admin() {
       navigate("/chat", { replace: true });
       return;
     }
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await authFetch("/admin/users");
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Failed to load users");
-        if (!cancelled) setUsers(data.users || []);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [auth?.token, auth?.is_admin, navigate]);
+    void reloadUsers();
+  }, [auth?.token, auth?.is_admin, navigate, reloadUsers]);
 
   const resetPassword = async () => {
     if (!selected) return;
-    setResetMsg(null);
+    setActionMsg(null);
     if (newPassword.length < 4) {
-      setResetMsg("Password must be at least 4 characters");
+      setActionMsg("Password must be at least 4 characters");
       return;
     }
-    const res = await authFetch(`/admin/users/${encodeURIComponent(selected.user_id)}/password`, {
-      method: "POST",
-      body: JSON.stringify({ password: newPassword }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setResetMsg(data.error || "Reset failed");
+    setBusy(true);
+    try {
+      const res = await authFetch(`/admin/users/${encodeURIComponent(selected.user_id)}/password`, {
+        method: "POST",
+        body: JSON.stringify({ password: newPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionMsg(data.error || "Reset failed");
+        return;
+      }
+      setActionMsg(`Password reset for ${selected.user_id}`);
+      setNewPassword("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addUser = async () => {
+    setActionMsg(null);
+    setBusy(true);
+    try {
+      const res = await authFetch("/admin/users", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: addId.trim(),
+          password: addPassword,
+          is_admin: addAsAdmin,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionMsg(data.error || "Create failed");
+        return;
+      }
+      setAddId("");
+      setAddPassword("");
+      setAddAsAdmin(false);
+      setActionMsg(`Created user ${data.user_id}`);
+      await reloadUsers();
+      if (data.user_id) {
+        setSelected({
+          user_id: data.user_id,
+          is_admin: !!data.is_admin,
+          created_at: data.created_at || "",
+          profile_updated_at: data.profile_updated_at,
+          profile: data.profile || {},
+          profile_complete: data.profile_complete,
+          profile_field_count: data.profile_field_count ?? 0,
+        });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteUser = async () => {
+    if (!selected) return;
+    if (selected.user_id === auth?.user_id) {
+      setActionMsg("Cannot delete your own account");
       return;
     }
-    setResetMsg(`Password reset for ${selected.user_id}`);
-    setNewPassword("");
+    if (!window.confirm(`Delete user "${selected.user_id}"? This cannot be undone.`)) return;
+    setActionMsg(null);
+    setBusy(true);
+    try {
+      const res = await authFetch(`/admin/users/${encodeURIComponent(selected.user_id)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionMsg(data.error || "Delete failed");
+        return;
+      }
+      setActionMsg(`Deleted ${selected.user_id}`);
+      setSelected(null);
+      setNewPassword("");
+      await reloadUsers();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setAdminRole = async (makeAdmin: boolean) => {
+    if (!selected) return;
+    setActionMsg(null);
+    setBusy(true);
+    try {
+      const res = await authFetch(`/admin/users/${encodeURIComponent(selected.user_id)}/admin`, {
+        method: "POST",
+        body: JSON.stringify({ is_admin: makeAdmin }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionMsg(data.error || "Update failed");
+        return;
+      }
+      setActionMsg(makeAdmin ? `Granted admin to ${selected.user_id}` : `Removed admin from ${selected.user_id}`);
+      await reloadUsers();
+      if (data.user) {
+        setSelected({
+          user_id: data.user.user_id,
+          is_admin: !!data.user.is_admin,
+          created_at: data.user.created_at || "",
+          profile_updated_at: data.user.profile_updated_at,
+          profile: data.user.profile || {},
+          profile_complete: data.user.profile_complete,
+          profile_field_count: Object.keys(data.user.profile || {}).length,
+        });
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -82,10 +193,14 @@ export default function Admin() {
           >
             ← Chat
           </button>
-          <span className="text-[13px]" style={monoFont}>Admin</span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-[11px] text-[var(--app-muted-text)]" style={monoFont}>{auth?.user_id}</span>
+          <div className="flex items-center gap-1.5" title={auth?.user_id || "admin"}>
+            <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500 flex-shrink-0" />
+            <span className="text-[10px] tracking-widest text-black" style={monoFont}>
+              {(auth?.user_id || "admin").toUpperCase()}
+            </span>
+          </div>
           <button
             type="button"
             onClick={async () => { await logoutRequest(); navigate("/"); }}
@@ -98,18 +213,54 @@ export default function Admin() {
       </header>
 
       <div className="max-w-[1100px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4">
-        <section className="border border-black/10 rounded-[12px] overflow-hidden">
+        <section className="border border-black/10 rounded-[12px] overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-black/8 text-[11px] text-[var(--app-muted-text)]" style={monoFont}>
             Users ({users.length})
           </div>
+          <div className="px-3 py-3 border-b border-black/8 flex flex-col gap-2 bg-black/[0.015]">
+            <p className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>Add user</p>
+            <input
+              type="text"
+              value={addId}
+              onChange={(e) => setAddId(e.target.value)}
+              placeholder="User ID"
+              className="h-[36px] px-2 border border-black/15 rounded-[8px] text-[12px] outline-none"
+              style={monoFont}
+            />
+            <input
+              type="text"
+              value={addPassword}
+              onChange={(e) => setAddPassword(e.target.value)}
+              placeholder="Password"
+              className="h-[36px] px-2 border border-black/15 rounded-[8px] text-[12px] outline-none"
+              style={monoFont}
+            />
+            <label className="flex items-center gap-2 text-[11px] text-black/70" style={monoFont}>
+              <input
+                type="checkbox"
+                checked={addAsAdmin}
+                onChange={(e) => setAddAsAdmin(e.target.checked)}
+              />
+              Make admin
+            </label>
+            <button
+              type="button"
+              disabled={busy || !addId.trim() || !addPassword}
+              onClick={() => void addUser()}
+              className="h-[36px] bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800 disabled:opacity-40"
+              style={monoFont}
+            >
+              Add user
+            </button>
+          </div>
           {loading && <p className="p-3 text-[12px] text-[var(--app-muted-text)]" style={monoFont}>Loading…</p>}
           {error && <p className="p-3 text-[12px] text-red-600" style={monoFont}>{error}</p>}
-          <ul className="max-h-[70vh] overflow-y-auto">
+          <ul className="max-h-[55vh] overflow-y-auto flex-1">
             {users.map((u) => (
               <li key={u.user_id}>
                 <button
                   type="button"
-                  onClick={() => { setSelected(u); setResetMsg(null); }}
+                  onClick={() => { setSelected(u); setActionMsg(null); }}
                   className={`w-full text-left px-3 py-2.5 border-b border-black/5 hover:bg-black/[0.03] ${
                     selected?.user_id === u.user_id ? "bg-black/[0.05]" : ""
                   }`}
@@ -134,11 +285,48 @@ export default function Admin() {
             <p className="text-[12px] text-[var(--app-muted-text)]" style={monoFont}>Select a user</p>
           ) : (
             <div className="flex flex-col gap-4">
-              <div>
-                <h2 className="text-[15px]" style={{ ...monoFont, fontWeight: 600 }}>{selected.user_id}</h2>
-                <p className="text-[11px] text-[var(--app-muted-text)] mt-1" style={monoFont}>
-                  created {selected.created_at || "—"} · profile updated {selected.profile_updated_at || "—"}
-                </p>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-[15px]" style={{ ...monoFont, fontWeight: 600 }}>{selected.user_id}</h2>
+                  <p className="text-[11px] text-[var(--app-muted-text)] mt-1" style={monoFont}>
+                    created {selected.created_at || "—"} · profile updated {selected.profile_updated_at || "—"}
+                    {selected.is_admin ? " · admin" : ""}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 justify-end">
+                  {selected.is_admin ? (
+                    <button
+                      type="button"
+                      disabled={busy || selected.user_id === auth?.user_id}
+                      onClick={() => void setAdminRole(false)}
+                      className="h-[36px] px-3 border border-black/15 text-black/70 rounded-[8px] text-[12px] hover:bg-black/5 disabled:opacity-40"
+                      style={monoFont}
+                      title={selected.user_id === auth?.user_id ? "Cannot demote yourself" : "Remove admin"}
+                    >
+                      Remove admin
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void setAdminRole(true)}
+                      className="h-[36px] px-3 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800 disabled:opacity-40"
+                      style={monoFont}
+                    >
+                      Make admin
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={busy || selected.user_id === auth?.user_id}
+                    onClick={() => void deleteUser()}
+                    className="h-[36px] px-3 border border-red-200 text-red-600 rounded-[8px] text-[12px] hover:bg-red-50 disabled:opacity-40"
+                    style={monoFont}
+                    title={selected.user_id === auth?.user_id ? "Cannot delete yourself" : "Delete user"}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
               <div>
                 <p className="text-[11px] text-[var(--app-muted-text)] mb-2" style={monoFont}>Profile</p>
@@ -162,17 +350,18 @@ export default function Admin() {
                   />
                   <button
                     type="button"
+                    disabled={busy}
                     onClick={() => void resetPassword()}
-                    className="h-[40px] px-3 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800"
+                    className="h-[40px] px-3 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800 disabled:opacity-40"
                     style={monoFont}
                   >
                     Set password
                   </button>
                 </div>
-                {resetMsg && (
-                  <p className="text-[11px] mt-2 text-black/70" style={monoFont}>{resetMsg}</p>
-                )}
               </div>
+              {actionMsg && (
+                <p className="text-[11px] text-black/70" style={monoFont}>{actionMsg}</p>
+              )}
             </div>
           )}
         </section>

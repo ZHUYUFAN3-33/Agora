@@ -296,6 +296,88 @@ class UserStore:
             conn.commit()
         return True, None
 
+    def admin_create_user(
+        self, user_id: str, password: str, is_admin: bool = False
+    ) -> Tuple[Optional[dict], Optional[str]]:
+        """Create a user without logging them in (admin console)."""
+        uid = validate_user_id(user_id)
+        if not uid:
+            return None, "User ID must be 3–32 chars: letters, numbers, _ or -"
+        if not password or len(password) < 4:
+            return None, "Password must be at least 4 characters"
+        with self._connect() as conn:
+            exists = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (uid,)).fetchone()
+            if exists:
+                return None, "User ID already taken"
+            conn.execute(
+                "INSERT INTO users (user_id, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)",
+                (uid, generate_password_hash(password, method="pbkdf2:sha256"), 1 if is_admin else 0, _iso(_now())),
+            )
+            conn.execute(
+                "INSERT INTO profiles (user_id, profile_json, updated_at) VALUES (?, '{}', ?)",
+                (uid, _iso(_now())),
+            )
+            conn.commit()
+        return self.get_user_detail(uid), None
+
+    def admin_set_admin(self, user_id: str, is_admin: bool, actor_id: str) -> Tuple[bool, Optional[str]]:
+        """Promote/demote admin. Cannot demote yourself or remove the last admin."""
+        uid = validate_user_id(user_id)
+        if not uid:
+            return False, "Invalid user ID"
+        actor = (actor_id or "").strip()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT user_id, is_admin FROM users WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            if not row:
+                return False, "User not found"
+            currently_admin = bool(row["is_admin"])
+            want_admin = bool(is_admin)
+            if currently_admin == want_admin:
+                return True, None
+            if not want_admin:
+                if uid == actor:
+                    return False, "Cannot remove your own admin role"
+                admin_count = conn.execute(
+                    "SELECT COUNT(*) AS c FROM users WHERE is_admin = 1"
+                ).fetchone()["c"]
+                if int(admin_count) <= 1:
+                    return False, "Cannot demote the last admin"
+            conn.execute(
+                "UPDATE users SET is_admin = ? WHERE user_id = ?",
+                (1 if want_admin else 0, uid),
+            )
+            conn.commit()
+        return True, None
+
+    def admin_delete_user(self, user_id: str, actor_id: str) -> Tuple[bool, Optional[str]]:
+        uid = validate_user_id(user_id)
+        if not uid:
+            return False, "Invalid user ID"
+        if uid == (actor_id or "").strip():
+            return False, "Cannot delete your own account"
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT user_id, is_admin FROM users WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            if not row:
+                return False, "User not found"
+            # Keep at least one admin
+            if row["is_admin"]:
+                admin_count = conn.execute(
+                    "SELECT COUNT(*) AS c FROM users WHERE is_admin = 1"
+                ).fetchone()["c"]
+                if int(admin_count) <= 1:
+                    return False, "Cannot delete the last admin"
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM profiles WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM users WHERE user_id = ?", (uid,))
+            conn.commit()
+        return True, None
+
 
 def profile_complete(profile: dict, fields: List[dict]) -> bool:
     if not fields:

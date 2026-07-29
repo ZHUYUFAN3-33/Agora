@@ -1198,12 +1198,30 @@ def me_profile():
     })
 
 
-@app.route('/api/admin/users', methods=['GET'])
+@app.route('/api/admin/users', methods=['GET', 'POST'])
 def admin_list_users():
-    _, err = _require_admin()
+    admin, err = _require_admin()
     if err:
         return err
-    users = get_user_store().list_users()
+    store = get_user_store()
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        detail, msg = store.admin_create_user(
+            body.get("user_id") or "",
+            body.get("password") or "",
+            is_admin=bool(body.get("is_admin")),
+        )
+        if msg or not detail:
+            return jsonify({"error": msg or "Failed"}), 400
+        if HAVE_AGORA2:
+            fields = (agora2_http.load_shared_profile_template().get("profile_fields") or [])
+            detail["profile_complete"] = user_profile_complete(detail.get("profile") or {}, fields)
+            detail["profile_field_count"] = len(
+                [k for k, v in (detail.get("profile") or {}).items() if v not in (None, "", [])]
+            )
+        return jsonify(detail), 201
+
+    users = store.list_users()
     if HAVE_AGORA2:
         fields = (agora2_http.load_shared_profile_template().get("profile_fields") or [])
         for u in users:
@@ -1211,12 +1229,19 @@ def admin_list_users():
     return jsonify({"users": users})
 
 
-@app.route('/api/admin/users/<user_id>', methods=['GET'])
+@app.route('/api/admin/users/<user_id>', methods=['GET', 'DELETE'])
 def admin_user_detail(user_id):
-    _, err = _require_admin()
+    admin, err = _require_admin()
     if err:
         return err
-    detail = get_user_store().get_user_detail(user_id)
+    store = get_user_store()
+    if request.method == "DELETE":
+        ok, msg = store.admin_delete_user(user_id, admin["user_id"])
+        if not ok:
+            return jsonify({"error": msg or "Failed"}), 400
+        return jsonify({"ok": True, "user_id": user_id})
+
+    detail = store.get_user_detail(user_id)
     if not detail:
         return jsonify({"error": "User not found"}), 404
     if HAVE_AGORA2:
@@ -1235,6 +1260,23 @@ def admin_reset_password(user_id):
     if not ok:
         return jsonify({"error": msg or "Failed"}), 400
     return jsonify({"ok": True, "user_id": user_id})
+
+
+@app.route('/api/admin/users/<user_id>/admin', methods=['POST'])
+def admin_set_admin_flag(user_id):
+    admin, err = _require_admin()
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    is_admin = bool(body.get("is_admin"))
+    ok, msg = get_user_store().admin_set_admin(user_id, is_admin, admin["user_id"])
+    if not ok:
+        return jsonify({"error": msg or "Failed"}), 400
+    detail = get_user_store().get_user_detail(user_id)
+    if HAVE_AGORA2 and detail:
+        fields = (agora2_http.load_shared_profile_template().get("profile_fields") or [])
+        detail["profile_complete"] = user_profile_complete(detail.get("profile") or {}, fields)
+    return jsonify({"ok": True, "user": detail})
 
 
 @app.route('/api/agora2/profile/<user_id>', methods=['GET', 'POST'])

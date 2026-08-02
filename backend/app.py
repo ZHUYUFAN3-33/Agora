@@ -370,7 +370,14 @@ def start_chat():
         lang = (data.get("lang") or "en").strip() or "en"
         profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
         intake = data.get("intake") if isinstance(data.get("intake"), dict) else {}
+        session_update = (data.get("session_update") or "").strip()
+        hint = (data.get("hint") or "").strip()
+        # Prefer authenticated user when Bearer present
         user_id = (data.get("user_id") or f"web_{room_id}").strip()
+        if HAVE_USER_STORE:
+            auth_user = get_user_store().resolve_token(_bearer_token())
+            if auth_user:
+                user_id = auth_user["user_id"]
         use_demo = bool(data.get("use_demo_intake"))
 
         # Demo fallback only when explicitly requested (UI normally sends real intake)
@@ -398,10 +405,14 @@ def start_chat():
             intake=intake,
             user_id=user_id,
             persist=True,
+            session_update=session_update,
         )
         session["agora2"] = ctx
         session["scenario_type"] = scenario_type
         session["lang"] = ctx["lang"]
+        session["user_id"] = user_id
+        session["hint"] = hint
+        session["memory_saved"] = False
 
         # Prefer Capitalized emotion names for preset files (Joy.txt)
         assemble_cfg = {}
@@ -415,7 +426,10 @@ def start_chat():
                 "emotion": emotion,
             }
         session["agora2_specs"] = agora2_http.assemble_session_agents(
-            assemble_cfg, scenario_type=scenario_type, lang=ctx["lang"]
+            assemble_cfg,
+            scenario_type=scenario_type,
+            lang=ctx["lang"],
+            hint=hint,
         )
         # Sync runtime emotion/decision from assembled specs
         for slot, spec in session["agora2_specs"].items():
@@ -441,7 +455,7 @@ def start_chat():
             "stance": runtime.get("stance"),
         })
 
-    return jsonify({
+    payload = {
         "room_id": room_id,
         "message": "Chat session started",
         "mode": mode,
@@ -450,7 +464,13 @@ def start_chat():
         "scenario_type": session.get("scenario_type"),
         "lang": session.get("lang"),
         "agents": agents_payload,
-    })
+    }
+    if use_agora2:
+        payload["user_id"] = session.get("user_id")
+        payload["session_index"] = (session.get("agora2") or {}).get("session_index", 1)
+        payload["session_count_before"] = (session.get("agora2") or {}).get("session_count", 0)
+        payload["hint"] = session.get("hint") or ""
+    return jsonify(payload)
 
 
 def normalize_lang_safe(lang: str) -> str:
@@ -874,14 +894,41 @@ def send_message():
                 "[TRANSCRIPT END]\n"
                 f"{extra}"
             )
+        agora2_ctx = session.get("agora2") or {}
+        agora2_specs = session.get("agora2_specs") or {}
+        spec = agora2_specs.get(speaker) or {}
+        stance = spec.get("stance")
+        lang_for_agent = session.get("lang") or agora2_ctx.get("lang") or "en"
+        # Per-turn dynamic stance knowledge from latest user message
+        dynamic_sk = ""
+        if session.get("pipeline") == "agora2" and HAVE_AGORA2 and stance:
+            last_user = ""
+            for h in reversed(session.get("history") or []):
+                who = (h.get("character") or h.get("role") or "").strip().lower()
+                if who == "user":
+                    last_user = (h.get("txt") or h.get("content") or "").strip()
+                    break
+            if last_user:
+                dynamic_sk = agora2_http.stance_knowledge_on_hit(
+                    agora2_ctx.get("scenario_type") or session.get("scenario_type") or "",
+                    stance,
+                    last_user,
+                    lang_for_agent,
+                    include_header=True,
+                )
+        phase_with_sk = phase_ctx or ""
+        if dynamic_sk:
+            phase_with_sk = f"{phase_with_sk}\n{dynamic_sk}" if phase_with_sk else dynamic_sk
         sys_prompt = agent.system_prompt(
             scene_for_agent,
             name_map,
-            phase_ctx,
-            known_context=(session.get("agora2") or {}).get("known_context", ""),
-            domain_background=(session.get("agora2") or {}).get("domain_background", ""),
-            stance_text=((session.get("agora2_specs") or {}).get(key) or {}).get("stance_text", ""),
-            lang=(session.get("lang") or (session.get("agora2") or {}).get("lang") or "en"),
+            phase_with_sk,
+            known_context=agora2_ctx.get("known_context", ""),
+            domain_background=agora2_ctx.get("domain_background", ""),
+            stance_text=spec.get("stance_text", ""),
+            lang=lang_for_agent,
+            session_memory_text=agora2_ctx.get("session_memory_text", ""),
+            preloaded_knowledge_text=spec.get("preloaded_knowledge", ""),
         )
         msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}]
         txt = create_response_with_client(client_chat, "gpt-4o", msgs, temp, 220)
@@ -1067,10 +1114,53 @@ def session_summary(room_id):
     except Exception as e:
         return jsonify({"error": f"Summary failed: {e}"}), 502
 
+    memory_record = None
+    session = chat_sessions.get(room_id) or {}
+    if (
+        HAVE_AGORA2
+        and session.get("pipeline") == "agora2"
+        and not session.get("memory_saved")
+        and session.get("user_id")
+        and session.get("scenario_type")
+    ):
+        try:
+            # Build plain transcript for archival memory (separate from user-facing summary)
+            lines = []
+            with open(chat_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    speaker = row.get("character") or row.get("speaker") or row.get("role") or ""
+                    content = (row.get("txt") or row.get("content") or row.get("message") or "").strip()
+                    if content:
+                        lines.append(f"{speaker}: {content}" if speaker else content)
+            transcript_text = "\n".join(lines)
+            mem_lang = session.get("lang") or lang
+            memory_record = agora2_http.persist_session_memory(
+                user_id=session["user_id"],
+                scenario_type=session["scenario_type"],
+                session_id=room_id,
+                date=datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d"),
+                transcript_text=transcript_text,
+                lang=mem_lang,
+                create_response=agent_module.create_response,
+            )
+            if memory_record:
+                session["memory_saved"] = True
+        except Exception as mem_err:
+            print(f"⚠ session memory save failed: {mem_err}")
+
     return jsonify({
         "room_id": room_id,
         "lang": lang,
         "markdown": text,
+        "memory_saved": bool(memory_record),
+        "memory": memory_record,
     })
 
 
@@ -1096,10 +1186,35 @@ def agora2_scenarios():
 
 @app.route('/api/agora2/profile-template', methods=['GET'])
 def agora2_profile_template():
-    """Shared basic profile fields (filled once when entering Chat)."""
+    """Per-scenario profile fields when ?scenario_type= is set; else shared legacy."""
     if not HAVE_AGORA2:
         return jsonify({"error": "Agora-2 adapter not available"}), 503
+    scenario_type = (request.args.get("scenario_type") or "").strip()
+    if scenario_type and agora2_http.is_agora2_scenario(scenario_type):
+        return jsonify(agora2_http.load_scenario_profile_template(scenario_type))
     return jsonify(agora2_http.load_shared_profile_template())
+
+
+@app.route('/api/agora2/memory', methods=['GET'])
+def agora2_memory():
+    """Cross-session memory status for user_id + scenario_type (Session N / history)."""
+    if not HAVE_AGORA2:
+        return jsonify({"error": "Agora-2 adapter not available"}), 503
+    scenario_type = (request.args.get("scenario_type") or "").strip()
+    if not agora2_http.is_agora2_scenario(scenario_type):
+        return jsonify({"error": "Invalid scenario_type"}), 400
+    user_id = (request.args.get("user_id") or "").strip()
+    if HAVE_USER_STORE:
+        auth_user = get_user_store().resolve_token(_bearer_token())
+        if auth_user:
+            user_id = auth_user["user_id"]
+    if not user_id:
+        return jsonify({"error": "user_id required"}), 400
+    try:
+        limit = int(request.args.get("limit") or "10")
+    except ValueError:
+        limit = 10
+    return jsonify(agora2_http.get_memory_status(user_id, scenario_type, limit=limit))
 
 
 def _bearer_token() -> Optional[str]:
@@ -1171,30 +1286,55 @@ def me_profile():
     if err:
         return err
     store = get_user_store()
+    scenario_type = (request.args.get("scenario_type") or "").strip()
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        if not scenario_type:
+            scenario_type = (body.get("scenario_type") or "").strip()
+
+    def _fields_for_complete():
+        if HAVE_AGORA2 and scenario_type and agora2_http.is_agora2_scenario(scenario_type):
+            return agora2_http.load_scenario_profile_template(scenario_type).get("profile_fields") or []
+        if HAVE_AGORA2:
+            return agora2_http.load_shared_profile_template().get("profile_fields") or []
+        return []
+
     if request.method == "GET":
         data = store.get_profile(user["user_id"])
-        complete = False
+        # Merge JSON agora2 profile so CLI/HTTP stay aligned
         if HAVE_AGORA2:
-            tmpl = agora2_http.load_shared_profile_template()
-            complete = user_profile_complete(data.get("profile") or {}, tmpl.get("profile_fields") or [])
+            from profile_store import load_profile
+            disk = load_profile(user["user_id"], agora2_http.PROFILES_DIR)
+            merged = {**(disk.get("profile") or {}), **(data.get("profile") or {})}
+        else:
+            merged = data.get("profile") or {}
+        complete = False
+        if HAVE_AGORA2 and user_profile_complete:
+            complete = user_profile_complete(merged, _fields_for_complete())
         return jsonify({
             "user_id": user["user_id"],
-            "profile": data.get("profile") or {},
+            "profile": merged,
             "updated_at": data.get("updated_at"),
             "complete": complete,
+            "scenario_type": scenario_type or None,
         })
     body = request.get_json(silent=True) or {}
     profile = body.get("profile") if isinstance(body.get("profile"), dict) else {}
     data = store.save_profile(user["user_id"], profile)
-    complete = False
     if HAVE_AGORA2:
-        tmpl = agora2_http.load_shared_profile_template()
-        complete = user_profile_complete(data.get("profile") or {}, tmpl.get("profile_fields") or [])
+        from profile_store import load_profile, save_profile
+        disk = load_profile(user["user_id"], agora2_http.PROFILES_DIR)
+        disk["profile"] = {**(disk.get("profile") or {}), **profile}
+        save_profile(user["user_id"], disk, agora2_http.PROFILES_DIR)
+    complete = False
+    if HAVE_AGORA2 and user_profile_complete:
+        complete = user_profile_complete(data.get("profile") or {}, _fields_for_complete())
     return jsonify({
         "user_id": user["user_id"],
         "profile": data.get("profile") or {},
         "updated_at": data.get("updated_at"),
         "complete": complete,
+        "scenario_type": scenario_type or None,
     })
 
 
@@ -1321,11 +1461,10 @@ def agora2_template(scenario_type):
         return jsonify({"error": "Unknown scenario_type"}), 404
     from profile_store import load_scenario_template
     tmpl = load_scenario_template(scenario_type, agora2_http.TEMPLATES_DIR)
-    # UI intake form only needs scenario_fields; profile is shared separately.
     return jsonify({
         "label": tmpl.get("label"),
         "scenario_fields": tmpl.get("scenario_fields") or [],
-        "profile_fields": [],  # shared profile lives at /api/agora2/profile-template
+        "profile_fields": tmpl.get("profile_fields") or [],
     })
 
 

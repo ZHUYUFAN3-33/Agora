@@ -128,6 +128,8 @@ class ChatAgent:
         domain_background: str = "",
         stance_text: str = "",
         lang: str = "en",
+        session_memory_text: str = "",
+        preloaded_knowledge_text: str = "",
     ) -> str:
         roster = "\n".join([f"- {v}" for _, v in name_map.items()])
         lang_norm = (lang or "en").lower()
@@ -162,10 +164,15 @@ class ChatAgent:
                 f"converging on an option your stance would not choose, say so explicitly and name what is "
                 f"being sacrificed.\n"
             )
+        # Preloaded from setup hint (fixed for session); distinct from per-turn knowledge in phase_context.
+        if preloaded_knowledge_text:
+            prompt += f"\n=== BACKGROUND (from setup) ===\n{preloaded_knowledge_text}\n"
         if known_context:
             prompt += f"\n{known_context}\n"
         if domain_background:
             prompt += f"\n{domain_background}\n"
+        if session_memory_text:
+            prompt += f"\n{session_memory_text}\n"
         if phase_context:
             prompt += f"\n{phase_context}"
         return prompt

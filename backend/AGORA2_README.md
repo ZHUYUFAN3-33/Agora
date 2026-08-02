@@ -12,6 +12,8 @@ scenario_templates/
 background_templates/
   employment.json       就职场景的静态框架 + 针对性背景条目
   parent_child.json     亲子场景的静态框架 + 针对性背景条目
+  stance_knowledge/     立场知识库卡片（关键词 + 双语正文 + 来源）
+    employment.json / parent_child.json
 scenes/                 场景描述文本，按场景 × 语言命名，终端切场景靠这个目录
   employment_zh.txt / employment_en.txt
   parent_child_zh.txt / parent_child_en.txt
@@ -23,11 +25,30 @@ lang_utils.py            语言判定（detect_lang）、双语取值（pick）�
 profile_store.py         User Profile 持久化存取、Scenario Intake 交互式收集、KNOWN USER CONTEXT 拼装
 scenario_background.py   Domain Background 匹配逻辑与 DOMAIN BACKGROUND 拼装
 stance.py                Stance 维度：强制绑定表、双语立场文本、Convergence 阶段权重提示
-agent_assembly.py        组装接口：拼接 decision + emotion（+ stance）成一个固定 agent
+stance_knowledge.py      关键词触发的立场知识库（纯本地字典，零网络/零LLM）
+session_memory.py        跨会话记忆：读取/拼接/生成/追写 memory/{user_id}__{scenario_type}.jsonl
+agent_assembly.py        组装接口：拼接 decision + emotion（+ stance + hint 预加载知识）成一个固定 agent
 agora_context.py         对外唯一入口 prepare_session_context()，串联上面两个模块
-agentwake_new.py         已 patch 的主脚本
+agora2_http.py           Flask 适配层：hint / memory / per-scenario profile / session_update
+agentwake_new.py         已 patch 的主脚本（含 session_memory_text / preloaded_knowledge 注入）
 README.md                本文件
 ```
+
+## Hint + Stance Knowledge（HTTP / 产品路径）
+
+- 前端一个选填输入框 → `POST /api/start` 的 `hint`
+- 同一句话写入 A/B/C 的 agent config；`agent_assembly` 用 hint 查该 agent 立场知识库
+- 命中则预加载 `BACKGROUND (from setup)`（整场固定）；不命中则不注入
+- 每轮用户最新发言另走动态通道（`stance_knowledge_on_hit`），与 hint 独立共存
+
+## 跨 Session Memory（HTTP / 产品路径）
+
+- 身份：`user_id` + `scenario_type`
+- 存储：`memory/{user_id}__{scenario_type}.jsonl`（gitignored）
+- 读：`/api/start` 时加载最近 3 条注入 system prompt；`GET /api/agora2/memory` 供 UI 显示 Session N / 历史
+- 写：用户触发 Decision summary 成功后，额外一次 LLM 归档 `summary` + `open_threads`（用户无感）
+- 二次及以后会话：前端短表单 `session_update`（距上次新情况）并入 known context
+
 
 每个场景的 `scenario_templates/{scenario_type}.json` 和 `background_templates/{scenario_type}.json`
 都是独立的 json 文件（不再是一个大文件里嵌套多个场景 key），字段结构与内容和之前版本完全一致，只是拆开存放。

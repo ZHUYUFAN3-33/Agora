@@ -38,6 +38,9 @@ Thumbs.db
 # Agora-2 runtime profiles (keep demo_* committed)
 backend/profiles/web_*.json
 
+# Cross-session memory (user_id__scenario_type.jsonl)
+backend/memory/
+
 # SQLite user DB
 backend/data/
 

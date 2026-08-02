@@ -5,7 +5,13 @@ import { createPortal } from "react-dom";
 import { AgoraLogo, AgoraLogoFull } from "../components/AgoraLogo";
 import { CustomDropdown } from "../components/ui/CustomDropdown";
 import { AppearanceModal } from "../components/AppearanceModal";
-import { IntakeModal, ProfileModal, type Agora2IntakePayload } from "../components/IntakeModal";
+import {
+  IntakeModal,
+  ProfileModal,
+  MemoryHistoryPanel,
+  type Agora2IntakePayload,
+  type UiLang,
+} from "../components/IntakeModal";
 import { authFetch, getAuth, logoutRequest } from "../auth";
 import { useAppearanceContext } from "../context/AppearanceContext";
 import {
@@ -1106,10 +1112,11 @@ function SummaryPanel({
 
 // ─── Settings menu (Customize Agent, Customize Scene, Reload, Export) ─
 
-function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onSummary, onExportLog, hasRoomId, showFontColor, onToggleFontColor }: {
+function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onSummary, onExportLog, onPastMemory, hasRoomId, showPastMemory, showFontColor, onToggleFontColor }: {
   open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLButtonElement | null>;
   onCustomize: () => void; onScene: () => void; onAppearance: () => void;
-  onReloadHistory: () => void; onSummary: () => void; onExportLog: () => void; hasRoomId: boolean;
+  onReloadHistory: () => void; onSummary: () => void; onExportLog: () => void;
+  onPastMemory?: () => void; hasRoomId: boolean; showPastMemory?: boolean;
   showFontColor: boolean; onToggleFontColor: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -1150,6 +1157,13 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
           <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>} label="Decision summary" onClick={onSummary} />
           <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label="Export log" onClick={onExportLog} />
         </>
+      )}
+      {showPastMemory && onPastMemory && (
+        <Item
+          icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
+          label="Past session memory"
+          onClick={onPastMemory}
+        />
       )}
     </motion.div>
   );
@@ -1523,11 +1537,13 @@ function CustomizerModal({
 
 // ─── Scene Selector ───────────────────────────────────────────────────────────
 
-function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: {
+function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang, onLangChange }: {
   scenes: Scene[];
   selectedScene: Scene | null;
   onSelect: (s: Scene) => void;
   onClose: () => void;
+  lang: UiLang;
+  onLangChange: (lang: UiLang) => void;
 }) {
   const SCENE_PAGE_SIZE = 3;
   const scenePages: Scene[][] = Array.from(
@@ -1556,12 +1572,34 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: {
       >
         <div className="flex items-center justify-between px-6 py-5 border-b border-black/8">
           <div>
-            <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>Customize Scene</h2>
-            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>Choose or add a consultation scenario · {scenePages.length || 1} pages</p>
+            <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>
+              {lang === "zh" ? "选择场景" : "Choose scenario"}
+            </h2>
+            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>
+              {lang === "zh" ? "就职 / 亲子 · 先选语言" : "Employment / Parent-Child · pick language first"}
+            </p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex border border-black/15 rounded-[8px] overflow-hidden text-[11px]" style={monoFont}>
+              <button
+                type="button"
+                onClick={() => onLangChange("en")}
+                className={`px-2.5 py-1.5 ${lang === "en" ? "bg-black text-white" : "hover:bg-black/5"}`}
+              >
+                EN
+              </button>
+              <button
+                type="button"
+                onClick={() => onLangChange("zh")}
+                className={`px-2.5 py-1.5 ${lang === "zh" ? "bg-black text-white" : "hover:bg-black/5"}`}
+              >
+                中文
+              </button>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
         </div>
         <div className="px-6 py-5 flex-1 min-h-0 flex flex-col overflow-hidden">
           <div className="border border-black/10 rounded-[12px] overflow-hidden bg-black/[0.02] flex-1 min-h-0 flex flex-col">
@@ -1680,10 +1718,15 @@ export default function Chat() {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
   const [pendingIntakeScene, setPendingIntakeScene] = useState<Scene | null>(null);
+  const [pendingProfileScene, setPendingProfileScene] = useState<Scene | null>(null);
   const [agora2Intake, setAgora2Intake] = useState<Agora2IntakePayload | null>(null);
   const [userProfile, setUserProfile] = useState<Record<string, unknown> | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [profileReady, setProfileReady] = useState(false);
+  const [uiLang, setUiLang] = useState<UiLang>("en");
+  const [sessionCountBefore, setSessionCountBefore] = useState(0);
+  const [sessionIndex, setSessionIndex] = useState<number | null>(null);
+  const [lastIntake, setLastIntake] = useState<Record<string, unknown> | null>(null);
+  const [showMemoryHistory, setShowMemoryHistory] = useState(false);
   const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full");
   const [welcomeTutorialStep, setWelcomeTutorialStep] = useState<number | null>(null);
 
@@ -1718,56 +1761,34 @@ export default function Chat() {
   useEffect(() => {
     if (!auth?.token) {
       navigate("/", { replace: true });
-      return;
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        const [tmpl, saved] = await Promise.all([
-          fetch(`${API_BASE}/agora2/profile-template`).then(async (r) => {
-            if (!r.ok) throw new Error("profile template");
-            return r.json();
-          }),
-          authFetch("/me/profile").then(async (r) => {
-            if (!r.ok) return { profile: {}, complete: false };
-            return r.json();
-          }),
-        ]);
-        if (cancelled) return;
-        const profile = (saved.profile || {}) as Record<string, unknown>;
-        const fields = (tmpl.profile_fields || []) as Array<{ key: string; optional?: boolean }>;
-        const complete = typeof saved.complete === "boolean"
-          ? saved.complete
-          : fields.every((f) => {
-              if (f.optional) return true;
-              const v = profile[f.key];
-              return v != null && String(v).trim() !== "";
-            });
-        if (complete && fields.length > 0) {
-          setUserProfile(profile);
-          setProfileReady(true);
-          setShowProfileModal(false);
-        } else {
-          setProfileReady(false);
-          setShowProfileModal(true);
-        }
-      } catch {
-        if (!cancelled) {
-          setProfileReady(false);
-          setShowProfileModal(true);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [webUserId, auth?.token, navigate]);
+  }, [auth?.token, navigate]);
 
   const openSceneSelector = useCallback(() => {
-    if (!userProfile) {
-      setShowProfileModal(true);
-      return;
-    }
     setShowSceneSelector(true);
-  }, [userProfile]);
+  }, []);
+
+  const beginAgora2Scene = useCallback(async (s: Scene) => {
+    setSelectedScene(s);
+    setAgora2Intake(null);
+    setUserProfile(null);
+    setSessionIndex(null);
+    setLastIntake(null);
+    setSessionCountBefore(0);
+    try {
+      const res = await authFetch(`/agora2/memory?scenario_type=${encodeURIComponent(s.id)}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setSessionCountBefore(Number(data.session_count) || 0);
+        setLastIntake((data.last_intake as Record<string, unknown>) || null);
+      }
+    } catch {
+      /* first session */
+    }
+    setShowSceneSelector(false);
+    setPendingProfileScene(s);
+    setShowProfileModal(true);
+  }, []);
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const c = messagesContainerRef.current;
@@ -1849,7 +1870,7 @@ export default function Chat() {
 
   useEffect(() => {
     fetch(`${API_BASE}/health`).then((r) => { if (r.ok) setBackendOnline(true); }).catch(() => {});
-    fetch(`${API_BASE}/agora2/scenarios?lang=en`)
+    fetch(`${API_BASE}/agora2/scenarios?lang=${uiLang}`)
       .then((r) => {
         if (!r.ok) throw new Error(`scenarios ${r.status}`);
         return r.json();
@@ -1866,7 +1887,7 @@ export default function Chat() {
         });
       })
       .catch(() => setScenes([]));
-  }, []);
+  }, [uiLang]);
 
   useEffect(() => {
     if (currentConv) {
@@ -2073,7 +2094,10 @@ export default function Chat() {
       try {
         const res = await fetch(`${API_BASE}/start`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+          },
           body: JSON.stringify({
             scene_id: selectedScene?.id || "scene1",
             mode: experimentMode,
@@ -2081,9 +2105,11 @@ export default function Chat() {
             ...(isAgora2SceneId(selectedScene?.id) && userProfile && agora2Intake
               ? {
                   scenario_type: selectedScene!.id,
-                  lang: "en",
+                  lang: agora2Intake.lang || uiLang,
                   profile: userProfile,
                   intake: agora2Intake.intake,
+                  hint: agora2Intake.hint || "",
+                  session_update: agora2Intake.session_update || "",
                   user_id: webUserId,
                   use_demo_intake: false,
                 }
@@ -2104,6 +2130,7 @@ export default function Chat() {
           setIsLoading(false);
           return;
         }
+        if (typeof data.session_index === "number") setSessionIndex(data.session_index);
         // Apply agent defaults from info.jsonl (decision, emotion)
         const agentsFromApi = data.agents || [];
         if (agentsFromApi.length > 0) {
@@ -2181,9 +2208,77 @@ export default function Chat() {
 
     const maxTurns = activeMode === "single" ? 1 : maxAgentTurns;
     setTypingKeys(activeMode === "single" ? ["A"] : ["A"]);
-    try {
-      const res = await fetch(`${API_BASE}/message`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: roomId, message: text, scene_id: selectedScene?.id || "scene1", emotion_tag: null, emotion_target: null, agent_emotion_overrides: agentEmotionOverrides, additional_rules: additionalRules, agent_decision_block: agentDecisionBlock, max_agent_turns_before_user: maxTurns, max_user_gap: maxUserGap, single_mode: activeMode === "single" }) });
+
+    const postMessage = async (rid: string) => {
+      const res = await fetch(`${API_BASE}/message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: rid,
+          message: text,
+          scene_id: selectedScene?.id || "scene1",
+          emotion_tag: null,
+          emotion_target: null,
+          agent_emotion_overrides: agentEmotionOverrides,
+          additional_rules: additionalRules,
+          agent_decision_block: agentDecisionBlock,
+          max_agent_turns_before_user: maxTurns,
+          max_user_gap: maxUserGap,
+          single_mode: activeMode === "single",
+        }),
+      });
       const data = await res.json().catch(() => ({}));
+      return { res, data };
+    };
+
+    const recreateRoom = async (): Promise<string | null> => {
+      // Backend restarted → in-memory room gone; recreate with same profile/intake.
+      if (isAgora2SceneId(selectedScene?.id) && (!userProfile || !agora2Intake)) {
+        return null;
+      }
+      const res = await fetch(`${API_BASE}/start`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+        },
+        body: JSON.stringify({
+          scene_id: selectedScene?.id || "scene1",
+          mode: activeMode,
+          limited_selected_agent_keys: activeMode === "limited" ? limitedSelectedAgents : undefined,
+          ...(isAgora2SceneId(selectedScene?.id) && userProfile && agora2Intake
+            ? {
+                scenario_type: selectedScene!.id,
+                lang: agora2Intake.lang || uiLang,
+                profile: userProfile,
+                intake: agora2Intake.intake,
+                hint: agora2Intake.hint || "",
+                session_update: agora2Intake.session_update || "",
+                user_id: webUserId,
+                use_demo_intake: false,
+              }
+            : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.room_id) return null;
+      if (typeof data.session_index === "number") setSessionIndex(data.session_index);
+      return String(data.room_id);
+    };
+
+    try {
+      let { res, data } = await postMessage(roomId);
+      if (!res.ok && String((data as { error?: string })?.error || "").includes("Invalid room_id")) {
+        const newRoom = await recreateRoom();
+        if (!newRoom) {
+          throw new Error("Session expired after server restart. Re-select the scene and try again.");
+        }
+        roomId = newRoom;
+        setConversations((prev) =>
+          prev.map((c) => (c.id === convId ? { ...c, roomId: newRoom } : c)),
+        );
+        ({ res, data } = await postMessage(roomId));
+      }
       if (!res.ok) {
         throw new Error((data as { error?: string })?.error || `HTTP ${res.status}`);
       }
@@ -2294,7 +2389,7 @@ export default function Chat() {
       const res = await fetch(`${API_BASE}/summary/${roomId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: "en" }),
+        body: JSON.stringify({ lang: uiLang }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -2560,7 +2655,7 @@ export default function Chat() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {showProfileModal && (
+        {showProfileModal && pendingProfileScene && (
           <motion.div
             key="profile-overlay"
             className="fixed inset-0 bg-black/30 z-[60] flex items-center justify-center p-6"
@@ -2569,17 +2664,26 @@ export default function Chat() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             onClick={() => {
-              if (profileReady && userProfile) setShowProfileModal(false);
+              if (userProfile) {
+                setShowProfileModal(false);
+                setPendingProfileScene(null);
+              }
             }}
           >
             <ProfileModal
               userId={webUserId}
+              scenarioType={pendingProfileScene.id}
+              lang={uiLang}
               dismissible={!!userProfile}
-              onClose={userProfile ? () => setShowProfileModal(false) : undefined}
+              onClose={userProfile ? () => {
+                setShowProfileModal(false);
+                setPendingProfileScene(null);
+              } : undefined}
               onConfirm={(profile) => {
                 setUserProfile(profile);
-                setProfileReady(true);
                 setShowProfileModal(false);
+                setPendingIntakeScene(pendingProfileScene);
+                setPendingProfileScene(null);
               }}
             />
           </motion.div>
@@ -2605,10 +2709,14 @@ export default function Chat() {
                 <IntakeModal
                   key={`intake-${pendingIntakeScene.id}`}
                   scene={pendingIntakeScene}
+                  lang={uiLang}
+                  sessionCount={sessionCountBefore}
+                  lastIntake={lastIntake}
                   onClose={() => setPendingIntakeScene(null)}
                   onConfirm={(payload) => {
                     setSelectedScene(pendingIntakeScene);
                     setAgora2Intake(payload);
+                    setSessionIndex(sessionCountBefore + 1);
                     setPendingIntakeScene(null);
                     setShowSceneSelector(false);
                   }}
@@ -2618,22 +2726,11 @@ export default function Chat() {
                   key="scene-selector"
                   scenes={scenes}
                   selectedScene={selectedScene}
+                  lang={uiLang}
+                  onLangChange={setUiLang}
                   onSelect={(s) => {
-                    if (!s) {
-                      setSelectedScene(null);
-                      setAgora2Intake(null);
-                      setShowSceneSelector(false);
-                      return;
-                    }
-                    if (!userProfile) {
-                      setShowSceneSelector(false);
-                      setShowProfileModal(true);
-                      return;
-                    }
                     if (isAgora2SceneId(s.id)) {
-                      // Overlay stays; only the panel swaps — no backdrop flicker
-                      setPendingIntakeScene(s);
-                      setShowSceneSelector(false);
+                      void beginAgora2Scene(s);
                       return;
                     }
                     setAgora2Intake(null);
@@ -2644,6 +2741,25 @@ export default function Chat() {
                 />
               )}
             </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showMemoryHistory && selectedScene && isAgora2SceneId(selectedScene.id) && (
+          <motion.div
+            key="memory-history"
+            className="fixed inset-0 bg-black/30 z-[70] flex items-center justify-center p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowMemoryHistory(false)}
+          >
+            <MemoryHistoryPanel
+              scenarioType={selectedScene.id}
+              lang={uiLang}
+              onClose={() => setShowMemoryHistory(false)}
+            />
           </motion.div>
         )}
       </AnimatePresence>
@@ -2718,7 +2834,15 @@ export default function Chat() {
               <UserMenu
                 nickname={nickname}
                 isAdmin={isAdmin}
-                onAccount={() => setShowProfileModal(true)}
+                onAccount={() => {
+                  const s = selectedScene && isAgora2SceneId(selectedScene.id) ? selectedScene : null;
+                  if (s) {
+                    setPendingProfileScene(s);
+                    setShowProfileModal(true);
+                  } else {
+                    openSceneSelector();
+                  }
+                }}
                 onHelp={() => {}}
                 onAdmin={() => navigate("/admin")}
                 onLogout={() => void handleLogout()}
@@ -2979,9 +3103,15 @@ export default function Chat() {
                     <div className="flex items-center gap-1.5 mb-1">
                       <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: selectedScene?.color || "#000000" }} />
                       <span className="text-[10px] tracking-widest text-black" style={monoFont}>{selectedScene?.title || scenes[0]?.title || "Laptop Purchase Advisory"}</span>
+                      {sessionIndex != null && (
+                        <span className="text-[9px] text-black/50 ml-1" style={monoFont}>· Session {sessionIndex}</span>
+                      )}
+                      <span className="text-[9px] text-black/40 ml-auto" style={monoFont}>{uiLang === "zh" ? "中文" : "EN"}</span>
                     </div>
                     <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{selectedScene?.description || scenes[0]?.description || "Professional advice for Black Friday laptop shopping. Three AI agents analyze from different perspectives."}</p>
-                    <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>click to customize →</p>
+                    <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>
+                      {agora2Intake ? "intake ready · click to change →" : "click to choose scenario →"}
+                    </p>
                   </motion.button>
                 </div>
               </div>
@@ -3151,7 +3281,10 @@ export default function Chat() {
                     onAppearance={() => setShowAppearanceModal(true)}
                     onReloadHistory={handleLoadHistory}
                     onSummary={handleOpenSummary}
-                    onExportLog={handleExportLog} hasRoomId={!!currentConv?.roomId}
+                    onExportLog={handleExportLog}
+                    onPastMemory={() => setShowMemoryHistory(true)}
+                    hasRoomId={!!currentConv?.roomId}
+                    showPastMemory={!!selectedScene && isAgora2SceneId(selectedScene.id)}
                     showFontColor={showFontColorInSettings} onToggleFontColor={() => setShowFontColorInSettings((v) => !v)} />
                 </AnimatePresence>
               </div>

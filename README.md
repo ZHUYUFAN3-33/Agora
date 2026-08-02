@@ -133,13 +133,15 @@ Agora/
 | Method | Path | Notes |
 |--------|------|--------|
 | GET | `/api/health` | Liveness |
-| GET | `/api/agora2/scenarios?lang=en` | Scenario cards for the UI |
-| GET | `/api/agora2/template/<type>` | Intake template (`employment` / `parent_child`) |
-| POST | `/api/start` | Create room (Agora-2 when `scene_id` / `scenario_type` is employment or parent_child) |
-| POST | `/api/message` | User message → agent replies |
+| GET | `/api/agora2/scenarios?lang=en\|zh` | Scenario cards for the UI |
+| GET | `/api/agora2/template/<type>` | Profile + intake fields (`employment` / `parent_child`) |
+| GET | `/api/agora2/profile-template?scenario_type=` | Per-scenario profile fields |
+| GET | `/api/agora2/memory?scenario_type=` | Cross-session memory (Session N / history) |
+| POST | `/api/start` | Create room; Agora-2 body may include `lang`, `profile`, `intake`, `hint`, `session_update` |
+| POST | `/api/message` | User message → agent replies (+ dynamic stance knowledge) |
 | GET | `/api/history/<room_id>` | History |
 | GET | `/api/export-logs/<room_id>` | Export zip |
-| POST/GET | `/api/summary/<room_id>` | Decision-direction summary for that session (`lang=en` default) |
+| POST/GET | `/api/summary/<room_id>` | Decision summary; also appends cross-session memory |
 | POST | `/api/emotion/analyze` | Emotion helper |
 
 ---

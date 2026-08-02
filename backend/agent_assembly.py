@@ -67,6 +67,19 @@ try:
 except ImportError:
     HAVE_STANCE = False
 
+try:
+    # _match_topic_card is reused (not reimplemented) so a hint that matches no
+    # keyword yields nothing — the same "keyword-only, no generic fallback" rule
+    # the in-conversation trigger uses in agentwake_new.py.
+    from stance_knowledge import (
+        load_stance_knowledge,
+        get_stance_knowledge_block,
+        _match_topic_card as sk_match_topic_card,
+    )
+    HAVE_STANCE_KNOWLEDGE = True
+except ImportError:
+    HAVE_STANCE_KNOWLEDGE = False
+
 
 class AgentSpec(TypedDict):
     agent_key: str
@@ -75,6 +88,7 @@ class AgentSpec(TypedDict):
     role_text: str
     stance: Optional[str]
     stance_text: str
+    preloaded_knowledge: str
 
 
 # -------------------------------------------------------------------------
@@ -140,11 +154,24 @@ def assemble_role_text(decision_name: str, emotion_name: str,
 def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
                       scenario_type: Optional[str] = None, lang: str = "zh",
                       decision_dir: str = DECISION_DIR_DEFAULT,
-                      emotion_dir: str = EMOTION_DIR_DEFAULT) -> AgentSpec:
+                      emotion_dir: str = EMOTION_DIR_DEFAULT,
+                      hint: Optional[str] = None,
+                      stance_knowledge: Optional[dict] = None) -> AgentSpec:
     """
     The single entry point: hands back everything needed to build one
     fixed agent — role_text (Decision+Emotion) plus stance/stance_text
     (kept separate on purpose, see module docstring).
+
+    hint: an optional one-line description (from info.jsonl) of what the user
+    wants to discuss this session. When it matches a stance-knowledge keyword,
+    the matched card BODY is returned in `preloaded_knowledge` as this agent's
+    fixed, whole-session background — a separate channel from the per-turn
+    trigger. A hint that matches nothing yields "" (no generic fallback), exactly
+    like the in-conversation trigger. The returned body carries no header; the
+    caller wraps it under its own distinct block title.
+
+    stance_knowledge: pass the pre-loaded dict to avoid re-reading the file;
+    loaded on demand when None.
     """
     role_text = assemble_role_text(decision_name, emotion_name, decision_dir, emotion_dir)
 
@@ -154,6 +181,17 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
         stance = assign_stance(scenario_type, agent_key)
         stance_text = get_stance_text(scenario_type, stance, lang)
 
+    preloaded_knowledge = ""
+    if hint and HAVE_STANCE_KNOWLEDGE and stance:
+        kb = stance_knowledge if stance_knowledge is not None else load_stance_knowledge()
+        scenario_cfg = (kb or {}).get(scenario_type, {}) or {}
+        stance_cfg = scenario_cfg.get(stance)
+        topic_cards = stance_cfg.get("topic_cards", []) if isinstance(stance_cfg, dict) else []
+        if sk_match_topic_card(hint, topic_cards, lang):
+            preloaded_knowledge = get_stance_knowledge_block(
+                scenario_type, stance, hint, lang, knowledge=kb, include_header=False
+            )
+
     return {
         "agent_key": agent_key,
         "decision": decision_name,
@@ -161,19 +199,27 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
         "role_text": role_text,
         "stance": stance,
         "stance_text": stance_text,
+        "preloaded_knowledge": preloaded_knowledge,
     }
 
 
 def build_all_agent_specs(agent_configs: Dict[str, dict],
                            scenario_type: Optional[str] = None, lang: str = "zh",
                            decision_dir: str = DECISION_DIR_DEFAULT,
-                           emotion_dir: str = EMOTION_DIR_DEFAULT) -> Dict[str, AgentSpec]:
+                           emotion_dir: str = EMOTION_DIR_DEFAULT,
+                           stance_knowledge: Optional[dict] = None) -> Dict[str, AgentSpec]:
     """
-    agent_configs: {"A": {"decision": "Rational", "emotion": "Joy"}, "B": {...}, "C": {...}}
-    (this is exactly what load_agent_configs(info.jsonl) already returns in agentwake_new.py)
+    agent_configs: {"A": {"decision": "Rational", "emotion": "Joy", "hint": "..."}, ...}
+    (this is exactly what load_agent_configs(info.jsonl) already returns in agentwake_new.py;
+    "hint" is optional per agent — a missing key or empty string is fine)
 
     Returns: {"A": AgentSpec, "B": AgentSpec, "C": AgentSpec}
+
+    stance_knowledge is loaded once here (if not passed) and shared across agents
+    so the file isn't re-read per agent.
     """
+    if stance_knowledge is None and HAVE_STANCE_KNOWLEDGE:
+        stance_knowledge = load_stance_knowledge()
     return {
         key: build_agent_spec(
             agent_key=key,
@@ -183,6 +229,8 @@ def build_all_agent_specs(agent_configs: Dict[str, dict],
             lang=lang,
             decision_dir=decision_dir,
             emotion_dir=emotion_dir,
+            hint=cfg.get("hint"),
+            stance_knowledge=stance_knowledge,
         )
         for key, cfg in agent_configs.items()
     }

@@ -3,6 +3,8 @@ import { motion } from "motion/react";
 import { API_BASE, type Scene } from "../data/agents";
 import { monoFont } from "../pages/chatConstants";
 
+export type UiLang = "en" | "zh";
+
 type FieldOption = { value: string; label: { en?: string; zh?: string } | string };
 export type TemplateField = {
   key: string;
@@ -19,9 +21,9 @@ type FieldsTemplate = {
   scenario_fields?: TemplateField[];
 };
 
-function enLabel(q: TemplateField["question"] | FieldOption["label"]): string {
+function pickLabel(q: TemplateField["question"] | FieldOption["label"], lang: UiLang): string {
   if (typeof q === "string") return q;
-  return q?.en || q?.zh || "";
+  return (lang === "zh" ? q?.zh : q?.en) || q?.en || q?.zh || "";
 }
 
 function parseList(raw: string): string[] {
@@ -33,6 +35,15 @@ function parseList(raw: string): string[] {
 
 function fieldDomId(prefix: string, key: string) {
   return `${prefix}:${key}`;
+}
+
+function authHeaders(): Record<string, string> {
+  try {
+    const t = JSON.parse(localStorage.getItem("agora_auth") || "{}").token;
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch {
+    return {};
+  }
 }
 
 function valuesToObject(fields: TemplateField[] | undefined, values: Record<string, string>) {
@@ -71,6 +82,144 @@ function missingRequired(fields: TemplateField[] | undefined, values: Record<str
   return missing;
 }
 
+const PRIORITY_DEFAULTS = ["salary", "growth", "stability", "location", "culture"];
+
+function ListEditor({
+  id,
+  value,
+  invalid,
+  borderClass,
+  onChange,
+  onFocusClear,
+  lang,
+}: {
+  id: string;
+  value: string;
+  invalid: boolean;
+  borderClass: string;
+  onChange: (v: string) => void;
+  onFocusClear: () => void;
+  lang: UiLang;
+}) {
+  const items = parseList(value);
+  const [draft, setDraft] = useState("");
+  const setItems = (next: string[]) => onChange(next.join("\n"));
+  return (
+    <div>
+      <p className="text-[10px] text-[var(--app-muted-text)] mb-1.5" style={monoFont}>
+        {lang === "zh" ? "可添加多条" : "Add multiple items"}
+      </p>
+      <ul className="flex flex-col gap-1.5 mb-2">
+        {items.map((item, i) => (
+          <li key={`${item}-${i}`} className="flex items-center gap-2">
+            <span className="flex-1 text-[12px] px-3 py-2 border border-black/10 rounded-[6px] bg-white" style={monoFont}>
+              {item}
+            </span>
+            <button
+              type="button"
+              className="text-[11px] text-red-600 px-2 py-1 hover:bg-red-50 rounded"
+              style={monoFont}
+              onClick={() => setItems(items.filter((_, j) => j !== i))}
+            >
+              {lang === "zh" ? "删除" : "Remove"}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="flex gap-2">
+        <input
+          id={id}
+          type="text"
+          value={draft}
+          onFocus={onFocusClear}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              const t = draft.trim();
+              if (t) {
+                setItems([...items, t]);
+                setDraft("");
+              }
+            }
+          }}
+          placeholder={lang === "zh" ? "输入后回车添加" : "Type and press Enter"}
+          className={`flex-1 text-[12px] px-3 py-2 border rounded-[6px] outline-none transition-colors ${borderClass}`}
+          style={monoFont}
+        />
+        <button
+          type="button"
+          className="px-3 py-2 text-[12px] bg-black text-white rounded-[6px] disabled:opacity-40"
+          style={monoFont}
+          disabled={!draft.trim()}
+          onClick={() => {
+            const t = draft.trim();
+            if (!t) return;
+            setItems([...items, t]);
+            setDraft("");
+          }}
+        >
+          {lang === "zh" ? "添加" : "Add"}
+        </button>
+      </div>
+      {invalid && items.length === 0 && (
+        <p className="text-[10px] text-red-500 mt-1" style={monoFont}>
+          {lang === "zh" ? "必填" : "Required"}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PriorityRanker({
+  id,
+  value,
+  borderClass,
+  onChange,
+  onFocusClear,
+  lang,
+}: {
+  id: string;
+  value: string;
+  borderClass: string;
+  onChange: (v: string) => void;
+  onFocusClear: () => void;
+  lang: UiLang;
+}) {
+  const items = parseList(value);
+  const list = items.length ? items : [...PRIORITY_DEFAULTS];
+  useEffect(() => {
+    if (!items.length) onChange(PRIORITY_DEFAULTS.join("\n"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const move = (i: number, dir: -1 | 1) => {
+    const next = [...list];
+    const j = i + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next.join("\n"));
+  };
+
+  return (
+    <div id={id} onFocus={onFocusClear}>
+      <p className="text-[10px] text-[var(--app-muted-text)] mb-1.5" style={monoFont}>
+        {lang === "zh" ? "用上下箭头调整优先级" : "Use arrows to rank (highest first)"}
+      </p>
+      <ul className="flex flex-col gap-1.5">
+        {list.map((item, i) => (
+          <li key={`${item}-${i}`} className={`flex items-center gap-2 px-2 py-1.5 border rounded-[6px] bg-white ${borderClass}`}>
+            <span className="text-[11px] text-black/40 w-5" style={monoFont}>{i + 1}</span>
+            <span className="flex-1 text-[12px]" style={monoFont}>{item}</span>
+            <button type="button" className="text-[11px] px-2 py-1 hover:bg-black/5 rounded" style={monoFont} onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
+            <button type="button" className="text-[11px] px-2 py-1 hover:bg-black/5 rounded" style={monoFont} onClick={() => move(i, 1)} disabled={i === list.length - 1}>↓</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function FieldControls({
   fields,
   values,
@@ -79,6 +228,7 @@ function FieldControls({
   clearedErrors,
   onChange,
   onFocusClear,
+  lang,
 }: {
   fields: TemplateField[];
   values: Record<string, string>;
@@ -87,12 +237,13 @@ function FieldControls({
   clearedErrors: Record<string, boolean>;
   onChange: (key: string, value: string) => void;
   onFocusClear: (key: string) => void;
+  lang: UiLang;
 }) {
   return (
     <>
       {fields.map((field) => {
         const value = values[field.key] ?? "";
-        const label = enLabel(field.question);
+        const label = pickLabel(field.question, lang);
         const required = !field.optional;
         const id = fieldDomId(prefix, field.key);
         const invalid = showErrors && required && !value.trim() && !clearedErrors[id];
@@ -105,7 +256,7 @@ function FieldControls({
 
         const commonLabel = (
           <label htmlFor={id} className={labelClass} style={monoFont}>
-            {label}{required ? " *" : " (optional)"}
+            {label}{required ? " *" : (lang === "zh" ? "（可跳过）" : " (optional)")}
           </label>
         );
 
@@ -113,8 +264,10 @@ function FieldControls({
           <div key={id} data-field-id={id} className="mb-4">
             {commonLabel}
             {control}
-            {invalid && (
-              <p className="text-[10px] text-red-500 mt-1" style={monoFont}>Required</p>
+            {invalid && field.type !== "list" && (
+              <p className="text-[10px] text-red-500 mt-1" style={monoFont}>
+                {lang === "zh" ? "必填" : "Required"}
+              </p>
             )}
           </div>
         );
@@ -129,28 +282,38 @@ function FieldControls({
               className={`w-full text-[12px] px-3 py-2 border rounded-[6px] outline-none transition-colors bg-white ${borderClass}`}
               style={monoFont}
             >
-              <option value="">Select…</option>
+              <option value="">{lang === "zh" ? "请选择…" : "Select…"}</option>
               {field.options.map((o) => (
-                <option key={o.value} value={o.value}>{enLabel(o.label)}</option>
+                <option key={o.value} value={o.value}>{pickLabel(o.label, lang)}</option>
               ))}
             </select>,
           );
         }
 
+        if (field.type === "list" && field.key === "priority_ranking") {
+          return wrap(
+            <PriorityRanker
+              id={id}
+              value={value}
+              borderClass={borderClass}
+              onChange={(v) => onChange(field.key, v)}
+              onFocusClear={() => onFocusClear(field.key)}
+              lang={lang}
+            />,
+          );
+        }
+
         if (field.type === "list") {
           return wrap(
-            <>
-              <p className="text-[10px] text-[var(--app-muted-text)] mb-1.5" style={monoFont}>One item per line</p>
-              <textarea
-                id={id}
-                rows={3}
-                value={value}
-                onFocus={() => onFocusClear(field.key)}
-                onChange={(e) => onChange(field.key, e.target.value)}
-                className={`w-full text-[12px] px-3 py-2 border rounded-[6px] outline-none resize-none leading-relaxed transition-colors ${borderClass}`}
-                style={monoFont}
-              />
-            </>,
+            <ListEditor
+              id={id}
+              value={value}
+              invalid={invalid}
+              borderClass={borderClass}
+              onChange={(v) => onChange(field.key, v)}
+              onFocusClear={() => onFocusClear(field.key)}
+              lang={lang}
+            />,
           );
         }
 
@@ -197,6 +360,7 @@ function FormShell({
   children,
   scrollRef,
   dismissible = true,
+  lang,
 }: {
   title: string;
   subtitle: string;
@@ -210,6 +374,7 @@ function FormShell({
   children: React.ReactNode;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   dismissible?: boolean;
+  lang: UiLang;
 }) {
   return (
     <motion.div
@@ -237,13 +402,17 @@ function FormShell({
           <p className="text-[12px] text-amber-600 border border-amber-200 bg-amber-50 px-3 py-2 rounded-[8px]" style={monoFont}>{loadError}</p>
         )}
         {!loadError && loading && (
-          <p className="text-[12px] text-[var(--app-muted-text)]" style={monoFont}>Loading form…</p>
+          <p className="text-[12px] text-[var(--app-muted-text)]" style={monoFont}>
+            {lang === "zh" ? "加载表单…" : "Loading form…"}
+          </p>
         )}
         {!loadError && !loading && (
           <>
             {showErrors && missingCount > 0 && (
               <p className="text-[12px] text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded-[8px] mb-4" style={monoFont}>
-                Please fill the highlighted required fields ({missingCount} remaining).
+                {lang === "zh"
+                  ? `请填写标红的必填项（还剩 ${missingCount} 项）`
+                  : `Please fill the highlighted required fields (${missingCount} remaining).`}
               </p>
             )}
             {children}
@@ -253,9 +422,7 @@ function FormShell({
 
       <div className="px-6 py-4 border-t border-black/8 flex items-center justify-between gap-3">
         <p className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>
-          {showErrors && missingCount > 0
-            ? `${missingCount} required field${missingCount === 1 ? "" : "s"} missing`
-            : "Required fields marked with *"}
+          {lang === "zh" ? "带 * 为必填" : "Required fields marked with *"}
         </p>
         <div className="flex gap-2">
           {dismissible && onClose && (
@@ -265,7 +432,7 @@ function FormShell({
               className="px-4 py-2 text-[12px] border border-black/15 rounded-[8px] hover:bg-black/5 transition-colors"
               style={monoFont}
             >
-              Cancel
+              {lang === "zh" ? "取消" : "Cancel"}
             </motion.button>
           )}
           <motion.button
@@ -283,14 +450,18 @@ function FormShell({
   );
 }
 
-/** Shared basic profile — shown when entering Chat (before scene). */
+/** Scenario-specific profile — shown after scene pick; prefills saved values. */
 export function ProfileModal({
   userId,
+  scenarioType,
+  lang,
   onConfirm,
   onClose,
   dismissible = false,
 }: {
   userId: string;
+  scenarioType: string;
+  lang: UiLang;
   onConfirm: (profile: Record<string, unknown>) => void;
   onClose?: () => void;
   dismissible?: boolean;
@@ -301,6 +472,7 @@ export function ProfileModal({
   const [saving, setSaving] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [clearedErrors, setClearedErrors] = useState<Record<string, boolean>>({});
+  const [hadSaved, setHadSaved] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -308,21 +480,12 @@ export function ProfileModal({
     setLoadError(null);
     setTemplate(null);
     Promise.all([
-      fetch(`${API_BASE}/agora2/profile-template`).then(async (r) => {
+      fetch(`${API_BASE}/agora2/profile-template?scenario_type=${encodeURIComponent(scenarioType)}`).then(async (r) => {
         if (!r.ok) throw new Error(`Failed to load profile form (${r.status})`);
         return r.json();
       }),
-      fetch(`${API_BASE}/me/profile`, {
-        headers: {
-          ...(typeof localStorage !== "undefined" && localStorage.getItem("agora_auth")
-            ? (() => {
-                try {
-                  const t = JSON.parse(localStorage.getItem("agora_auth") || "{}").token;
-                  return t ? { Authorization: `Bearer ${t}` } : {};
-                } catch { return {}; }
-              })()
-            : {}),
-        },
+      fetch(`${API_BASE}/me/profile?scenario_type=${encodeURIComponent(scenarioType)}`, {
+        headers: authHeaders(),
       }).then(async (r) => {
         if (!r.ok) return { profile: {} };
         return r.json();
@@ -331,13 +494,15 @@ export function ProfileModal({
       .then(([tmpl, saved]) => {
         if (cancelled) return;
         setTemplate(tmpl);
-        setValues(objectToStringValues(tmpl.profile_fields, saved.profile || {}));
+        const mapped = objectToStringValues(tmpl.profile_fields, saved.profile || {});
+        setValues(mapped);
+        setHadSaved(Object.values(mapped).some((v) => String(v).trim()));
       })
       .catch((e) => {
         if (!cancelled) setLoadError(e?.message || "Failed to load profile form");
       });
     return () => { cancelled = true; };
-  }, [userId]);
+  }, [userId, scenarioType]);
 
   const missingKeys = useMemo(
     () => missingRequired(template?.profile_fields, values, "profile"),
@@ -358,20 +523,13 @@ export function ProfileModal({
     setSaving(true);
     const profile = valuesToObject(template.profile_fields, values);
     try {
-      let token = "";
-      try {
-        token = JSON.parse(localStorage.getItem("agora_auth") || "{}").token || "";
-      } catch { /* ignore */ }
       await fetch(`${API_BASE}/me/profile`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ profile }),
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ profile, scenario_type: scenarioType }),
       });
     } catch {
-      /* still continue with local profile */
+      /* continue with local profile */
     }
     onConfirm(profile);
     setSaving(false);
@@ -379,17 +537,22 @@ export function ProfileModal({
 
   return (
     <FormShell
-      title="Your profile"
-      subtitle="Basic info used across scenarios · you can update later"
+      title={lang === "zh" ? "用户档案" : "Your profile"}
+      subtitle={
+        hadSaved
+          ? (lang === "zh" ? "已载入上次保存的值 · 确认或修改后继续" : "Saved values loaded · confirm or edit")
+          : (lang === "zh" ? "按场景填写一次，之后可复用" : "Fill once for this scenario · reused later")
+      }
       loadError={loadError}
       loading={!template && !loadError}
       showErrors={showErrors}
       missingCount={missingKeys.length}
       onClose={onClose}
       onConfirm={() => void handleConfirm()}
-      confirmLabel={saving ? "Saving…" : "Continue"}
+      confirmLabel={saving ? (lang === "zh" ? "保存中…" : "Saving…") : (lang === "zh" ? "确认继续" : "Confirm & continue")}
       scrollRef={scrollRef}
       dismissible={dismissible}
+      lang={lang}
     >
       {template && (
         <div className="border border-black/10 rounded-[12px] p-4 bg-black/[0.02]">
@@ -399,6 +562,7 @@ export function ProfileModal({
             prefix="profile"
             showErrors={showErrors}
             clearedErrors={clearedErrors}
+            lang={lang}
             onChange={(key, value) => {
               const id = fieldDomId("profile", key);
               setClearedErrors((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
@@ -417,27 +581,38 @@ export function ProfileModal({
 
 export type Agora2IntakePayload = {
   scenario_type: string;
-  lang: "en";
+  lang: UiLang;
   intake: Record<string, unknown>;
+  hint?: string;
+  session_update?: string;
 };
 
-/** Scene-specific intake only — shown after selecting a scenario. */
+/** Scene-specific intake — after profile; includes hint + optional session_update. */
 export function IntakeModal({
   scene,
+  lang,
+  sessionCount = 0,
+  lastIntake = null,
   onClose,
   onConfirm,
 }: {
   scene: Scene;
+  lang: UiLang;
+  sessionCount?: number;
+  lastIntake?: Record<string, unknown> | null;
   onClose: () => void;
   onConfirm: (payload: Agora2IntakePayload) => void;
 }) {
   const [template, setTemplate] = useState<FieldsTemplate | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [intakeValues, setIntakeValues] = useState<Record<string, string>>({});
+  const [sessionUpdate, setSessionUpdate] = useState("");
+  const [hint, setHint] = useState("");
   const [saving, setSaving] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [clearedErrors, setClearedErrors] = useState<Record<string, boolean>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isReturn = sessionCount > 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -453,17 +628,19 @@ export function IntakeModal({
       .then((data: FieldsTemplate) => {
         if (cancelled) return;
         setTemplate(data);
-        const i: Record<string, string> = {};
-        (data.scenario_fields || []).forEach((f) => { i[f.key] = ""; });
-        setIntakeValues(i);
+        const prefill = lastIntake || {};
+        setIntakeValues(objectToStringValues(data.scenario_fields, prefill as Record<string, unknown>));
       })
       .catch((e) => {
         if (!cancelled) setLoadError(e?.message || "Failed to load intake form");
       });
     return () => { cancelled = true; };
-  }, [scene.id]);
+  }, [scene.id, lastIntake]);
 
-  const title = useMemo(() => template?.label?.en || scene.title, [template, scene.title]);
+  const title = useMemo(
+    () => (lang === "zh" ? template?.label?.zh : template?.label?.en) || scene.title,
+    [template, scene.title, lang],
+  );
   const missingKeys = useMemo(
     () => missingRequired(template?.scenario_fields, intakeValues, "intake"),
     [template, intakeValues],
@@ -483,26 +660,50 @@ export function IntakeModal({
     setSaving(true);
     onConfirm({
       scenario_type: scene.id,
-      lang: "en",
+      lang,
       intake: valuesToObject(template.scenario_fields, intakeValues),
+      hint: hint.trim() || undefined,
+      session_update: sessionUpdate.trim() || undefined,
     });
     setSaving(false);
   };
 
   return (
     <FormShell
-      title="This session"
-      subtitle={`${title} · details for this decision only`}
+      title={lang === "zh" ? "本次会话" : "This session"}
+      subtitle={
+        isReturn
+          ? (lang === "zh"
+            ? `${title} · 第 ${sessionCount + 1} 次 · 可先写新情况，再确认/修改表单`
+            : `${title} · Session ${sessionCount + 1} · note what's new, then confirm intake`)
+          : (lang === "zh" ? `${title} · 仅用于本次决策` : `${title} · details for this decision only`)
+      }
       loadError={loadError}
       loading={!template && !loadError}
       showErrors={showErrors}
       missingCount={missingKeys.length}
       onClose={onClose}
       onConfirm={handleConfirm}
-      confirmLabel={saving ? "Saving…" : "Continue"}
+      confirmLabel={saving ? (lang === "zh" ? "保存中…" : "Saving…") : (lang === "zh" ? "开始准备对话" : "Continue")}
       scrollRef={scrollRef}
       dismissible
+      lang={lang}
     >
+      {isReturn && (
+        <div className="mb-5 border border-black/10 rounded-[12px] p-4 bg-amber-50/40">
+          <label className="text-[12px] text-black/70 mb-1.5 block" style={monoFont}>
+            {lang === "zh" ? "距上次以来有什么新情况？" : "What's new since last time?"}
+          </label>
+          <textarea
+            rows={3}
+            value={sessionUpdate}
+            onChange={(e) => setSessionUpdate(e.target.value)}
+            placeholder={lang === "zh" ? "简短补充即可（可跳过）" : "Brief update (optional)"}
+            className="w-full text-[12px] px-3 py-2 border border-black/15 rounded-[6px] outline-none resize-none"
+            style={monoFont}
+          />
+        </div>
+      )}
       {template && (
         <div className="border border-black/10 rounded-[12px] p-4 bg-black/[0.02]">
           <FieldControls
@@ -511,6 +712,7 @@ export function IntakeModal({
             prefix="intake"
             showErrors={showErrors}
             clearedErrors={clearedErrors}
+            lang={lang}
             onChange={(key, value) => {
               const id = fieldDomId("intake", key);
               setClearedErrors((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
@@ -523,6 +725,96 @@ export function IntakeModal({
           />
         </div>
       )}
+      <div className="mt-5 border border-black/10 rounded-[12px] p-4">
+        <label className="text-[12px] text-black/70 mb-1.5 block" style={monoFont}>
+          {lang === "zh" ? "简单描述一下这次想重点聊的情况（可选）" : "Briefly describe what you want to focus on this time (optional)"}
+        </label>
+        <input
+          type="text"
+          value={hint}
+          onChange={(e) => setHint(e.target.value)}
+          className="w-full text-[12px] px-3 py-2 border border-black/15 rounded-[6px] outline-none"
+          style={monoFont}
+        />
+      </div>
     </FormShell>
+  );
+}
+
+/** Lightweight past-session memory list. */
+export function MemoryHistoryPanel({
+  scenarioType,
+  lang,
+  onClose,
+}: {
+  scenarioType: string;
+  lang: UiLang;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<Array<{ date?: string; summary?: string; open_threads?: string[] }>>([]);
+  const [count, setCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/agora2/memory?scenario_type=${encodeURIComponent(scenarioType)}`, {
+      headers: authHeaders(),
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`Failed (${r.status})`);
+        return r.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setCount(data.session_count || 0);
+        setRows(data.recent || []);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e?.message || "Failed");
+      });
+    return () => { cancelled = true; };
+  }, [scenarioType]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 8 }}
+      className="w-full max-w-[560px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between px-5 py-4 border-b border-black/8">
+        <div>
+          <h2 className="text-[15px]" style={{ ...monoFont, fontWeight: 600 }}>
+            {lang === "zh" ? "历史摘要" : "Past session memory"}
+          </h2>
+          <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>
+            {lang === "zh" ? `共 ${count} 次 session` : `${count} session(s) so far`}
+          </p>
+        </div>
+        <button type="button" onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px]">✕</button>
+      </div>
+      <div className="px-5 py-4 max-h-[60vh] overflow-y-auto">
+        {error && <p className="text-[12px] text-red-600" style={monoFont}>{error}</p>}
+        {!error && rows.length === 0 && (
+          <p className="text-[12px] text-[var(--app-muted-text)]" style={monoFont}>
+            {lang === "zh" ? "还没有跨 session 记忆（完成一次 Summary 后会出现）" : "No memory yet — appears after you run Summary once."}
+          </p>
+        )}
+        <ul className="flex flex-col gap-3">
+          {rows.map((r, i) => (
+            <li key={i} className="border border-black/10 rounded-[10px] p-3">
+              <p className="text-[10px] text-black/50 mb-1" style={monoFont}>{r.date || "—"}</p>
+              <p className="text-[12px] leading-relaxed whitespace-pre-wrap" style={monoFont}>{r.summary || "—"}</p>
+              {(r.open_threads || []).length > 0 && (
+                <p className="text-[11px] text-black/60 mt-2" style={monoFont}>
+                  {(lang === "zh" ? "未竟话题：" : "Open threads: ") + (r.open_threads || []).join(lang === "zh" ? "；" : "; ")}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </motion.div>
   );
 }

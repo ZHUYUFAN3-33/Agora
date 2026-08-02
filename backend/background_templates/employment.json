@@ -1,0 +1,63 @@
+{
+  "match_type": "keyword",
+  "match_field": "decision_field",
+  "static_framework": {
+    "zh": "就职决策通常涉及五个维度的权衡：薪酬、成长空间、稳定性、工作地点、团队文化。不同行业对这五个维度的权重分布不同，比如互联网/创业公司通常更看重成长空间和股权激励，体制内/国企更看重稳定性和长期保障，外企/成熟大厂更看重流程规范和工作生活平衡。跳槽决策还需额外考虑机会成本（当前岗位的沉没投入）和转换风险（新环境的适应期）。",
+    "en": "Employment decisions typically involve weighing five dimensions: compensation, growth potential, stability, location, and team culture. Different industries weight these differently — internet/startup companies often prioritize growth and equity, government/state-owned enterprises prioritize stability and long-term security, and established foreign/large firms often prioritize process maturity and work-life balance. Job-change decisions additionally involve opportunity cost (sunk investment in the current role) and transition risk (the adjustment period in a new environment)."
+  },
+  "targeted_entries": [
+    {
+      "keywords": [
+        "结构工程",
+        "建筑",
+        "土木",
+        "structural engineering",
+        "construction",
+        "civil engineering",
+        "architecture"
+      ],
+      "text": {
+        "zh": "结构工程/建筑行业的就职决策，通常需要额外考虑：项目周期对个人发展节奏的影响、设计院/施工方/甲方三类雇主的工作强度和成长路径差异较大、地域集中度较高（部分城市机会明显更多）。以上是该领域的一般性特点，不代表用户具体处境。",
+        "en": "Employment decisions in structural engineering/construction typically also involve: how project cycles affect personal development pace; substantial differences in workload and career paths across design institutes, contractors, and clients; and geographic concentration of opportunities in certain cities. The above are general characteristics of this field, not a judgment about the user's specific situation."
+      }
+    },
+    {
+      "keywords": [
+        "互联网",
+        "软件",
+        "程序员",
+        "工程师",
+        "internet",
+        "software",
+        "developer",
+        "programmer",
+        "tech",
+        "IT"
+      ],
+      "text": {
+        "zh": "互联网/软件行业的就职决策，通常需要额外考虑：技术栈与公司业务方向的匹配度、团队规模对个人成长速度的影响、大厂与创业公司在稳定性和上升空间上的典型权衡。以上是该领域的一般性特点，不代表用户具体处境。",
+        "en": "Employment decisions in internet/software typically also involve: how well a tech stack matches the company's business direction; how team size affects individual growth speed; and the typical trade-off between large established firms and startups on stability versus upside. The above are general characteristics of this field, not a judgment about the user's specific situation."
+      }
+    },
+    {
+      "keywords": [
+        "金融",
+        "银行",
+        "投行",
+        "券商",
+        "finance",
+        "banking",
+        "investment bank",
+        "securities"
+      ],
+      "text": {
+        "zh": "金融行业的就职决策，通常需要额外考虑：不同细分领域（银行/券商/基金/保险）在工作强度和薪酬结构上差异较大、监管环境变化对岗位稳定性的影响、地域集中度较高。以上是该领域的一般性特点，不代表用户具体处境。",
+        "en": "Employment decisions in finance typically also involve: substantial differences in workload and compensation structure across sub-sectors (banking/securities/funds/insurance); the effect of regulatory changes on job stability; and geographic concentration. The above are general characteristics of this field, not a judgment about the user's specific situation."
+      }
+    }
+  ],
+  "fallback_text": {
+    "zh": "该领域暂无更细分的背景信息，讨论时请以静态框架和用户提供的具体信息为主。",
+    "en": "No more specific background is available for this field yet; discussion should rely on the static framework and the user's own information."
+  }
+}

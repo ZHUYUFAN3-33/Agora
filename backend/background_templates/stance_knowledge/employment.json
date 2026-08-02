@@ -1,0 +1,333 @@
+{
+  "growth_centered": {
+    "topic_cards": [
+      {
+        "id": "growth_job_change_timing",
+        "keywords": [
+          "跳槽时机",
+          "该不该跳槽",
+          "job change timing",
+          "when to switch jobs"
+        ],
+        "text": {
+          "zh": "职业成长角度评估跳槽时机，一个常见的参考框架是看当前岗位是否还能提供“可衡量的新增能力”——如果近一年的工作内容高度重复、没有新技能或新责任范围的增长，即使薪酬尚可，也可能已经进入成长停滞期。以上是一般性框架，不是具体的行动建议。",
+          "en": "Evaluating job-change timing from a growth perspective, a common reference framework is whether the current role still offers “measurable new capability growth” — if the past year's work has been highly repetitive with no growth in new skills or scope of responsibility, the role may have entered a growth plateau even if compensation remains adequate. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with career development theory (cf. Super, 1980, on career stages and developmental tasks); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "growth_promotion_plateau",
+          "growth_skill_obsolescence"
+        ]
+      },
+      {
+        "id": "growth_skill_obsolescence",
+        "keywords": [
+          "技能过时",
+          "跟不上",
+          "skill obsolescence",
+          "skills outdated"
+        ],
+        "text": {
+          "zh": "判断自身技能是否面临过时风险，比起单纯看行业新闻，更直接的信号是观察本行业近期招聘要求的变化——如果新增岗位持续要求你没有的技能，而你目前的核心技能在新招聘中出现频率下降，这是比较具体的预警信号。以上是一般性框架，不是具体的行动建议。",
+          "en": "Assessing the risk of one's skills becoming obsolete is often better done not just by reading industry news, but by observing recent changes in job requirements within the field — if new postings increasingly require skills you lack while your current core skills appear less often, that is a relatively concrete warning sign. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with human capital and career self-management literature (cf. Bandura, 1997, on self-efficacy in career development); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "growth_industry_outlook"
+        ]
+      },
+      {
+        "id": "growth_industry_outlook",
+        "keywords": [
+          "行业前景",
+          "夕阳行业",
+          "industry outlook",
+          "declining industry"
+        ],
+        "text": {
+          "zh": "评估行业前景时，一个常见的误区是只看行业整体规模是否在增长，而忽略了同一个行业内部不同细分方向的前景可能差异很大——一个整体收缩的行业里，仍可能存在增长的细分领域，反之亦然。以上是一般性框架，不是具体的行动建议。",
+          "en": "A common pitfall in assessing industry outlook is looking only at whether the industry's overall size is growing, while overlooking that different sub-segments within the same industry can have very different outlooks — a growing sub-segment can exist within an overall shrinking industry, and vice versa. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with labor economics and career transition literature; for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "growth_job_change_timing",
+          "stability_industry_cyclical_risk"
+        ]
+      },
+      {
+        "id": "growth_promotion_plateau",
+        "keywords": [
+          "晋升瓶颈",
+          "升不上去",
+          "promotion plateau",
+          "career stagnation"
+        ],
+        "text": {
+          "zh": "晋升瓶颈的成因，文献里常区分为“结构性瓶颈”（组织层级有限，位置本身稀缺）和“能力性瓶颈”（当前能力尚未达到晋升要求）——两者需要完全不同的应对策略，前者可能需要换环境，后者可能需要针对性补足能力。以上是一般性框架，不是具体的行动建议。",
+          "en": "The causes of a promotion plateau are often distinguished in the literature between “structural plateauing” (limited organizational hierarchy, scarce positions) and “content plateauing” (current ability not yet meeting promotion requirements) — these call for very different responses, the former potentially requiring a change of environment, the latter targeted skill-building. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with organizational career plateau research (cf. Ference, Stoner, & Warren, 1977, on career plateauing); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "growth_job_change_timing"
+        ]
+      },
+      {
+        "id": "growth_startup_vs_corporate",
+        "keywords": [
+          "创业",
+          "大厂",
+          "小公司还是大公司",
+          "startup vs corporate",
+          "big company or startup"
+        ],
+        "text": {
+          "zh": "在成长导向下比较创业公司和成熟大公司，一个常被忽视的维度是“成长的可验证性”——大公司的成长路径通常有更明确的评估标准和外部认可（头衔、履历含金量），创业公司的成长可能更实质但更难被外部证明，这个权衡取决于个人对“可验证的成长”与“实质但难以证明的成长”的相对重视程度。以上是一般性框架，不是具体的行动建议。",
+          "en": "Comparing startups and established large companies from a growth-oriented lens, an often-overlooked dimension is the “verifiability of growth” — growth paths at large companies typically have clearer evaluation standards and external recognition (titles, resume credibility), while growth at a startup may be more substantive but harder to externally verify; this trade-off depends on how much one values “verifiable growth” versus “substantive but hard-to-prove growth.” This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with career capital and signaling literature in career development research; for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "growth_promotion_plateau"
+        ]
+      },
+      {
+        "id": "growth_academia_vs_industry_comp",
+        "keywords": [
+          "academia vs industry",
+          "academic vs industry",
+          "academia or industry",
+          "industry vs academia",
+          "faculty salary",
+          "教授 薪水",
+          "学界 业界",
+          "学术界 产业界",
+          "高校 企业 薪酬",
+          "research job pay",
+          "industry compensation"
+        ],
+        "text": {
+          "zh": "比较学界与产业界的薪酬时，常见框架是拆成三块再比：基础现金、与绩效挂钩的可变部分、以及长期权益/福利（股权、退休、住房补贴等）。学界往往现金中位数更低、但岗位稳定性与时间自主性结构不同；产业界现金与权益弹性更大、但波动与岗位风险也更高。不要用某一所学校或某一家公司的传闻数字代替用户自己的可比数据。以上是一般性框架，不是具体机构的薪资断言。",
+          "en": "When comparing academia vs industry compensation, a common framework is to separate base cash, performance-linked variable pay, and long-horizon equity/benefits (RSUs, retirement, housing support, etc.). Academia often shows lower median cash with a different stability/autonomy structure; industry usually offers more cash/equity upside with higher role and market volatility. Do not substitute rumor numbers for any specific institution or company — use the user's own comparable figures. This is a general framework, not an assertion about any named employer."
+        },
+        "source": "General framing consistent with labor-economics discussions of academic vs private-sector compensation packages; for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "growth_startup_vs_corporate",
+          "stability_financial_buffer"
+        ]
+      }
+    ],
+    "generic_fallback": {
+      "zh": "从职业成长的视角出发，通常值得留意的是：这个选择是否能在可预见的时间内积累出可迁移、可被下一次机会验证的具体能力，而不只是感觉上“忙碌/有挑战”。这是一般性提醒，不针对具体情况。",
+      "en": "From a growth perspective, it is often worth noting whether a choice will build concrete, transferable capability that can be validated by the next opportunity within a foreseeable timeframe, rather than simply feeling “busy or challenging.” This is a general reminder, not specific to any particular situation.",
+      "source": "General framing; for illustrative/educational use only.",
+      "source_type": "academic"
+    }
+  },
+  "stability_centered": {
+    "topic_cards": [
+      {
+        "id": "stability_industry_cyclical_risk",
+        "keywords": [
+          "行业周期",
+          "经济波动",
+          "industry cycle",
+          "economic downturn risk"
+        ],
+        "text": {
+          "zh": "评估行业的周期性风险，比较直接的方法是看这个行业在过去一到两次经济下行周期中的招聘/裁员波动幅度——波动幅度越大的行业，稳定性权重应该在决策中被更明确地纳入考量，而不只是看当下的招聘热度。以上是一般性框架，不是具体的行动建议。",
+          "en": "A relatively direct way to assess an industry's cyclical risk is to look at how much hiring/layoff activity fluctuated in that industry during the past one or two economic downturns — industries with larger fluctuations should have stability weighted more explicitly in the decision, not just current hiring momentum. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with labor economics research on industry cyclicality and employment volatility; for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "growth_industry_outlook",
+          "stability_layoff_signals"
+        ]
+      },
+      {
+        "id": "stability_layoff_signals",
+        "keywords": [
+          "裁员信号",
+          "公司要裁员",
+          "layoff signals",
+          "company downsizing"
+        ],
+        "text": {
+          "zh": "识别裁员风险的信号，比起等待正式公告，更早的间接信号通常包括：招聘冻结、非核心项目被叫停、管理层频繁变动、以及绩效考核标准突然收紧。单一信号不足以判断，但多个信号同时出现时值得提高警惕。以上是一般性框架，不是具体的行动建议。",
+          "en": "Identifying layoff risk signals earlier than a formal announcement often involves indirect cues such as hiring freezes, non-core projects being halted, frequent management turnover, and a sudden tightening of performance review standards. No single signal is conclusive, but several appearing together warrants increased vigilance. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with organizational behavior research on layoff antecedents; for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "stability_industry_cyclical_risk"
+        ]
+      },
+      {
+        "id": "stability_financial_buffer",
+        "keywords": [
+          "财务缓冲",
+          "存款够不够",
+          "financial buffer",
+          "emergency fund"
+        ],
+        "text": {
+          "zh": "评估个人在职业变动中的财务缓冲是否充足，常见的参考标准是“至少覆盖3-6个月基本生活支出的可动用储蓄”，缓冲不足时，冒险决策（如接受不确定性更高的新机会）的实际风险承受能力会明显下降，即使主观上愿意冒险。以上是一般性框架，不是具体的财务建议。",
+          "en": "A common reference standard for assessing whether one's financial buffer is adequate during a career transition is “liquid savings covering at least 3–6 months of essential living expenses” — when the buffer is insufficient, actual risk tolerance for higher-uncertainty decisions (such as accepting a less certain new opportunity) is meaningfully lower even if one is subjectively willing to take the risk. This is a general framework, not specific financial advice."
+        },
+        "source": "General framing consistent with personal finance and career-risk literature; for illustrative/educational use only, not a substitute for professional financial advice.",
+        "source_type": "academic",
+        "related_cards": [
+          "stability_layoff_signals"
+        ]
+      },
+      {
+        "id": "stability_contract_pitfalls",
+        "keywords": [
+          "合同陷阱",
+          "试用期",
+          "contract pitfalls",
+          "probation period"
+        ],
+        "text": {
+          "zh": "评估新工作机会时，试用期条款和合同细节里容易被忽略的部分包括：试用期解雇的补偿标准、竞业限制条款的覆盖范围和期限、以及绩效考核标准是否在入职前就已明确书面化。以上是一般性框架，不是具体的法律建议。",
+          "en": "When evaluating a new job offer, commonly overlooked details in the contract and probation terms include: compensation standards for termination during probation, the scope and duration of non-compete clauses, and whether performance review criteria are clearly documented in writing before the start date. This is a general framework, not specific legal advice."
+        },
+        "source": "General framing consistent with published labor-law guidance from government labor authorities; for illustrative/educational use only, not a substitute for professional legal advice.",
+        "source_type": "government",
+        "related_cards": [
+          "stability_financial_buffer"
+        ]
+      },
+      {
+        "id": "stability_side_job_balance",
+        "keywords": [
+          "副业",
+          "兼职",
+          "side job",
+          "side hustle balance"
+        ],
+        "text": {
+          "zh": "在稳定性考量下评估副业和主业的平衡，一个常见的框架是区分副业的功能：是作为财务缓冲的补充收入来源，还是作为主业不稳定时的“备用选项”——两种功能对副业投入精力的合理比例要求不同，前者可以适度、后者可能需要更早地投入以确保备用选项真正可行。以上是一般性框架，不是具体的行动建议。",
+          "en": "Evaluating the balance between a side job and main job from a stability perspective, a common framework distinguishes the side job's function: supplementary income as a financial buffer, versus a “backup option” in case the main job becomes unstable — these two functions call for different reasonable levels of time investment, the former can be modest, the latter may need earlier investment to ensure the backup option is genuinely viable. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with career-risk diversification literature; for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "stability_financial_buffer"
+        ]
+      }
+    ],
+    "generic_fallback": {
+      "zh": "从稳定性的视角出发，通常值得留意的是：如果这个选择的最坏情况真的发生，实际的财务和生活缓冲能不能撑住，而不只是评估最好情况下的收益。这是一般性提醒，不针对具体情况。",
+      "en": "From a stability perspective, it is often worth noting whether one's actual financial and life buffer could withstand the worst-case scenario of this choice, rather than evaluating only the best-case upside. This is a general reminder, not specific to any particular situation.",
+      "source": "General framing; for illustrative/educational use only.",
+      "source_type": "academic"
+    }
+  },
+  "life_centered": {
+    "topic_cards": [
+      {
+        "id": "life_commute_cost",
+        "keywords": [
+          "通勤",
+          "通勤时间",
+          "commute",
+          "commute time"
+        ],
+        "text": {
+          "zh": "量化通勤对生活质量的实际影响，一个常用的换算方式是把每日通勤时间乘以一年的工作日数，折算成“一年损失的可支配时间”——这个数字往往比直觉感受到的更大，值得在比较工作机会时明确纳入计算，而不只是当作背景因素。以上是一般性框架，不是具体的行动建议。",
+          "en": "A common way to quantify the real impact of commuting on quality of life is to multiply daily commute time by the number of working days in a year, converting it into “disposable time lost per year” — this figure is often larger than intuitively felt, and is worth explicitly factoring into job comparisons rather than treating as a background consideration. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with research on commuting and subjective well-being (cf. Stutzer & Frey, 2008, on the commuting paradox); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "life_relocation_family_impact"
+        ]
+      },
+      {
+        "id": "life_relocation_family_impact",
+        "keywords": [
+          "异地",
+          "搬家",
+          "relocation",
+          "moving for work"
+        ],
+        "text": {
+          "zh": "异地工作对家庭的影响，常见的评估维度不只是地理距离本身，还包括：原有社会支持网络（朋友、亲属照顾资源）的中断程度，以及伴侣/子女适应新环境所需的时间成本，这些成本通常在决策初期容易被低估。以上是一般性框架，不是具体的行动建议。",
+          "en": "The family impact of relocating for work is often evaluated not only by physical distance itself, but also by the degree of disruption to an existing social support network (friends, extended-family caregiving resources), and the time cost for a partner or children to adapt to a new environment — these costs are commonly underestimated early in the decision process. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with work-family conflict literature (cf. Greenhaus & Beutell, 1985); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "life_commute_cost"
+        ]
+      },
+      {
+        "id": "life_burnout_signals",
+        "keywords": [
+          "职业倦怠",
+          "burnout",
+          "工作疲惫",
+          "exhausted from work"
+        ],
+        "text": {
+          "zh": "职业倦怠的早期信号，常见的三个维度是：情绪耗竭（长期感觉精力被榨干）、去人格化（对工作和同事产生疏离甚至冷漠）、以及个人成就感降低（觉得自己的工作没有价值）。三者同时出现比单一信号更值得重视。以上是一般性框架，不是具体的行动建议。",
+          "en": "Early signs of burnout are commonly described along three dimensions: emotional exhaustion (persistent feeling of being drained), depersonalization (a sense of detachment or even cynicism toward work and colleagues), and reduced personal accomplishment (feeling one's work lacks value). The co-occurrence of all three is more significant than any single signal alone. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with the Maslach Burnout Inventory framework (Maslach & Leiter, 2016); for illustrative/educational use only, not a substitute for professional guidance.",
+        "source_type": "academic",
+        "related_cards": [
+          "life_work_intensity_health"
+        ]
+      },
+      {
+        "id": "life_work_intensity_health",
+        "keywords": [
+          "工作强度",
+          "加班",
+          "身体吃不消",
+          "work intensity",
+          "overtime health impact"
+        ],
+        "text": {
+          "zh": "评估工作强度对健康的长期影响，一个常见的参考指标是“工作后是否还有足够的恢复时间”（睡眠、休息、非工作活动），而不只是每周工时总数本身——同样的工时总数下，缺乏有效恢复时间的工作模式，长期健康风险更高。以上是一般性框架，不是具体的医疗建议。",
+          "en": "A common reference indicator for assessing the long-term health impact of work intensity is whether there is sufficient recovery time after work (sleep, rest, non-work activities), rather than total weekly hours alone — at the same total hours, a work pattern lacking effective recovery time carries higher long-term health risk. This is a general framework, not specific medical advice."
+        },
+        "source": "General framing consistent with occupational health research on work recovery (cf. Sonnentag & Fritz, 2007, on the Recovery Experience Questionnaire); for illustrative/educational use only, not a substitute for professional medical guidance.",
+        "source_type": "academic",
+        "related_cards": [
+          "life_burnout_signals"
+        ]
+      },
+      {
+        "id": "life_remote_hybrid_tradeoffs",
+        "keywords": [
+          "远程办公",
+          "混合办公",
+          "remote work",
+          "hybrid work tradeoffs"
+        ],
+        "text": {
+          "zh": "比较远程、混合、全现场办公模式对生活质量的影响，常被低估的一个维度是“非正式沟通和职业能见度”的差异——完全远程通常带来更多时间灵活性，但可能减少偶然的、非正式的职业发展机会（比如被更资深的人注意到），这个权衡因人和公司文化而异。以上是一般性框架，不是具体的行动建议。",
+          "en": "Comparing remote, hybrid, and fully on-site work arrangements, an often-underweighted dimension is the difference in “informal communication and career visibility” — fully remote work typically offers more time flexibility but may reduce incidental, informal career-development opportunities (such as being noticed by more senior colleagues); this trade-off varies by individual and company culture. This is a general framework, not a specific action recommendation."
+        },
+        "source": "General framing consistent with research on remote work and career outcomes; for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "life_work_intensity_health"
+        ]
+      }
+    ],
+    "generic_fallback": {
+      "zh": "从生活质量的视角出发，通常值得留意的是：这个选择会占用多少本该属于生活其他部分（健康、关系、个人时间）的资源，而不只是这个选择在职业维度上是否划算。这是一般性提醒，不针对具体情况。",
+      "en": "From a life-quality perspective, it is often worth noting how much of one's resources for other parts of life (health, relationships, personal time) this choice will consume, rather than evaluating only whether it is a good deal on the career dimension. This is a general reminder, not specific to any particular situation.",
+      "source": "General framing; for illustrative/educational use only.",
+      "source_type": "academic"
+    }
+  }
+}

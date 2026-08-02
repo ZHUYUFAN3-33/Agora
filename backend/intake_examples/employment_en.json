@@ -1,0 +1,9 @@
+{
+  "decision_field": "structural engineering",
+  "options": ["Company A (design institute, local)", "Company B (general contractor, relocation)"],
+  "deadline": "within 2 weeks",
+  "current_status": "employed",
+  "priority_ranking": ["stability", "salary", "growth"],
+  "comparison_anchor": "slightly leaning toward Company A because of the shorter commute",
+  "external_pressure": "Company B's offer expires in 10 days"
+}

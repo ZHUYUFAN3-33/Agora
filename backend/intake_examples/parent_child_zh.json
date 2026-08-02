@@ -1,0 +1,9 @@
+{
+  "decision_topic": "要不要给孩子报周末的编程兴趣班",
+  "decision_owner": "child_decides_with_guidance",
+  "child_stated_preference": "孩子说想学编程，因为同学在学",
+  "parent_stated_concern": "担心占用户外活动和休息时间，也不确定孩子是真喜欢还是跟风",
+  "disagreement_exists": "no",
+  "urgency": "新一期课程下周截止报名",
+  "external_input": "老师觉得孩子逻辑思维不错，可以尝试"
+}

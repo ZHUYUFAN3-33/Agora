@@ -19,4 +19,18 @@ export default defineConfig({
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
+
+  server: {
+    host: true,
+    port: 5173,
+    // Allow Cloudflare quick tunnel Host headers
+    allowedHosts: ['.trycloudflare.com', 'localhost'],
+    // Same-origin /api for Cloudflare Tunnel sharing (one public URL)
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:5001',
+        changeOrigin: true,
+      },
+    },
+  },
 })

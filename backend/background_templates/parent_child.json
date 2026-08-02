@@ -1,0 +1,54 @@
+{
+  "match_type": "age_range",
+  "match_field": "child_age",
+  "static_framework": {
+    "zh": "儿童在不同年龄段的自主决策能力和心理需求存在阶段性差异：学龄前儿童更依赖父母引导，自主表达有限；学龄期儿童开始有明确偏好但抽象推理和长期后果理解能力有限；青春期需要更多自主空间，过度干预容易引发抵触。教养决策中，决策过程本身是否让孩子感到被尊重，往往和最终选择是否正确同等重要，会影响孩子未来对家庭沟通的信任度。",
+    "en": "Children's capacity for autonomous decision-making and their psychological needs shift across developmental stages: preschoolers rely heavily on parental guidance with limited self-expression; school-age children develop clear preferences but limited ability to reason about long-term consequences; adolescents need more autonomy, and over-control tends to provoke resistance. In parenting decisions, whether the process itself makes the child feel respected is often as important as whether the final choice is correct, and it shapes the child's future trust in family communication."
+  },
+  "targeted_entries": [
+    {
+      "range": [
+        3,
+        6
+      ],
+      "text": {
+        "zh": "学龄前儿童（3-6岁）自主表达能力有限，喜好容易变化，尚不具备理解长期后果的能力。这个年龄段的教养建议通常倾向于家长主导、辅以简单解释，让孩子感受到被告知而非被完全排除在外。以上是该年龄段的一般性特点，不是对这个具体孩子的判断。",
+        "en": "Preschoolers (ages 3-6) have limited self-expression, frequently shifting preferences, and cannot yet grasp long-term consequences. Parenting guidance for this age typically favors parent-led decisions accompanied by simple explanations, so the child feels informed rather than entirely excluded. The above is a general characteristic of this age group, not a judgment about this specific child."
+      }
+    },
+    {
+      "range": [
+        7,
+        9
+      ],
+      "text": {
+        "zh": "7-9岁儿童处于具体运算阶段早期，能表达明确喜好，但对长期后果的理解有限。这个年龄段的教养建议通常倾向于给有限选项、家长把关，而非完全放手决定，也不宜完全代替决定、不给孩子任何参与感。以上是该年龄段的一般性特点，不是对这个具体孩子的判断。",
+        "en": "Children aged 7-9 are in the early concrete-operational stage: they can express clear preferences but have limited understanding of long-term consequences. Guidance for this age typically favors offering a limited set of parent-vetted options rather than full autonomy, while still avoiding deciding entirely on the child's behalf with no sense of participation. The above is a general characteristic of this age group, not a judgment about this specific child."
+      }
+    },
+    {
+      "range": [
+        10,
+        12
+      ],
+      "text": {
+        "zh": "10-12岁儿童抽象推理能力明显提升，开始能理解一定程度的因果和权衡，但情绪调节能力仍在发展中。这个年龄段适合引导孩子参与部分推理过程（如“如果这样选，可能会怎样”），而非直接给结论。以上是该年龄段的一般性特点，不是对这个具体孩子的判断。",
+        "en": "Children aged 10-12 show marked gains in abstract reasoning and can grasp some cause-and-effect trade-offs, though emotional regulation is still developing. This age is well suited to involving the child in part of the reasoning process (e.g. 'what might happen if you choose this') rather than simply handing down a conclusion. The above is a general characteristic of this age group, not a judgment about this specific child."
+      }
+    },
+    {
+      "range": [
+        13,
+        18
+      ],
+      "text": {
+        "zh": "青春期（13-18岁）孩子对自主权的需求显著上升，过度干预容易引发抵触甚至隐瞒。这个年龄段的教养建议通常倾向于家长退居顾问角色，尊重孩子的最终决定权，除非涉及安全或不可逆的重大风险。以上是该年龄段的一般性特点，不是对这个具体孩子的判断。",
+        "en": "Adolescents (ages 13-18) have a markedly increased need for autonomy; over-control tends to provoke resistance or even concealment. Guidance for this age typically favors parents stepping back into an advisory role and respecting the child's final say, except where safety or irreversible major risk is involved. The above is a general characteristic of this age group, not a judgment about this specific child."
+      }
+    }
+  ],
+  "fallback_text": {
+    "zh": "该年龄段暂无更细分的背景信息，讨论时请以静态框架和用户提供的具体信息为主。",
+    "en": "No more specific background is available for this age range yet; discussion should rely on the static framework and the user's own information."
+  }
+}

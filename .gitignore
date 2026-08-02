@@ -15,6 +15,7 @@ build/
 logs/
 *.log
 *.jsonl
+!backend/info_example.jsonl
 
 # Temp scripts
 git_commit.sh
@@ -33,6 +34,15 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+
+# Agora-2 runtime profiles (keep demo_* committed)
+backend/profiles/web_*.json
+
+# Cross-session memory (user_id__scenario_type.jsonl)
+backend/memory/
+
+# SQLite user DB
+backend/data/
 
 # Node
 node_modules/

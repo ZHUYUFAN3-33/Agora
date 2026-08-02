@@ -1,10 +1,18 @@
-import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, type ReactNode } from "react";
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, useMemo, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { createPortal } from "react-dom";
 import { AgoraLogo, AgoraLogoFull } from "../components/AgoraLogo";
 import { CustomDropdown } from "../components/ui/CustomDropdown";
 import { AppearanceModal } from "../components/AppearanceModal";
+import {
+  IntakeModal,
+  ProfileModal,
+  MemoryHistoryPanel,
+  type Agora2IntakePayload,
+  type UiLang,
+} from "../components/IntakeModal";
+import { authFetch, getAuth, logoutRequest } from "../auth";
 import { useAppearanceContext } from "../context/AppearanceContext";
 import {
   type AgentKey,
@@ -23,7 +31,6 @@ import {
   DECISION_BLOCKS,
   DECISION_BLOCK_DESCRIPTIONS,
   DECISION_BLOCK_EXAMPLES,
-  SCENE_SUGGESTED_PROMPTS,
   EMOTION_EMOJI,
   EMOTION_COLORS,
   EMOTION_EXAMPLES,
@@ -31,6 +38,7 @@ import {
   defaultSetting,
   getEmotionDecisionSummary,
   getEmotionDecisionRole,
+  isAgora2SceneId,
 } from "../data/agents";
 import {
   monoFont,
@@ -134,7 +142,7 @@ function AnimatedGuideFrame({
 
 interface Message {
   id: string;
-  role: "user" | "agent";
+  role: "user" | "agent" | "system";
   agentKey?: AgentKey;
   content: string;
   timestamp: number;
@@ -172,7 +180,7 @@ function formatTime(ts: number): string {
   return `${Math.floor(diff / 86400000)}d ago`;
 }
 
-// Replace backend names (ChatbotA/B/C) with user-defined display names; replace generic user label with nickname.
+// Replace backend names (ChatbotA/B/C) with user-defined display names; replace @U / "user" with nickname.
 function applyDisplayNames(
   content: string,
   names: Record<AgentKey, string>,
@@ -192,10 +200,35 @@ function applyDisplayNames(
       out = out.replace(new RegExp(`\\b${escaped}\\b`, "g"), names[k]);
     });
   }
+  const label = (nickname || "").trim() || "You";
+  out = out.replace(/@U\b/gi, `@${label}`);
   if (nickname && nickname.trim()) {
     out = out.replace(/\buser\b/gi, nickname.trim());
   }
   return out;
+}
+
+/** Highlight @userName (and leftover @U) in red. */
+function highlightUserMentions(text: string, nickname?: string): ReactNode {
+  const label = (nickname || "").trim() || "You";
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`@(?:${escaped}|U)\\b`, "gi");
+  const nodes: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let i = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    nodes.push(
+      <span key={`um-${i++}`} className="text-red-500">
+        {m[0].replace(/^@U$/i, `@${label}`)}
+      </span>,
+    );
+    last = m.index + m[0].length;
+  }
+  if (last === 0) return text;
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
 }
 
 function stripRepeatedFirstTurnIntro(content: string, agentName: string): string {
@@ -309,25 +342,38 @@ function renderChatAnnotatedText(
   text: string,
   annotations: ChatLayerAnnotation[],
   variant: "agent" | "user",
+  nickname?: string,
 ): ReactNode {
-  if (!annotations.length) return text;
+  if (!annotations.length) return highlightUserMentions(text, nickname);
   const sorted = [...annotations].sort((a, b) => a.start - b.start);
   let cursor = 0;
   const out: React.ReactNode[] = [];
   sorted.forEach((a) => {
-    if (cursor < a.start) out.push(<span key={`p-${a.id}-${cursor}`}>{text.slice(cursor, a.start)}</span>);
+    if (cursor < a.start) {
+      out.push(
+        <span key={`p-${a.id}-${cursor}`}>
+          {highlightUserMentions(text.slice(cursor, a.start), nickname)}
+        </span>,
+      );
+    }
     out.push(
       <span
         key={a.id}
         className={layerSpanClass(a.layer, variant)}
         title={layerTitle(a.layer)}
       >
-        {text.slice(a.start, a.end)}
+        {highlightUserMentions(text.slice(a.start, a.end), nickname)}
       </span>,
     );
     cursor = a.end;
   });
-  if (cursor < text.length) out.push(<span key={`tail-${cursor}`}>{text.slice(cursor)}</span>);
+  if (cursor < text.length) {
+    out.push(
+      <span key={`tail-${cursor}`}>
+        {highlightUserMentions(text.slice(cursor), nickname)}
+      </span>,
+    );
+  }
   return out;
 }
 
@@ -899,8 +945,30 @@ const AgentMessage = React.memo(function AgentMessage({
           style={{ ...monoFont, color: isError ? "#ef4444" : undefined }}
         >
           {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
-            ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent")
-            : finalContent}
+            ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent", nickname)
+            : highlightUserMentions(finalContent, nickname)}
+        </p>
+      </div>
+    </motion.div>
+  );
+});
+
+const SystemMessage = React.memo(function SystemMessage({ message }: { message: Message }) {
+  if (!(message.content || "").trim()) return null;
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+      className="flex flex-col items-center gap-1 mb-5"
+    >
+      <span className="text-[10px] tracking-widest text-[var(--app-muted-text)] uppercase" style={monoFont}>
+        System
+      </span>
+      <div className="px-3 py-2 max-w-[90%] text-center border border-black/10 bg-black/[0.03] rounded-[8px]">
+        <p className="text-[12px] text-black/70 leading-relaxed whitespace-pre-wrap" style={monoFont}>
+          {message.content}
         </p>
       </div>
     </motion.div>
@@ -1015,12 +1083,129 @@ function AttachMenu({ open, onClose, anchorRef }: { open: boolean; onClose: () =
 }
 
 
+// ─── Session summary panel (decision-direction recap for current room) ─
+
+function SummaryPanel({
+  open,
+  onClose,
+  roomId,
+  markdown,
+  loading,
+  error,
+  onGenerate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  roomId: string;
+  markdown: string | null;
+  loading: boolean;
+  error: string | null;
+  onGenerate: () => void;
+}) {
+  if (!open) return null;
+  const hasMarkdown = !!(markdown || "").trim();
+  return (
+    <motion.div
+      className="fixed inset-0 z-[220] flex items-center justify-center p-4"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <button type="button" className="absolute inset-0 bg-black/30" aria-label="Close summary" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+        transition={{ duration: 0.2 }}
+        className="relative z-10 w-full max-w-[560px] max-h-[min(80vh,720px)] flex flex-col bg-white border border-black/10 rounded-[16px] shadow-[0_8px_40px_rgba(0,0,0,0.12)] overflow-hidden"
+      >
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-black/8">
+          <div className="min-w-0">
+            <p className="text-[13px] text-black" style={monoFont}>Decision summary</p>
+            <p className="text-[10px] text-[var(--app-muted-text)] mt-0.5 truncate" style={monoFont}>
+              Session {roomId}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {hasMarkdown && (
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={loading}
+                className="px-2.5 py-1.5 rounded-[8px] border border-black/10 text-[11px] text-black/70 hover:bg-black/5 disabled:opacity-40"
+                style={monoFont}
+              >
+                {loading ? "Generating…" : "Regenerate"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-[8px] hover:bg-black/5 text-black/50"
+              aria-label="Close"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading && (
+            <p className="text-[12px] text-[var(--app-muted-text)]" style={monoFont}>
+              Reading this session&apos;s log and drafting the direction summary…
+            </p>
+          )}
+          {!loading && error && (
+            <div className="space-y-3">
+              <p className="text-[12px] text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded-[8px]" style={monoFont}>
+                {error}
+              </p>
+              <button
+                type="button"
+                onClick={onGenerate}
+                className="h-[36px] px-4 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800"
+                style={monoFont}
+              >
+                Try again
+              </button>
+            </div>
+          )}
+          {!loading && !error && !hasMarkdown && (
+            <div className="flex flex-col items-start gap-3 py-2">
+              <p className="text-[12px] text-[var(--app-muted-text)] leading-relaxed" style={monoFont}>
+                Generate a short decision-direction summary from this session&apos;s chat log.
+                Nothing is requested until you press Generate.
+              </p>
+              <button
+                type="button"
+                onClick={onGenerate}
+                className="h-[36px] px-4 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800"
+                style={monoFont}
+              >
+                Generate
+              </button>
+            </div>
+          )}
+          {!loading && hasMarkdown && (
+            <pre
+              className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-black/85"
+              style={monoFont}
+            >
+              {markdown}
+            </pre>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ─── Settings menu (Customize Agent, Customize Scene, Reload, Export) ─
 
-function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onExportLog, hasRoomId, showFontColor, onToggleFontColor }: {
+function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onSummary, onExportLog, onPastMemory, hasRoomId, showPastMemory, showFontColor, onToggleFontColor }: {
   open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLButtonElement | null>;
   onCustomize: () => void; onScene: () => void; onAppearance: () => void;
-  onReloadHistory: () => void; onExportLog: () => void; hasRoomId: boolean;
+  onReloadHistory: () => void; onSummary: () => void; onExportLog: () => void;
+  onPastMemory?: () => void; hasRoomId: boolean; showPastMemory?: boolean;
   showFontColor: boolean; onToggleFontColor: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -1058,8 +1243,16 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
       {hasRoomId && (
         <>
           <Item icon={<svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="17.18 15 8.18 15 8.18 6"/><path d="M10.58,12A18,18,0,1,1,6.23,26.88"/></svg>} label="Reload history" onClick={onReloadHistory} />
+          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>} label="Decision summary" onClick={onSummary} />
           <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label="Export log" onClick={onExportLog} />
         </>
+      )}
+      {showPastMemory && onPastMemory && (
+        <Item
+          icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
+          label="Past session memory"
+          onClick={onPastMemory}
+        />
       )}
     </motion.div>
   );
@@ -1067,8 +1260,8 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
 
 // ─── User Menu (Account, Help, Logout) ─────────────────────────────────────────
 
-function UserMenu({ nickname, onAccount, onHelp, onLogout, onClose }: {
-  nickname: string; onAccount: () => void; onHelp: () => void; onLogout: () => void; onClose: () => void;
+function UserMenu({ nickname, isAdmin, onAccount, onHelp, onAdmin, onLogout, onClose }: {
+  nickname: string; isAdmin?: boolean; onAccount: () => void; onHelp: () => void; onAdmin?: () => void; onLogout: () => void; onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1091,14 +1284,13 @@ function UserMenu({ nickname, onAccount, onHelp, onLogout, onClose }: {
         <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500 flex-shrink-0" />
         <span className="text-[12px] tracking-widest text-black" style={monoFont}>{(nickname || "you").toUpperCase()}</span>
       </div>
-      <div className="h-px bg-black/8 mx-2 mb-1" />
       <div className="px-1">
         <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label="Account" onClick={() => { onClose(); onAccount(); }} />
+        {isAdmin && onAdmin && (
+          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>} label="Admin" onClick={() => { onClose(); onAdmin(); }} />
+        )}
         <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>} label="Help" onClick={() => { onClose(); onHelp(); }} />
-      </div>
-      <div className="h-px bg-black/8 mx-2 my-1" />
-      <div className="px-1">
-        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>} label="Log out" onClick={onLogout} danger />
+        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>} label="Logout" onClick={() => { onClose(); onLogout(); }} danger />
       </div>
     </motion.div>
   );
@@ -1434,7 +1626,14 @@ function CustomizerModal({
 
 // ─── Scene Selector ───────────────────────────────────────────────────────────
 
-function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scenes: Scene[]; selectedScene: Scene | null; onSelect: (s: Scene) => void; onClose: () => void }) {
+function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang, onLangChange }: {
+  scenes: Scene[];
+  selectedScene: Scene | null;
+  onSelect: (s: Scene) => void;
+  onClose: () => void;
+  lang: UiLang;
+  onLangChange: (lang: UiLang) => void;
+}) {
   const SCENE_PAGE_SIZE = 3;
   const scenePages: Scene[][] = Array.from(
     { length: Math.ceil((scenes?.length || 0) / SCENE_PAGE_SIZE) },
@@ -1452,22 +1651,44 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scen
   const goNext = () => setPage((p) => Math.min(Math.max(scenePages.length - 1, 0), p + 1));
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
-      className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6" onClick={onClose}>
       <motion.div
         initial={{ opacity: 0, scale: 0.97, y: 16 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
-        transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-[720px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-[720px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between px-6 py-5 border-b border-black/8">
           <div>
-            <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>Customize Scene</h2>
-            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>Choose or add a consultation scenario · {scenePages.length || 1} pages</p>
+            <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>
+              {lang === "zh" ? "选择场景" : "Choose scenario"}
+            </h2>
+            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>
+              {lang === "zh" ? "就职 / 亲子 · 先选语言" : "Employment / Parent-Child · pick language first"}
+            </p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex border border-black/15 rounded-[8px] overflow-hidden text-[11px]" style={monoFont}>
+              <button
+                type="button"
+                onClick={() => onLangChange("en")}
+                className={`px-2.5 py-1.5 ${lang === "en" ? "bg-black text-white" : "hover:bg-black/5"}`}
+              >
+                EN
+              </button>
+              <button
+                type="button"
+                onClick={() => onLangChange("zh")}
+                className={`px-2.5 py-1.5 ${lang === "zh" ? "bg-black text-white" : "hover:bg-black/5"}`}
+              >
+                中文
+              </button>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
         </div>
         <div className="px-6 py-5 flex-1 min-h-0 flex flex-col overflow-hidden">
           <div className="border border-black/10 rounded-[12px] overflow-hidden bg-black/[0.02] flex-1 min-h-0 flex flex-col">
@@ -1481,11 +1702,14 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scen
                   <div key={pageIdx} className="shrink-0 grow-0 basis-full p-4">
                     <div className="grid grid-cols-2 gap-3">
                       {pageScenes.map((s) => (
-                        <button key={s.id} onClick={() => { onSelect(s); onClose(); }}
+                        <button key={s.id} onClick={() => onSelect(s)}
                           className={`text-left p-4 border-2 rounded-[12px] transition-all hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)] ${selectedScene?.id === s.id ? "border-black" : "border-black/10 hover:border-black/30"}`}>
                           <div className="text-2xl mb-2">{s.icon}</div>
                           <div className="text-[13px] mb-1" style={{ ...monoFont, fontWeight: 500 }}>{s.title}</div>
                           <div className="text-[10px] text-[var(--app-muted-text)] leading-relaxed" style={monoFont}>{s.description}</div>
+                          {isAgora2SceneId(s.id) && (
+                            <div className="text-[9px] text-[var(--app-muted-text)] mt-2 tracking-widest uppercase" style={monoFont}>intake required</div>
+                          )}
                         </button>
                       ))}
                       <motion.button
@@ -1527,11 +1751,10 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scen
         </div>
         {selectedScene && (
           <div className="px-6 pb-4">
-            <button onClick={() => { onSelect(null as unknown as Scene); onClose(); }} className="text-[11px] text-[var(--app-muted-text)] hover:text-black transition-colors" style={monoFont}>Clear selection</button>
+            <button onClick={() => { onSelect(null as unknown as Scene); }} className="text-[11px] text-[var(--app-muted-text)] hover:text-black transition-colors" style={monoFont}>Clear selection</button>
           </div>
         )}
       </motion.div>
-    </motion.div>
   );
 }
 
@@ -1539,15 +1762,22 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose }: { scen
 
 export default function Chat() {
   const navigate = useNavigate();
-  const authData = JSON.parse(localStorage.getItem("agora_auth") || "{}");
-  const nickname: string = authData.nickname || "You";
+  const auth = getAuth();
+  const nickname: string = auth?.user_id || "You";
+  const isAdmin = !!auth?.is_admin;
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [typingKeys, setTypingKeys] = useState<AgentKey[]>([]);
-  const [msgQueue, setMsgQueue] = useState<Array<{ agentKey: AgentKey; content: string; convId: string; emotionTagSnapshot: string | null }>>([]);
+  const [msgQueue, setMsgQueue] = useState<Array<{
+    agentKey: AgentKey | "system";
+    content: string;
+    convId: string;
+    emotionTagSnapshot: string | null;
+    isSystem?: boolean;
+  }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
   const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>({ A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") });
   const quickAdjustPendingRef = useRef<Record<AgentKey, Promise<void> | null>>({ A: null, B: null, C: null });
@@ -1563,6 +1793,11 @@ export default function Chat() {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [backendOnline, setBackendOnline] = useState(false);
   const [sessionCreateError, setSessionCreateError] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  /** Cached markdown per room_id — summary always follows the active session. */
+  const [summaryByRoom, setSummaryByRoom] = useState<Record<string, string>>({});
   const attachBtnRef = useRef<HTMLButtonElement>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -1577,6 +1812,16 @@ export default function Chat() {
   const [limitedSelectedAgents, setLimitedSelectedAgents] = useState<AgentPoolKey[]>([...LIMITED_DEFAULT_SELECTED]);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
+  const [pendingIntakeScene, setPendingIntakeScene] = useState<Scene | null>(null);
+  const [pendingProfileScene, setPendingProfileScene] = useState<Scene | null>(null);
+  const [agora2Intake, setAgora2Intake] = useState<Agora2IntakePayload | null>(null);
+  const [userProfile, setUserProfile] = useState<Record<string, unknown> | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [uiLang, setUiLang] = useState<UiLang>("en");
+  const [sessionCountBefore, setSessionCountBefore] = useState(0);
+  const [sessionIndex, setSessionIndex] = useState<number | null>(null);
+  const [lastIntake, setLastIntake] = useState<Record<string, unknown> | null>(null);
+  const [showMemoryHistory, setShowMemoryHistory] = useState(false);
   const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full");
   const [welcomeTutorialStep, setWelcomeTutorialStep] = useState<number | null>(null);
 
@@ -1600,8 +1845,45 @@ export default function Chat() {
   const welcomeInputRef = useRef<HTMLDivElement>(null);
   const currentConv = conversations.find((c) => c.id === currentConvId) || null;
   const appearance = useAppearanceContext();
-  const activeSceneId = selectedScene?.id || "scene1";
-  const suggestedPrompts = SCENE_SUGGESTED_PROMPTS[activeSceneId] || SCENE_SUGGESTED_PROMPTS.scene1;
+  const webUserId = useMemo(
+    () => auth?.user_id || "web_user",
+    [auth?.user_id],
+  );
+  const suggestedPrompts = selectedScene?.suggestedPrompts?.length
+    ? selectedScene.suggestedPrompts
+    : [];
+
+  useEffect(() => {
+    if (!auth?.token) {
+      navigate("/", { replace: true });
+    }
+  }, [auth?.token, navigate]);
+
+  const openSceneSelector = useCallback(() => {
+    setShowSceneSelector(true);
+  }, []);
+
+  const beginAgora2Scene = useCallback(async (s: Scene) => {
+    setSelectedScene(s);
+    setAgora2Intake(null);
+    setUserProfile(null);
+    setSessionIndex(null);
+    setLastIntake(null);
+    setSessionCountBefore(0);
+    try {
+      const res = await authFetch(`/agora2/memory?scenario_type=${encodeURIComponent(s.id)}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setSessionCountBefore(Number(data.session_count) || 0);
+        setLastIntake((data.last_intake as Record<string, unknown>) || null);
+      }
+    } catch {
+      /* first session */
+    }
+    setShowSceneSelector(false);
+    setPendingProfileScene(s);
+    setShowProfileModal(true);
+  }, []);
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const c = messagesContainerRef.current;
@@ -1645,12 +1927,95 @@ export default function Chat() {
     window.getSelection()?.removeAllRanges();
   }, [chatAnnotationDraft]);
 
-  useEffect(() => { if (!localStorage.getItem("agora_auth")) navigate("/"); }, [navigate]);
+  useEffect(() => { if (!getAuth()?.token) navigate("/"); }, [navigate]);
+
+  // Restore past rooms from SQLite after re-login
+  useEffect(() => {
+    if (!getAuth()?.token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/me/rooms?limit=50");
+        if (!res.ok) return;
+        const data = await res.json();
+        const rooms: Array<{
+          room_id: string;
+          title?: string;
+          scenario_type?: string;
+          updated_at?: string;
+          phase?: string;
+          concluded?: boolean;
+        }> = data.rooms || [];
+        if (cancelled) return;
+        // Server list is source of truth for this user — do not keep foreign/stale stubs
+        setConversations((prev) => {
+          const prevByRoom = new Map(prev.map((c) => [c.roomId, c]));
+          const serverIds = new Set(rooms.map((r) => r.room_id).filter(Boolean));
+          const restored: Conversation[] = rooms
+            .filter((r) => r.room_id)
+            .map((r) => {
+              const existing = prevByRoom.get(r.room_id);
+              if (existing) {
+                return {
+                  ...existing,
+                  title: r.title || existing.title || r.scenario_type || r.room_id,
+                  preview: existing.messages.length
+                    ? existing.preview
+                    : (r.phase ? `Phase: ${r.phase}` : "Past session"),
+                  timestamp: r.updated_at
+                    ? formatTime(Date.parse(r.updated_at) || Date.now())
+                    : existing.timestamp,
+                  settings: {
+                    ...existing.settings,
+                    selectedScene:
+                      existing.settings.selectedScene
+                      || scenes.find((s) => s.id === r.scenario_type)
+                      || null,
+                  },
+                };
+              }
+              return {
+                id: `room-${r.room_id}`,
+                roomId: r.room_id,
+                title: r.title || r.scenario_type || r.room_id,
+                preview: r.phase ? `Phase: ${r.phase}` : "Past session",
+                timestamp: r.updated_at ? formatTime(Date.parse(r.updated_at) || Date.now()) : "earlier",
+                messages: [],
+                settings: {
+                  agentNames: { ...DEFAULT_AGENT_NAMES },
+                  agentBackendNames: { ...DEFAULT_AGENT_NAMES },
+                  agentSettings: {
+                    A: defaultSetting("A"),
+                    B: defaultSetting("B"),
+                    C: defaultSetting("C"),
+                  },
+                  limitedSelectedAgents: [...LIMITED_DEFAULT_SELECTED],
+                  selectedScene: scenes.find((s) => s.id === r.scenario_type) || null,
+                  maxAgentTurns,
+                  maxUserGap,
+                  mode: experimentMode,
+                },
+              };
+            });
+          // Keep only in-progress local chats not yet on the server list
+          const localOnly = prev.filter(
+            (c) => c.messages.length > 0 && c.roomId && !serverIds.has(c.roomId),
+          );
+          return [...localOnly, ...restored];
+        });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [auth?.token, scenes, maxAgentTurns, maxUserGap, experimentMode]);
 
   useEffect(() => {
     setChatLayerAnnotations({});
     setChatAnnotationDraft(null);
     setChatAnnotationMode(false);
+    setSummaryOpen(false);
+    setSummaryError(null);
   }, [currentConvId]);
 
   useEffect(() => {
@@ -1681,8 +2046,22 @@ export default function Chat() {
 
   useEffect(() => {
     fetch(`${API_BASE}/health`).then((r) => { if (r.ok) setBackendOnline(true); }).catch(() => {});
-    fetch("/scenes_config.json").then((r) => r.json()).then((d) => setScenes(d.scenes || [])).catch(() => {});
-  }, []);
+    fetch(`${API_BASE}/agora2/scenarios?lang=${uiLang}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`scenarios ${r.status}`);
+        return r.json();
+      })
+      .then((d) => {
+        const list = (d.scenes || d.scenarios || []) as Scene[];
+        setScenes(list);
+        // Never auto-pick a scene — user must choose explicitly.
+        setSelectedScene((prev) => {
+          if (!prev) return null;
+          return list.find((s) => s.id === prev.id) || null;
+        });
+      })
+      .catch(() => setScenes([]));
+  }, [uiLang]);
 
   useEffect(() => {
     if (currentConv) {
@@ -1744,24 +2123,32 @@ export default function Chat() {
       return;
     }
     const next = msgQueue[0];
-    setTypingKeys([next.agentKey]);
+    const isSystem = !!next.isSystem || next.agentKey === "system";
+    if (!isSystem && next.agentKey !== "system") {
+      setTypingKeys([next.agentKey as AgentKey]);
+    } else {
+      setTypingKeys([]);
+    }
+    const delay = isSystem ? 200 : 900;
     const timer = setTimeout(() => {
       const agentMsg: Message = {
         id: `msg-${Date.now()}-${next.agentKey}`,
-        role: "agent",
-        agentKey: next.agentKey,
+        role: isSystem ? "system" : "agent",
+        agentKey: isSystem ? undefined : (next.agentKey as AgentKey),
         content: next.content,
         timestamp: Date.now(),
-        emotionTagSnapshot: next.emotionTagSnapshot,
+        emotionTagSnapshot: isSystem ? null : next.emotionTagSnapshot,
       };
       const names = agentNamesRef.current;
-      setConversations((prev) => prev.map((c) => c.id === next.convId ? { ...c, messages: [...c.messages, agentMsg], preview: `${names[next.agentKey]}: ${next.content.slice(0, 60)}…`, timestamp: "just now" } : c));
+      const previewLabel = isSystem ? "System" : names[next.agentKey as AgentKey];
+      setConversations((prev) => prev.map((c) => c.id === next.convId ? { ...c, messages: [...c.messages, agentMsg], preview: `${previewLabel}: ${next.content.slice(0, 60)}…`, timestamp: "just now" } : c));
       setMsgQueue((q) => {
         const rest = q.slice(1);
-        setTypingKeys(rest.length > 0 ? [rest[0].agentKey] : []);
+        const n0 = rest[0];
+        setTypingKeys(rest.length > 0 && n0 && !n0.isSystem && n0.agentKey !== "system" ? [n0.agentKey as AgentKey] : []);
         return rest;
       });
-    }, 900);
+    }, delay);
     return () => clearTimeout(timer);
   }, [msgQueue]);
 
@@ -1853,6 +2240,11 @@ export default function Chat() {
   const handleSend = async () => {
     const text = inputValue.trim();
     if (!text || isLoading) return;
+    if (!currentConvId && !selectedScene) {
+      setSessionCreateError("Select a scene first — do not start without choosing your scenario.");
+      openSceneSelector();
+      return;
+    }
     if (!currentConvId && experimentMode === "limited" && limitedSelectedAgents.length !== 3) {
       setSessionCreateError("Limited mode requires selecting exactly 3 agents.");
       return;
@@ -1874,14 +2266,41 @@ export default function Chat() {
     };
 
     if (!convId) {
+      if (isAgora2SceneId(selectedScene?.id) && (!userProfile || !agora2Intake)) {
+        if (!userProfile) {
+          setSessionCreateError("Complete your profile before chatting.");
+          setShowProfileModal(true);
+        } else {
+          setSessionCreateError("Complete session intake for this scene before chatting.");
+          if (selectedScene) setPendingIntakeScene(selectedScene);
+        }
+        setInputValue(text);
+        setIsLoading(false);
+        return;
+      }
       try {
         const res = await fetch(`${API_BASE}/start`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+          },
           body: JSON.stringify({
-            scene_id: selectedScene?.id || "scene1",
+            scene_id: selectedScene!.id,
             mode: experimentMode,
             limited_selected_agent_keys: experimentMode === "limited" ? limitedSelectedAgents : undefined,
+            ...(isAgora2SceneId(selectedScene.id) && userProfile && agora2Intake
+              ? {
+                  scenario_type: selectedScene.id,
+                  lang: agora2Intake.lang || uiLang,
+                  profile: userProfile,
+                  intake: agora2Intake.intake,
+                  hint: agora2Intake.hint || "",
+                  session_update: agora2Intake.session_update || "",
+                  user_id: webUserId,
+                  use_demo_intake: false,
+                }
+              : {}),
           }),
         });
         const data = await res.json();
@@ -1898,6 +2317,7 @@ export default function Chat() {
           setIsLoading(false);
           return;
         }
+        if (typeof data.session_index === "number") setSessionIndex(data.session_index);
         // Apply agent defaults from info.jsonl (decision, emotion)
         const agentsFromApi = data.agents || [];
         if (agentsFromApi.length > 0) {
@@ -1975,30 +2395,113 @@ export default function Chat() {
 
     const maxTurns = activeMode === "single" ? 1 : maxAgentTurns;
     setTypingKeys(activeMode === "single" ? ["A"] : ["A"]);
+
+    const postMessage = async (rid: string) => {
+      const res = await fetch(`${API_BASE}/message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: rid,
+          message: text,
+          scene_id: selectedScene?.id || currentConv?.settings?.selectedScene?.id || "",
+          emotion_tag: null,
+          emotion_target: null,
+          agent_emotion_overrides: agentEmotionOverrides,
+          additional_rules: additionalRules,
+          agent_decision_block: agentDecisionBlock,
+          max_agent_turns_before_user: maxTurns,
+          max_user_gap: maxUserGap,
+          single_mode: activeMode === "single",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { res, data };
+    };
+
+    const recreateRoom = async (): Promise<string | null> => {
+      // Backend restarted → in-memory room gone; recreate with same profile/intake.
+      const sceneForRecreate = selectedScene || currentConv?.settings?.selectedScene || null;
+      if (!sceneForRecreate?.id) return null;
+      if (isAgora2SceneId(sceneForRecreate.id) && (!userProfile || !agora2Intake)) {
+        return null;
+      }
+      const res = await fetch(`${API_BASE}/start`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+        },
+        body: JSON.stringify({
+          scene_id: sceneForRecreate.id,
+          mode: activeMode,
+          limited_selected_agent_keys: activeMode === "limited" ? limitedSelectedAgents : undefined,
+          ...(isAgora2SceneId(sceneForRecreate.id) && userProfile && agora2Intake
+            ? {
+                scenario_type: sceneForRecreate.id,
+                lang: agora2Intake.lang || uiLang,
+                profile: userProfile,
+                intake: agora2Intake.intake,
+                hint: agora2Intake.hint || "",
+                session_update: agora2Intake.session_update || "",
+                user_id: webUserId,
+                use_demo_intake: false,
+              }
+            : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.room_id) return null;
+      if (typeof data.session_index === "number") setSessionIndex(data.session_index);
+      return String(data.room_id);
+    };
+
     try {
-      const res = await fetch(`${API_BASE}/message`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: roomId, message: text, scene_id: selectedScene?.id || "scene1", emotion_tag: null, emotion_target: null, agent_emotion_overrides: agentEmotionOverrides, additional_rules: additionalRules, agent_decision_block: agentDecisionBlock, max_agent_turns_before_user: maxTurns, max_user_gap: maxUserGap, single_mode: activeMode === "single" }) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      let { res, data } = await postMessage(roomId);
+      if (!res.ok && String((data as { error?: string })?.error || "").includes("Invalid room_id")) {
+        const newRoom = await recreateRoom();
+        if (!newRoom) {
+          throw new Error("Session expired after server restart. Re-select the scene and try again.");
+        }
+        roomId = newRoom;
+        setConversations((prev) =>
+          prev.map((c) => (c.id === convId ? { ...c, roomId: newRoom } : c)),
+        );
+        ({ res, data } = await postMessage(roomId));
+      }
+      if (!res.ok) {
+        throw new Error((data as { error?: string })?.error || `HTTP ${res.status}`);
+      }
       setCurrentPhase(data.phase || null);
-      const responses: Array<{ agent_key: string; message: string }> = data.responses || [];
+      const responses: Array<{
+        agent_key: string;
+        message: string;
+       
+      }> = data.responses || [];
       if (responses.length === 0) { setTypingKeys([]); }
       else {
-        const mapped = responses.map((r) => {
-          const agentKey = (r.agent_key || "A") as AgentKey;
-          const currentSetting = agentSettingsRef.current[agentKey];
-          return {
-            agentKey,
-            content: r.message,
-            convId: convId as string,
-            emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
-          };
-        });
-        const filtered = activeMode === "single" ? mapped.filter((m) => m.agentKey === "A").slice(0, 1) : mapped;
+        const mapped = responses
+          .filter((r) => !!(r.message || "").trim())
+          .map((r) => {
+            const isSystem = r.agent_key === "system" || r.agent_key === "System";
+            const agentKey = (isSystem ? "system" : (r.agent_key || "A")) as AgentKey | "system";
+            const currentSetting = !isSystem ? agentSettingsRef.current[agentKey as AgentKey] : null;
+            return {
+              agentKey,
+              content: r.message || "",
+              convId: convId as string,
+              emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
+              isSystem,
+            };
+          });
+        const filtered = activeMode === "single"
+          ? mapped.filter((m) => m.isSystem || m.agentKey === "A").slice(0, 2)
+          : mapped;
         setMsgQueue(filtered);
       }
-    } catch {
+    } catch (err) {
       setTypingKeys([]);
-      const errMsg: Message = { id: `msg-err-${Date.now()}`, role: "agent", content: backendOnline ? "Something went wrong. Please try again." : "Backend is not running. Start with: python app.py", timestamp: Date.now() };
+      const detail = err instanceof Error && err.message ? err.message : "Something went wrong. Please try again.";
+      const errMsg: Message = { id: `msg-err-${Date.now()}`, role: "agent", content: backendOnline ? detail : "Backend is not running. Start with: python app.py", timestamp: Date.now() };
       setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, messages: [...c.messages, errMsg] } : c));
     } finally {
       setIsLoading(false);
@@ -2006,10 +2509,11 @@ export default function Chat() {
     }
   };
 
+
   const handleLoadHistory = async () => {
     if (!currentConv?.roomId) return;
     try {
-      const res = await fetch(`${API_BASE}/history/${currentConv.roomId}`);
+      const res = await authFetch(`/history/${currentConv.roomId}`);
       if (!res.ok) return;
       const data = await res.json();
       const runtimeMap: Record<string, AgentKey> = {};
@@ -2032,8 +2536,20 @@ export default function Chat() {
       if (Object.keys(runtimeBackendNames).length > 0) {
         setAgentBackendNames((prev) => ({ ...prev, ...runtimeBackendNames }));
       }
-      const messages: Message[] = (data.history || []).map((h: { character: string; txt: string }, i: number) => {
-        if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (data.history.length - i) * 1000 };
+      const hist = data.history || [];
+      const messages: Message[] = hist.map((
+        h: { character: string; txt: string },
+        i: number,
+      ) => {
+        if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+        if (h.character === "system") {
+          return {
+            id: `h-${i}`,
+            role: "system" as const,
+            content: h.txt,
+            timestamp: Date.now() - (hist.length - i) * 1000,
+          };
+        }
         const agentKey = runtimeMap[h.character] ?? BACKEND_NAME_TO_KEY[h.character] ?? "A";
         const currentSetting = agentSettingsRef.current[agentKey];
         return {
@@ -2041,11 +2557,12 @@ export default function Chat() {
           role: "agent" as const,
           agentKey,
           content: h.txt,
-          timestamp: Date.now() - (data.history.length - i) * 1000,
+          timestamp: Date.now() - (hist.length - i) * 1000,
           emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
         };
       });
       setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, messages } : c));
+      if (data.phase) setCurrentPhase(data.phase);
     } catch {}
   };
 
@@ -2053,7 +2570,11 @@ export default function Chat() {
     if (!currentConv?.roomId) return;
     try {
       const res = await fetch(`${API_BASE}/export-logs/${currentConv.roomId}`);
-      if (!res.ok) throw new Error(res.statusText);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert((err as { error?: string }).error || "Export failed");
+        return;
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -2061,7 +2582,40 @@ export default function Chat() {
       a.download = `agora_logs_${currentConv.roomId}.zip`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {}
+    } catch {
+      alert("Export failed — is the backend running?");
+    }
+  };
+
+  const fetchSessionSummary = async () => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    try {
+      const res = await fetch(`${API_BASE}/summary/${roomId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: uiLang }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSummaryError((data as { error?: string }).error || "Could not generate summary");
+        return;
+      }
+      setSummaryByRoom((prev) => ({ ...prev, [roomId]: (data as { markdown?: string }).markdown || "" }));
+    } catch {
+      setSummaryError("Summary failed — is the backend running?");
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  /** Open panel only — API runs when user presses Generate. */
+  const handleOpenSummary = () => {
+    setSummaryError(null);
+    setSummaryLoading(false);
+    setSummaryOpen(true);
   };
 
   const defaultConvSettings = (mode: ExperimentMode = "full"): ConvSettings => ({
@@ -2136,12 +2690,49 @@ export default function Chat() {
     setTypingKeys([]);
     setMsgQueue([]);
     setSidebarOpen(false);
+    // Past rooms restored from DB often have empty messages — pull history
+    if (conv?.roomId && (!conv.messages || conv.messages.length === 0)) {
+      void (async () => {
+        try {
+          const res = await authFetch(`/history/${conv.roomId}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          const hist = data.history || [];
+          const messages: Message[] = hist.map((
+            h: { character: string; txt: string },
+            i: number,
+          ) => {
+            if (h.character === "user") {
+              return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+            }
+            if (h.character === "system") {
+              return { id: `h-${i}`, role: "system" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+            }
+            const agentKey = (BACKEND_NAME_TO_KEY[h.character] ?? "A") as AgentKey;
+            return {
+              id: `h-${i}`,
+              role: "agent" as const,
+              agentKey,
+              content: h.txt,
+              timestamp: Date.now() - (hist.length - i) * 1000,
+                };
+          });
+          setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, messages } : c)));
+          if (data.phase) setCurrentPhase(data.phase);
+        } catch {
+          /* ignore */
+        }
+      })();
+    }
   }, [conversations, loadConvSettings]);
   const handleOpenAdvancedAgent = useCallback((key: AgentKey) => {
     setCustomizerInitialAgent(key);
     setShowCustomizer(true);
   }, []);
-  const handleLogout = () => { localStorage.removeItem("agora_auth"); navigate("/"); };
+  const handleLogout = async () => {
+    await logoutRequest();
+    navigate("/");
+  };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { if (e.key === "Enter" && (e.metaKey || e.altKey)) { e.preventDefault(); handleSend(); } };
   const autoResizeInput = useCallback((el: HTMLTextAreaElement | null) => {
     if (!el) return;
@@ -2305,9 +2896,119 @@ export default function Chat() {
             guideGradientPalette={guideGradientPalette}
           />
         )}
-        {showSceneSelector && (
-          <SceneSelectorModal scenes={scenes} selectedScene={selectedScene} onSelect={setSelectedScene} onClose={() => setShowSceneSelector(false)} />
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showProfileModal && pendingProfileScene && (
+          <motion.div
+            key="profile-overlay"
+            className="fixed inset-0 bg-black/30 z-[60] flex items-center justify-center p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              if (userProfile) {
+                setShowProfileModal(false);
+                setPendingProfileScene(null);
+              }
+            }}
+          >
+            <ProfileModal
+              userId={webUserId}
+              scenarioType={pendingProfileScene.id}
+              lang={uiLang}
+              dismissible={!!userProfile}
+              onClose={userProfile ? () => {
+                setShowProfileModal(false);
+                setPendingProfileScene(null);
+              } : undefined}
+              onConfirm={(profile) => {
+                setUserProfile(profile);
+                setShowProfileModal(false);
+                setPendingIntakeScene(pendingProfileScene);
+                setPendingProfileScene(null);
+              }}
+            />
+          </motion.div>
         )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {(showSceneSelector || !!pendingIntakeScene) && (
+          <motion.div
+            key="scene-flow-overlay"
+            className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              if (pendingIntakeScene) setPendingIntakeScene(null);
+              else setShowSceneSelector(false);
+            }}
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              {pendingIntakeScene ? (
+                <IntakeModal
+                  key={`intake-${pendingIntakeScene.id}`}
+                  scene={pendingIntakeScene}
+                  lang={uiLang}
+                  sessionCount={sessionCountBefore}
+                  lastIntake={lastIntake}
+                  onClose={() => setPendingIntakeScene(null)}
+                  onConfirm={(payload) => {
+                    setSelectedScene(pendingIntakeScene);
+                    setAgora2Intake(payload);
+                    setSessionIndex(sessionCountBefore + 1);
+                    setPendingIntakeScene(null);
+                    setShowSceneSelector(false);
+                  }}
+                />
+              ) : (
+                <SceneSelectorModal
+                  key="scene-selector"
+                  scenes={scenes}
+                  selectedScene={selectedScene}
+                  lang={uiLang}
+                  onLangChange={setUiLang}
+                  onSelect={(s) => {
+                    if (isAgora2SceneId(s.id)) {
+                      void beginAgora2Scene(s);
+                      return;
+                    }
+                    setAgora2Intake(null);
+                    setSelectedScene(s);
+                    setShowSceneSelector(false);
+                  }}
+                  onClose={() => setShowSceneSelector(false)}
+                />
+              )}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showMemoryHistory && selectedScene && isAgora2SceneId(selectedScene.id) && (
+          <motion.div
+            key="memory-history"
+            className="fixed inset-0 bg-black/30 z-[70] flex items-center justify-center p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowMemoryHistory(false)}
+          >
+            <MemoryHistoryPanel
+              scenarioType={selectedScene.id}
+              lang={uiLang}
+              onClose={() => setShowMemoryHistory(false)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {showAppearanceModal && (
           <AppearanceModal
             open={showAppearanceModal}
@@ -2373,7 +3074,25 @@ export default function Chat() {
         </div>
         <div className="relative flex-shrink-0">
           <AnimatePresence>
-            {userMenuOpen && <UserMenu nickname={nickname} onAccount={() => {}} onHelp={() => {}} onLogout={handleLogout} onClose={() => setUserMenuOpen(false)} />}
+            {userMenuOpen && (
+              <UserMenu
+                nickname={nickname}
+                isAdmin={isAdmin}
+                onAccount={() => {
+                  const s = selectedScene && isAgora2SceneId(selectedScene.id) ? selectedScene : null;
+                  if (s) {
+                    setPendingProfileScene(s);
+                    setShowProfileModal(true);
+                  } else {
+                    openSceneSelector();
+                  }
+                }}
+                onHelp={() => {}}
+                onAdmin={() => navigate("/admin")}
+                onLogout={() => void handleLogout()}
+                onClose={() => setUserMenuOpen(false)}
+              />
+            )}
           </AnimatePresence>
           <button onClick={() => setUserMenuOpen((v) => !v)} className="w-full flex items-center gap-2 px-3 py-4 border-t border-black/8 hover:bg-black/3 transition-colors">
             <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500 flex-shrink-0" />
@@ -2452,7 +3171,9 @@ export default function Chat() {
             {currentConv && (
               <div className="flex items-center gap-1.5 pr-3 border-r border-black/10" style={monoFont}>
                 <span className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest">Turn {currentConv.messages?.filter((m) => m.role === "user").length ?? 0}</span>
-                {showPhaseIndicator && currentPhase && <span className="text-[10px] text-[var(--app-muted-text)]">· Phase: {currentPhase}</span>}
+                {showPhaseIndicator && currentPhase && (
+                  <span className="text-[10px] text-[var(--app-muted-text)]">· Phase: {currentPhase}</span>
+                )}
               </div>
             )}
             {(currentConv?.settings?.mode === "single" ? ["A"] : AGENT_KEYS).map((key) => (
@@ -2622,15 +3343,23 @@ export default function Chat() {
                   <motion.button
                     whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={() => setShowSceneSelector(true)}
+                    onClick={openSceneSelector}
                     className="w-full text-left px-4 py-3 border border-black/8 rounded-[10px] transition-colors group"
                   >
                     <div className="flex items-center gap-1.5 mb-1">
                       <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: selectedScene?.color || "#000000" }} />
-                      <span className="text-[10px] tracking-widest text-black" style={monoFont}>{selectedScene?.title || scenes[0]?.title || "Laptop Purchase Advisory"}</span>
+                      <span className="text-[10px] tracking-widest text-black" style={monoFont}>{selectedScene?.title || "Select a scene"}</span>
+                      {sessionIndex != null && (
+                        <span className="text-[9px] text-black/50 ml-1" style={monoFont}>· Session {sessionIndex}</span>
+                      )}
+                      <span className="text-[9px] text-black/40 ml-auto" style={monoFont}>{uiLang === "zh" ? "中文" : "EN"}</span>
                     </div>
-                    <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{selectedScene?.description || scenes[0]?.description || "Professional advice for Black Friday laptop shopping. Three AI agents analyze from different perspectives."}</p>
-                    <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>click to customize →</p>
+                    <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{selectedScene?.description || "Choose employment, parent-child, or another scenario before chatting. Nothing starts until you pick one."}</p>
+                    <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>
+                      {selectedScene
+                        ? (agora2Intake ? "intake ready · click to change →" : "click to change scenario →")
+                        : "click to choose scenario →"}
+                    </p>
                   </motion.button>
                 </div>
               </div>
@@ -2685,6 +3414,9 @@ export default function Chat() {
                         onChatAnnotationDraft={onChatAnnotationDraft}
                       />
                     );
+                  }
+                  if (msg.role === "system") {
+                    return <SystemMessage key={msg.id} message={msg} />;
                   }
                   const compactRepeatedIntro = !!(msg.agentKey && userTurnCount === 1 && firstTurnAgentSeen[msg.agentKey]);
                   if (msg.agentKey && userTurnCount === 1) {
@@ -2769,7 +3501,8 @@ export default function Chat() {
               </div>
               <div className="flex-1 min-h-[48px] bg-black rounded-[12px] flex items-center px-4 py-3">
                 <textarea ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={handleKeyDown}
-                  placeholder="Enter a question or topic to explore..." rows={1} disabled={isLoading}
+                  placeholder="Enter a question or topic to explore..."
+                  rows={1} disabled={isLoading}
                   className="flex-1 min-h-[24px] bg-transparent resize-none outline-none text-white placeholder-[#828282] leading-relaxed disabled:opacity-50"
                   style={{ ...monoFont, fontSize: "13px", maxHeight: "120px" }}
                   onInput={(e) => autoResizeInput(e.currentTarget)} />
@@ -2796,9 +3529,14 @@ export default function Chat() {
                 </motion.button>
                 <AnimatePresence>
                   <SettingsMenu open={settingsMenuOpen} onClose={() => setSettingsMenuOpen(false)} anchorRef={settingsBtnRef}
-                    onCustomize={() => setShowCustomizer(true)} onScene={() => setShowSceneSelector(true)}
+                    onCustomize={() => setShowCustomizer(true)} onScene={openSceneSelector}
                     onAppearance={() => setShowAppearanceModal(true)}
-                    onReloadHistory={handleLoadHistory} onExportLog={handleExportLog} hasRoomId={!!currentConv?.roomId}
+                    onReloadHistory={handleLoadHistory}
+                    onSummary={handleOpenSummary}
+                    onExportLog={handleExportLog}
+                    onPastMemory={() => setShowMemoryHistory(true)}
+                    hasRoomId={!!currentConv?.roomId}
+                    showPastMemory={!!selectedScene && isAgora2SceneId(selectedScene.id)}
                     showFontColor={showFontColorInSettings} onToggleFontColor={() => setShowFontColorInSettings((v) => !v)} />
                 </AnimatePresence>
               </div>
@@ -2848,6 +3586,19 @@ export default function Chat() {
         </div>,
         document.body,
       )}
+    <AnimatePresence>
+      {summaryOpen && currentConv?.roomId && (
+        <SummaryPanel
+          open={summaryOpen}
+          onClose={() => setSummaryOpen(false)}
+          roomId={currentConv.roomId}
+          markdown={summaryByRoom[currentConv.roomId] || null}
+          loading={summaryLoading}
+          error={summaryError}
+          onGenerate={() => void fetchSessionSummary()}
+        />
+      )}
+    </AnimatePresence>
     </>
   );
 }

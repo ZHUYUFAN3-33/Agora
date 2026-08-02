@@ -5,4 +5,5 @@ export const router = createBrowserRouter([
   { path: "/", Component: AnimatedLayout },
   { path: "/onboarding", Component: AnimatedLayout },
   { path: "/chat", Component: AnimatedLayout },
+  { path: "/admin", Component: AnimatedLayout },
 ]);

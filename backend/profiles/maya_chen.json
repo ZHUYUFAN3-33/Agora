@@ -1,0 +1,83 @@
+{
+  "profile": {
+    "age": 29,
+    "education": "M.S. Materials Science, University of Tokyo (2021); B.Eng. Chemical Engineering, Zhejiang University (2018)",
+    "industry_experience": "Battery R&D / applied research, 3.5 years — currently Junior Researcher at a Tier-1 auto supplier in Yokohama (cathode materials team)",
+    "career_stage": "job_change",
+    "family_situation": "Partner (Yuki, 31) works in Shinagawa in corporate finance; we rent a 1LDK in Kikuna. No children yet; discussing marriage in 12–18 months. Parents in Hangzhou visit 1–2×/year and prefer I stay in a 'stable company city' (Tokyo > Aichi). Partner can WFH 2 days/week but cannot relocate to Tochigi or Toyota City full-time.",
+    "long_term_goal": "Build a research career with real product impact — either lead an industry materials team or eventually move into a PI-track academia role with industry collaboration, not pure publish-or-perish.",
+    "risk_tolerance": "medium",
+    "child_age": 11,
+    "child_count": 1,
+    "parenting_style_baseline": "democratic",
+    "child_autonomy_baseline": "medium",
+    "communication_habit": "daily",
+    "past_conflict_pattern": "Last year we fought for two weeks over quitting piano — child felt pressured, I felt we had already paid for the year. Ended in a compromise (finish term, then pause). Still a sore spot when scheduling comes up."
+  },
+  "session_history": [
+    {
+      "session_id": "seed_employment_maya",
+      "scenario_type": "employment",
+      "intake": {
+        "decision_field": "Researcher / applied battery materials (industry lab vs academia)",
+        "options": [
+          "Sony — Junior Researcher, ~¥7.0M total cash, Tokyo (Osaki area), battery materials application team",
+          "Honda — Researcher, ~¥7.2M + housing allowance, Tochigi R&D, solid-state adjacent project",
+          "Toyota — Assistant Researcher, ~¥6.8M, Toyota City (Aichi), long-horizon battery cell materials",
+          "UTokyo — Project Researcher (non-tenure), ~¥5.5–6.0M academic package, Hongo, 3-year grant-tied contract"
+        ],
+        "deadline": "3 weeks — Sony and Honda want a verbal reply by mid-month",
+        "current_status": "employed",
+        "priority_ranking": [
+          "salary",
+          "stability",
+          "location",
+          "growth",
+          "culture"
+        ],
+        "comparison_anchor": "Default lean is Sony: Tokyo commute stays ~55 min door-to-door, pay clears ¥7M, and partner can keep Shinagawa job. Still pulled by Honda’s solid-state-adjacent depth — technically the most interesting lab, but Tochigi would mean weekday separation or a brutal commute.",
+        "external_pressure": "Current manager already knows I’m interviewing and asked for a courtesy heads-up before I resign. Honda’s written offer expires in 12 days; Sony wants a verbal by Friday next week. Parents in China keep messaging about ‘settling’ and prefer Toyota for brand stability. Partner said: ‘If it’s Tochigi, we need a real plan — not just try for a month.’"
+      },
+      "date": "2026-08-02T21:52:11.960807+00:00"
+    },
+    {
+      "session_id": "seed_parent_child_maya",
+      "scenario_type": "parent_child",
+      "intake": {
+        "decision_topic": "Whether to switch from local public elementary after-school club to a competitive weekend math/coding juku (and cut one weekday activity)",
+        "decision_owner": "joint",
+        "child_stated_preference": "Says they want the coding class (‘my friends are going and the teacher lets us build games’) but also said they don’t want to give up Friday swimming with the school club.",
+        "parent_stated_concern": "Worried about overload before junior-high entrance prep, sleep, and whether this is my ambition vs. theirs. Also cost (~¥28k/month) vs. unclear long-term benefit.",
+        "disagreement_exists": "yes",
+        "urgency": "Juku trial enrollment closes in 10 days; swimming club re-registration is next month",
+        "external_input": "Homeroom teacher: ‘academically fine, socially happy — don’t stack too much.’ Maternal grandparents (video call): push hard for juku (‘everyone in Hangzhou starts earlier’). Partner: open to coding if we protect one free weekend afternoon."
+      },
+      "date": "2026-08-02T21:52:11.960807+00:00"
+    },
+    {
+      "session_id": "433021",
+      "scenario_type": "employment",
+      "intake": {
+        "decision_field": "Researcher / applied battery materials (industry lab vs academia)",
+        "options": [
+          "Sony — Junior Researcher, ~¥7.0M total cash, Tokyo (Osaki area), battery materials application team",
+          "Honda — Researcher, ~¥7.2M + housing allowance, Tochigi R&D, solid-state adjacent project",
+          "Toyota — Assistant Researcher, ~¥6.8M, Toyota City (Aichi), long-horizon battery cell materials",
+          "UTokyo — Project Researcher (non-tenure), ~¥5.5–6.0M academic package, Hongo, 3-year grant-tied contract"
+        ],
+        "deadline": "3 weeks — Sony and Honda want a verbal reply by mid-month",
+        "current_status": "employed",
+        "priority_ranking": [
+          "salary",
+          "stability",
+          "location",
+          "growth",
+          "culture"
+        ],
+        "comparison_anchor": "Default lean is Sony: Tokyo commute stays ~55 min door-to-door, pay clears ¥7M, and partner can keep Shinagawa job. Still pulled by Honda’s solid-state-adjacent depth — technically the most interesting lab, but Tochigi would mean weekday separation or a brutal commute.",
+        "external_pressure": "Current manager already knows I’m interviewing and asked for a courtesy heads-up before I resign. Honda’s written offer expires in 12 days; Sony wants a verbal by Friday next week. Parents in China keep messaging about ‘settling’ and prefer Toyota for brand stability. Partner said: ‘If it’s Tochigi, we need a real plan — not just try for a month.’"
+      },
+      "date": "2026-08-02T21:52:58+00:00"
+    }
+  ]
+}

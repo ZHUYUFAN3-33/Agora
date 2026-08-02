@@ -93,6 +93,32 @@
         "related_cards": [
           "growth_promotion_plateau"
         ]
+      },
+      {
+        "id": "growth_academia_vs_industry_comp",
+        "keywords": [
+          "academia vs industry",
+          "academic vs industry",
+          "academia or industry",
+          "industry vs academia",
+          "faculty salary",
+          "教授 薪水",
+          "学界 业界",
+          "学术界 产业界",
+          "高校 企业 薪酬",
+          "research job pay",
+          "industry compensation"
+        ],
+        "text": {
+          "zh": "比较学界与产业界的薪酬时，常见框架是拆成三块再比：基础现金、与绩效挂钩的可变部分、以及长期权益/福利（股权、退休、住房补贴等）。学界往往现金中位数更低、但岗位稳定性与时间自主性结构不同；产业界现金与权益弹性更大、但波动与岗位风险也更高。不要用某一所学校或某一家公司的传闻数字代替用户自己的可比数据。以上是一般性框架，不是具体机构的薪资断言。",
+          "en": "When comparing academia vs industry compensation, a common framework is to separate base cash, performance-linked variable pay, and long-horizon equity/benefits (RSUs, retirement, housing support, etc.). Academia often shows lower median cash with a different stability/autonomy structure; industry usually offers more cash/equity upside with higher role and market volatility. Do not substitute rumor numbers for any specific institution or company — use the user's own comparable figures. This is a general framework, not an assertion about any named employer."
+        },
+        "source": "General framing consistent with labor-economics discussions of academic vs private-sector compensation packages; for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "growth_startup_vs_corporate",
+          "stability_financial_buffer"
+        ]
       }
     ],
     "generic_fallback": {

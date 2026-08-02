@@ -26,9 +26,10 @@ function pickLabel(q: TemplateField["question"] | FieldOption["label"], lang: Ui
   return (lang === "zh" ? q?.zh : q?.en) || q?.en || q?.zh || "";
 }
 
+/** One list item per line. Commas stay inside an item (e.g. "Sony, Junior, 7000k, Tokyo"). */
 function parseList(raw: string): string[] {
   return raw
-    .split(/\n|,/)
+    .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -83,6 +84,274 @@ function missingRequired(fields: TemplateField[] | undefined, values: Record<str
 }
 
 const PRIORITY_DEFAULTS = ["salary", "growth", "stability", "location", "culture"];
+/** Collapsed text area height (~3 lines). Longer content shows a Google Forms–style expand. */
+const TEXT_COLLAPSE_MAX_PX = 72;
+const TEXT_EXPAND_HINT_CHARS = 96;
+
+/** Material-style open_in_full — Google Forms expand affordance. */
+function OpenInFullIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M21 21h-6v-2h4v-4h2v6zM3 3h6v2H5v4H3V3zm0 18v-6h2v4h4v2H3zM21 3v6h-2V5h-4V3h6z" />
+    </svg>
+  );
+}
+
+function CloseFullscreenIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M22 3.41 16.71 8.7 20 12h-8V4l3.29 3.29L20.59 2 22 3.41zM3.41 22l5.29-5.29L12 20v-8H4l3.29 3.29L2 20.59 3.41 22z" />
+    </svg>
+  );
+}
+
+/** Circular icon button (Google Forms / Material). */
+function ExpandIconButton({
+  lang,
+  onClick,
+  label,
+}: {
+  lang: UiLang;
+  onClick: () => void;
+  label?: string;
+}) {
+  const title = label || (lang === "zh" ? "展开" : "Expand");
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      className="absolute bottom-1 right-1 z-[1] w-8 h-8 flex items-center justify-center rounded-[8px] text-black/45 hover:bg-black/5 hover:text-black/70 transition-colors"
+    >
+      <OpenInFullIcon size={18} />
+    </button>
+  );
+}
+
+/** Full-screen editor dialog — Google Forms expand pattern. */
+function ExpandTextDialog({
+  open,
+  title,
+  value,
+  lang,
+  readOnly = false,
+  onChange,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  value: string;
+  lang: UiLang;
+  readOnly?: boolean;
+  onChange?: (v: string) => void;
+  onClose: () => void;
+}) {
+  const areaRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const t = window.setTimeout(() => areaRef.current?.focus(), 40);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-8"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/40"
+        aria-label={lang === "zh" ? "关闭" : "Close"}
+        onClick={onClose}
+      />
+      <motion.div
+        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+        transition={{ duration: 0.15 }}
+        className="relative w-full max-w-[480px] max-h-[85vh] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-black/8">
+          <h3 className="text-[15px] text-black truncate pr-2" style={{ ...monoFont, fontWeight: 600 }}>
+            {title}
+          </h3>
+          <button
+            type="button"
+            title={lang === "zh" ? "收起" : "Collapse"}
+            aria-label={lang === "zh" ? "收起" : "Collapse"}
+            onClick={onClose}
+            className="p-2 shrink-0 hover:bg-black/5 rounded-[8px] transition-colors text-black/60"
+          >
+            <CloseFullscreenIcon size={16} />
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 px-5 py-4">
+          {readOnly ? (
+            <div
+              className="w-full min-h-[200px] max-h-[55vh] overflow-y-auto text-[12px] text-black whitespace-pre-wrap break-words leading-relaxed"
+              style={monoFont}
+            >
+              {value}
+            </div>
+          ) : (
+            <textarea
+              ref={areaRef}
+              value={value}
+              onChange={(e) => onChange?.(e.target.value)}
+              className="w-full min-h-[200px] max-h-[55vh] text-[12px] text-black px-0 py-0 border-0 outline-none resize-none leading-relaxed"
+              style={monoFont}
+            />
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-black/8">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-[12px] bg-black text-white rounded-[8px] hover:bg-neutral-800 transition-colors"
+            style={monoFont}
+          >
+            {lang === "zh" ? "完成" : "Done"}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+/** Text field: clamped preview + Google Forms–style expand icon → dialog. */
+function ExpandableTextField({
+  id,
+  value,
+  borderClass,
+  onChange,
+  onFocusClear,
+  lang,
+  label,
+}: {
+  id: string;
+  value: string;
+  borderClass: string;
+  onChange: (v: string) => void;
+  onFocusClear: () => void;
+  lang: UiLang;
+  label?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const prev = el.style.maxHeight;
+    el.style.maxHeight = `${TEXT_COLLAPSE_MAX_PX}px`;
+    const needs = el.scrollHeight > TEXT_COLLAPSE_MAX_PX + 1 || value.length > TEXT_EXPAND_HINT_CHARS;
+    el.style.maxHeight = prev;
+    setOverflows(needs);
+  }, [value]);
+
+  return (
+    <div className="relative">
+      <textarea
+        ref={ref}
+        id={id}
+        value={value}
+        rows={3}
+        onFocus={onFocusClear}
+        onChange={(e) => onChange(e.target.value)}
+        className={`w-full text-[12px] px-3 py-2 pr-11 border rounded-[6px] outline-none transition-colors resize-none overflow-hidden ${borderClass}`}
+        style={{
+          ...monoFont,
+          maxHeight: TEXT_COLLAPSE_MAX_PX,
+        }}
+      />
+      {overflows && (
+        <ExpandIconButton lang={lang} onClick={() => setOpen(true)} />
+      )}
+      <ExpandTextDialog
+        open={open}
+        title={label || (lang === "zh" ? "编辑回答" : "Edit answer")}
+        value={value}
+        lang={lang}
+        onChange={onChange}
+        onClose={() => setOpen(false)}
+      />
+    </div>
+  );
+}
+
+/** Single list row: clamp long lines; expand opens full dialog. */
+function ExpandableListItem({
+  item,
+  lang,
+  onRemove,
+  onChange,
+}: {
+  item: string;
+  lang: UiLang;
+  onRemove: () => void;
+  onChange: (next: string) => void;
+}) {
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    setOverflows(el.scrollHeight > el.clientHeight + 1 || item.length > TEXT_EXPAND_HINT_CHARS);
+  }, [item]);
+
+  return (
+    <li className="flex items-start gap-2">
+      <div className="relative flex-1 min-w-0">
+        <span
+          ref={textRef}
+          className="block text-[12px] px-3 py-2 pr-11 border border-black/10 rounded-[6px] bg-white whitespace-pre-wrap break-words line-clamp-2"
+          style={monoFont}
+        >
+          {item}
+        </span>
+        {overflows && (
+          <ExpandIconButton lang={lang} onClick={() => setOpen(true)} />
+        )}
+        <ExpandTextDialog
+          open={open}
+          title={lang === "zh" ? "编辑选项" : "Edit option"}
+          value={item}
+          lang={lang}
+          onChange={onChange}
+          onClose={() => setOpen(false)}
+        />
+      </div>
+      <button
+        type="button"
+        className="text-[11px] text-red-600 px-2 py-1 hover:bg-red-50 rounded shrink-0 mt-0.5"
+        style={monoFont}
+        onClick={onRemove}
+      >
+        {lang === "zh" ? "删除" : "Remove"}
+      </button>
+    </li>
+  );
+}
 
 function ListEditor({
   id,
@@ -107,23 +376,23 @@ function ListEditor({
   return (
     <div>
       <p className="text-[10px] text-[var(--app-muted-text)] mb-1.5" style={monoFont}>
-        {lang === "zh" ? "可添加多条" : "Add multiple items"}
+        {lang === "zh"
+          ? "可添加多条；每条用回车/添加整段提交，逗号不会拆成多条"
+          : "Add multiple items — Enter/Add commits the whole line; commas stay in one entry"}
       </p>
       <ul className="flex flex-col gap-1.5 mb-2">
         {items.map((item, i) => (
-          <li key={`${item}-${i}`} className="flex items-center gap-2">
-            <span className="flex-1 text-[12px] px-3 py-2 border border-black/10 rounded-[6px] bg-white" style={monoFont}>
-              {item}
-            </span>
-            <button
-              type="button"
-              className="text-[11px] text-red-600 px-2 py-1 hover:bg-red-50 rounded"
-              style={monoFont}
-              onClick={() => setItems(items.filter((_, j) => j !== i))}
-            >
-              {lang === "zh" ? "删除" : "Remove"}
-            </button>
-          </li>
+          <ExpandableListItem
+            key={`${item}-${i}`}
+            item={item}
+            lang={lang}
+            onRemove={() => setItems(items.filter((_, j) => j !== i))}
+            onChange={(next) => {
+              const copy = [...items];
+              copy[i] = next;
+              setItems(copy);
+            }}
+          />
         ))}
       </ul>
       <div className="flex gap-2">
@@ -332,14 +601,14 @@ function FieldControls({
         }
 
         return wrap(
-          <input
+          <ExpandableTextField
             id={id}
-            type="text"
             value={value}
-            onFocus={() => onFocusClear(field.key)}
-            onChange={(e) => onChange(field.key, e.target.value)}
-            className={`w-full text-[12px] px-3 py-2 border rounded-[6px] outline-none transition-colors ${borderClass}`}
-            style={monoFont}
+            borderClass={borderClass}
+            onChange={(v) => onChange(field.key, v)}
+            onFocusClear={() => onFocusClear(field.key)}
+            lang={lang}
+            label={label}
           />,
         );
       })}

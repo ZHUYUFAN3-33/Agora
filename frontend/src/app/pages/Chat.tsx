@@ -142,7 +142,7 @@ function AnimatedGuideFrame({
 
 interface Message {
   id: string;
-  role: "user" | "agent";
+  role: "user" | "agent" | "system";
   agentKey?: AgentKey;
   content: string;
   timestamp: number;
@@ -909,6 +909,28 @@ const AgentMessage = React.memo(function AgentMessage({
           {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
             ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent")
             : finalContent}
+        </p>
+      </div>
+    </motion.div>
+  );
+});
+
+const SystemMessage = React.memo(function SystemMessage({ message }: { message: Message }) {
+  if (!(message.content || "").trim()) return null;
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+      className="flex flex-col items-center gap-1 mb-5"
+    >
+      <span className="text-[10px] tracking-widest text-[var(--app-muted-text)] uppercase" style={monoFont}>
+        System
+      </span>
+      <div className="px-3 py-2 max-w-[90%] text-center border border-black/10 bg-black/[0.03] rounded-[8px]">
+        <p className="text-[12px] text-black/70 leading-relaxed whitespace-pre-wrap" style={monoFont}>
+          {message.content}
         </p>
       </div>
     </motion.div>
@@ -1682,7 +1704,13 @@ export default function Chat() {
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [typingKeys, setTypingKeys] = useState<AgentKey[]>([]);
-  const [msgQueue, setMsgQueue] = useState<Array<{ agentKey: AgentKey; content: string; convId: string; emotionTagSnapshot: string | null }>>([]);
+  const [msgQueue, setMsgQueue] = useState<Array<{
+    agentKey: AgentKey | "system";
+    content: string;
+    convId: string;
+    emotionTagSnapshot: string | null;
+    isSystem?: boolean;
+  }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
   const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>({ A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") });
   const quickAdjustPendingRef = useRef<Record<AgentKey, Promise<void> | null>>({ A: null, B: null, C: null });
@@ -1834,6 +1862,87 @@ export default function Chat() {
 
   useEffect(() => { if (!getAuth()?.token) navigate("/"); }, [navigate]);
 
+  // Restore past rooms from SQLite after re-login
+  useEffect(() => {
+    if (!getAuth()?.token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/me/rooms?limit=50");
+        if (!res.ok) return;
+        const data = await res.json();
+        const rooms: Array<{
+          room_id: string;
+          title?: string;
+          scenario_type?: string;
+          updated_at?: string;
+          phase?: string;
+          concluded?: boolean;
+        }> = data.rooms || [];
+        if (cancelled) return;
+        // Server list is source of truth for this user — do not keep foreign/stale stubs
+        setConversations((prev) => {
+          const prevByRoom = new Map(prev.map((c) => [c.roomId, c]));
+          const serverIds = new Set(rooms.map((r) => r.room_id).filter(Boolean));
+          const restored: Conversation[] = rooms
+            .filter((r) => r.room_id)
+            .map((r) => {
+              const existing = prevByRoom.get(r.room_id);
+              if (existing) {
+                return {
+                  ...existing,
+                  title: r.title || existing.title || r.scenario_type || r.room_id,
+                  preview: existing.messages.length
+                    ? existing.preview
+                    : (r.phase ? `Phase: ${r.phase}` : "Past session"),
+                  timestamp: r.updated_at
+                    ? formatTime(Date.parse(r.updated_at) || Date.now())
+                    : existing.timestamp,
+                  settings: {
+                    ...existing.settings,
+                    selectedScene:
+                      existing.settings.selectedScene
+                      || scenes.find((s) => s.id === r.scenario_type)
+                      || null,
+                  },
+                };
+              }
+              return {
+                id: `room-${r.room_id}`,
+                roomId: r.room_id,
+                title: r.title || r.scenario_type || r.room_id,
+                preview: r.phase ? `Phase: ${r.phase}` : "Past session",
+                timestamp: r.updated_at ? formatTime(Date.parse(r.updated_at) || Date.now()) : "earlier",
+                messages: [],
+                settings: {
+                  agentNames: { ...DEFAULT_AGENT_NAMES },
+                  agentBackendNames: { ...DEFAULT_AGENT_NAMES },
+                  agentSettings: {
+                    A: defaultSetting("A"),
+                    B: defaultSetting("B"),
+                    C: defaultSetting("C"),
+                  },
+                  limitedSelectedAgents: [...LIMITED_DEFAULT_SELECTED],
+                  selectedScene: scenes.find((s) => s.id === r.scenario_type) || null,
+                  maxAgentTurns,
+                  maxUserGap,
+                  mode: experimentMode,
+                },
+              };
+            });
+          // Keep only in-progress local chats not yet on the server list
+          const localOnly = prev.filter(
+            (c) => c.messages.length > 0 && c.roomId && !serverIds.has(c.roomId),
+          );
+          return [...localOnly, ...restored];
+        });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [auth?.token, scenes, maxAgentTurns, maxUserGap, experimentMode]);
+
   useEffect(() => {
     setChatLayerAnnotations({});
     setChatAnnotationDraft(null);
@@ -1878,12 +1987,10 @@ export default function Chat() {
       .then((d) => {
         const list = (d.scenes || d.scenarios || []) as Scene[];
         setScenes(list);
+        // Never auto-pick a scene — user must choose explicitly.
         setSelectedScene((prev) => {
-          if (prev) {
-            const fresh = list.find((s) => s.id === prev.id);
-            if (fresh) return fresh;
-          }
-          return list[0] || null;
+          if (!prev) return null;
+          return list.find((s) => s.id === prev.id) || null;
         });
       })
       .catch(() => setScenes([]));
@@ -1949,24 +2056,32 @@ export default function Chat() {
       return;
     }
     const next = msgQueue[0];
-    setTypingKeys([next.agentKey]);
+    const isSystem = !!next.isSystem || next.agentKey === "system";
+    if (!isSystem && next.agentKey !== "system") {
+      setTypingKeys([next.agentKey as AgentKey]);
+    } else {
+      setTypingKeys([]);
+    }
+    const delay = isSystem ? 200 : 900;
     const timer = setTimeout(() => {
       const agentMsg: Message = {
         id: `msg-${Date.now()}-${next.agentKey}`,
-        role: "agent",
-        agentKey: next.agentKey,
+        role: isSystem ? "system" : "agent",
+        agentKey: isSystem ? undefined : (next.agentKey as AgentKey),
         content: next.content,
         timestamp: Date.now(),
-        emotionTagSnapshot: next.emotionTagSnapshot,
+        emotionTagSnapshot: isSystem ? null : next.emotionTagSnapshot,
       };
       const names = agentNamesRef.current;
-      setConversations((prev) => prev.map((c) => c.id === next.convId ? { ...c, messages: [...c.messages, agentMsg], preview: `${names[next.agentKey]}: ${next.content.slice(0, 60)}…`, timestamp: "just now" } : c));
+      const previewLabel = isSystem ? "System" : names[next.agentKey as AgentKey];
+      setConversations((prev) => prev.map((c) => c.id === next.convId ? { ...c, messages: [...c.messages, agentMsg], preview: `${previewLabel}: ${next.content.slice(0, 60)}…`, timestamp: "just now" } : c));
       setMsgQueue((q) => {
         const rest = q.slice(1);
-        setTypingKeys(rest.length > 0 ? [rest[0].agentKey] : []);
+        const n0 = rest[0];
+        setTypingKeys(rest.length > 0 && n0 && !n0.isSystem && n0.agentKey !== "system" ? [n0.agentKey as AgentKey] : []);
         return rest;
       });
-    }, 900);
+    }, delay);
     return () => clearTimeout(timer);
   }, [msgQueue]);
 
@@ -2058,6 +2173,11 @@ export default function Chat() {
   const handleSend = async () => {
     const text = inputValue.trim();
     if (!text || isLoading) return;
+    if (!currentConvId && !selectedScene) {
+      setSessionCreateError("Select a scene first — do not start without choosing your scenario.");
+      openSceneSelector();
+      return;
+    }
     if (!currentConvId && experimentMode === "limited" && limitedSelectedAgents.length !== 3) {
       setSessionCreateError("Limited mode requires selecting exactly 3 agents.");
       return;
@@ -2099,12 +2219,12 @@ export default function Chat() {
             ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
           },
           body: JSON.stringify({
-            scene_id: selectedScene?.id || "scene1",
+            scene_id: selectedScene!.id,
             mode: experimentMode,
             limited_selected_agent_keys: experimentMode === "limited" ? limitedSelectedAgents : undefined,
-            ...(isAgora2SceneId(selectedScene?.id) && userProfile && agora2Intake
+            ...(isAgora2SceneId(selectedScene.id) && userProfile && agora2Intake
               ? {
-                  scenario_type: selectedScene!.id,
+                  scenario_type: selectedScene.id,
                   lang: agora2Intake.lang || uiLang,
                   profile: userProfile,
                   intake: agora2Intake.intake,
@@ -2216,7 +2336,7 @@ export default function Chat() {
         body: JSON.stringify({
           room_id: rid,
           message: text,
-          scene_id: selectedScene?.id || "scene1",
+          scene_id: selectedScene?.id || currentConv?.settings?.selectedScene?.id || "",
           emotion_tag: null,
           emotion_target: null,
           agent_emotion_overrides: agentEmotionOverrides,
@@ -2233,7 +2353,9 @@ export default function Chat() {
 
     const recreateRoom = async (): Promise<string | null> => {
       // Backend restarted → in-memory room gone; recreate with same profile/intake.
-      if (isAgora2SceneId(selectedScene?.id) && (!userProfile || !agora2Intake)) {
+      const sceneForRecreate = selectedScene || currentConv?.settings?.selectedScene || null;
+      if (!sceneForRecreate?.id) return null;
+      if (isAgora2SceneId(sceneForRecreate.id) && (!userProfile || !agora2Intake)) {
         return null;
       }
       const res = await fetch(`${API_BASE}/start`, {
@@ -2243,12 +2365,12 @@ export default function Chat() {
           ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
         },
         body: JSON.stringify({
-          scene_id: selectedScene?.id || "scene1",
+          scene_id: sceneForRecreate.id,
           mode: activeMode,
           limited_selected_agent_keys: activeMode === "limited" ? limitedSelectedAgents : undefined,
-          ...(isAgora2SceneId(selectedScene?.id) && userProfile && agora2Intake
+          ...(isAgora2SceneId(sceneForRecreate.id) && userProfile && agora2Intake
             ? {
-                scenario_type: selectedScene!.id,
+                scenario_type: sceneForRecreate.id,
                 lang: agora2Intake.lang || uiLang,
                 profile: userProfile,
                 intake: agora2Intake.intake,
@@ -2283,20 +2405,30 @@ export default function Chat() {
         throw new Error((data as { error?: string })?.error || `HTTP ${res.status}`);
       }
       setCurrentPhase(data.phase || null);
-      const responses: Array<{ agent_key: string; message: string }> = data.responses || [];
+      const responses: Array<{
+        agent_key: string;
+        message: string;
+       
+      }> = data.responses || [];
       if (responses.length === 0) { setTypingKeys([]); }
       else {
-        const mapped = responses.map((r) => {
-          const agentKey = (r.agent_key || "A") as AgentKey;
-          const currentSetting = agentSettingsRef.current[agentKey];
-          return {
-            agentKey,
-            content: r.message,
-            convId: convId as string,
-            emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
-          };
-        });
-        const filtered = activeMode === "single" ? mapped.filter((m) => m.agentKey === "A").slice(0, 1) : mapped;
+        const mapped = responses
+          .filter((r) => !!(r.message || "").trim())
+          .map((r) => {
+            const isSystem = r.agent_key === "system" || r.agent_key === "System";
+            const agentKey = (isSystem ? "system" : (r.agent_key || "A")) as AgentKey | "system";
+            const currentSetting = !isSystem ? agentSettingsRef.current[agentKey as AgentKey] : null;
+            return {
+              agentKey,
+              content: r.message || "",
+              convId: convId as string,
+              emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
+              isSystem,
+            };
+          });
+        const filtered = activeMode === "single"
+          ? mapped.filter((m) => m.isSystem || m.agentKey === "A").slice(0, 2)
+          : mapped;
         setMsgQueue(filtered);
       }
     } catch (err) {
@@ -2310,10 +2442,11 @@ export default function Chat() {
     }
   };
 
+
   const handleLoadHistory = async () => {
     if (!currentConv?.roomId) return;
     try {
-      const res = await fetch(`${API_BASE}/history/${currentConv.roomId}`);
+      const res = await authFetch(`/history/${currentConv.roomId}`);
       if (!res.ok) return;
       const data = await res.json();
       const runtimeMap: Record<string, AgentKey> = {};
@@ -2336,8 +2469,20 @@ export default function Chat() {
       if (Object.keys(runtimeBackendNames).length > 0) {
         setAgentBackendNames((prev) => ({ ...prev, ...runtimeBackendNames }));
       }
-      const messages: Message[] = (data.history || []).map((h: { character: string; txt: string }, i: number) => {
-        if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (data.history.length - i) * 1000 };
+      const hist = data.history || [];
+      const messages: Message[] = hist.map((
+        h: { character: string; txt: string },
+        i: number,
+      ) => {
+        if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+        if (h.character === "system") {
+          return {
+            id: `h-${i}`,
+            role: "system" as const,
+            content: h.txt,
+            timestamp: Date.now() - (hist.length - i) * 1000,
+          };
+        }
         const agentKey = runtimeMap[h.character] ?? BACKEND_NAME_TO_KEY[h.character] ?? "A";
         const currentSetting = agentSettingsRef.current[agentKey];
         return {
@@ -2345,11 +2490,12 @@ export default function Chat() {
           role: "agent" as const,
           agentKey,
           content: h.txt,
-          timestamp: Date.now() - (data.history.length - i) * 1000,
+          timestamp: Date.now() - (hist.length - i) * 1000,
           emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
         };
       });
       setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, messages } : c));
+      if (data.phase) setCurrentPhase(data.phase);
     } catch {}
   };
 
@@ -2480,6 +2626,40 @@ export default function Chat() {
     setTypingKeys([]);
     setMsgQueue([]);
     setSidebarOpen(false);
+    // Past rooms restored from DB often have empty messages — pull history
+    if (conv?.roomId && (!conv.messages || conv.messages.length === 0)) {
+      void (async () => {
+        try {
+          const res = await authFetch(`/history/${conv.roomId}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          const hist = data.history || [];
+          const messages: Message[] = hist.map((
+            h: { character: string; txt: string },
+            i: number,
+          ) => {
+            if (h.character === "user") {
+              return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+            }
+            if (h.character === "system") {
+              return { id: `h-${i}`, role: "system" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+            }
+            const agentKey = (BACKEND_NAME_TO_KEY[h.character] ?? "A") as AgentKey;
+            return {
+              id: `h-${i}`,
+              role: "agent" as const,
+              agentKey,
+              content: h.txt,
+              timestamp: Date.now() - (hist.length - i) * 1000,
+                };
+          });
+          setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, messages } : c)));
+          if (data.phase) setCurrentPhase(data.phase);
+        } catch {
+          /* ignore */
+        }
+      })();
+    }
   }, [conversations, loadConvSettings]);
   const handleOpenAdvancedAgent = useCallback((key: AgentKey) => {
     setCustomizerInitialAgent(key);
@@ -2927,7 +3107,9 @@ export default function Chat() {
             {currentConv && (
               <div className="flex items-center gap-1.5 pr-3 border-r border-black/10" style={monoFont}>
                 <span className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest">Turn {currentConv.messages?.filter((m) => m.role === "user").length ?? 0}</span>
-                {showPhaseIndicator && currentPhase && <span className="text-[10px] text-[var(--app-muted-text)]">· Phase: {currentPhase}</span>}
+                {showPhaseIndicator && currentPhase && (
+                  <span className="text-[10px] text-[var(--app-muted-text)]">· Phase: {currentPhase}</span>
+                )}
               </div>
             )}
             {(currentConv?.settings?.mode === "single" ? ["A"] : AGENT_KEYS).map((key) => (
@@ -3102,15 +3284,17 @@ export default function Chat() {
                   >
                     <div className="flex items-center gap-1.5 mb-1">
                       <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: selectedScene?.color || "#000000" }} />
-                      <span className="text-[10px] tracking-widest text-black" style={monoFont}>{selectedScene?.title || scenes[0]?.title || "Laptop Purchase Advisory"}</span>
+                      <span className="text-[10px] tracking-widest text-black" style={monoFont}>{selectedScene?.title || "Select a scene"}</span>
                       {sessionIndex != null && (
                         <span className="text-[9px] text-black/50 ml-1" style={monoFont}>· Session {sessionIndex}</span>
                       )}
                       <span className="text-[9px] text-black/40 ml-auto" style={monoFont}>{uiLang === "zh" ? "中文" : "EN"}</span>
                     </div>
-                    <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{selectedScene?.description || scenes[0]?.description || "Professional advice for Black Friday laptop shopping. Three AI agents analyze from different perspectives."}</p>
+                    <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{selectedScene?.description || "Choose employment, parent-child, or another scenario before chatting. Nothing starts until you pick one."}</p>
                     <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>
-                      {agora2Intake ? "intake ready · click to change →" : "click to choose scenario →"}
+                      {selectedScene
+                        ? (agora2Intake ? "intake ready · click to change →" : "click to change scenario →")
+                        : "click to choose scenario →"}
                     </p>
                   </motion.button>
                 </div>
@@ -3166,6 +3350,9 @@ export default function Chat() {
                         onChatAnnotationDraft={onChatAnnotationDraft}
                       />
                     );
+                  }
+                  if (msg.role === "system") {
+                    return <SystemMessage key={msg.id} message={msg} />;
                   }
                   const compactRepeatedIntro = !!(msg.agentKey && userTurnCount === 1 && firstTurnAgentSeen[msg.agentKey]);
                   if (msg.agentKey && userTurnCount === 1) {
@@ -3250,7 +3437,8 @@ export default function Chat() {
               </div>
               <div className="flex-1 min-h-[48px] bg-black rounded-[12px] flex items-center px-4 py-3">
                 <textarea ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={handleKeyDown}
-                  placeholder="Enter a question or topic to explore..." rows={1} disabled={isLoading}
+                  placeholder="Enter a question or topic to explore..."
+                  rows={1} disabled={isLoading}
                   className="flex-1 min-h-[24px] bg-transparent resize-none outline-none text-white placeholder-[#828282] leading-relaxed disabled:opacity-50"
                   style={{ ...monoFont, fontSize: "13px", maxHeight: "120px" }}
                   onInput={(e) => autoResizeInput(e.currentTarget)} />

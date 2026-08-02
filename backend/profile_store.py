@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from lang_utils import normalize_lang, pick, header, SECTION_HEADERS
 
@@ -240,29 +240,80 @@ def collect_scenario_intake(scenario_type: str, template: dict, lang: str = "zh"
     return intake
 
 
-def append_session_history(user_id: str, scenario_type: str, intake: dict,
-                            profiles_dir: str = PROFILES_DIR_DEFAULT) -> str:
-    """Records this session's intake so future sessions can offer it as a default hint."""
+def append_session_history(
+    user_id: str,
+    scenario_type: str,
+    intake: dict,
+    profiles_dir: str = PROFILES_DIR_DEFAULT,
+    session_id: Optional[str] = None,
+) -> str:
+    """Records this session's intake so future sessions can offer it as a default hint.
+
+    Dual-writes JSON profile session_history + SQLite session_intake when possible.
+    Prefer passing room_id as session_id so DB joins stay stable.
+    """
     data = load_profile(user_id, profiles_dir)
-    session_id = f"{scenario_type}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    sid = (session_id or "").strip() or f"{scenario_type}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     data["session_history"].append({
-        "session_id": session_id,
+        "session_id": sid,
         "scenario_type": scenario_type,
         "intake": intake,
         "date": _now_iso(),
     })
     save_profile(user_id, data, profiles_dir)
-    return session_id
+    try:
+        from user_store import get_user_store
+        get_user_store().upsert_session_intake(sid, user_id, scenario_type, intake or {})
+    except Exception:
+        pass
+    return sid
 
 
 def most_recent_intake(user_id: str, scenario_type: str,
                         profiles_dir: str = PROFILES_DIR_DEFAULT) -> Optional[dict]:
     """Used to prefill defaults, e.g. 'last time deadline was 2 weeks, same this time?'."""
+    try:
+        from user_store import get_user_store
+        db_intake = get_user_store().most_recent_session_intake(user_id, scenario_type)
+        if db_intake:
+            return db_intake
+    except Exception:
+        pass
     data = load_profile(user_id, profiles_dir)
     for entry in reversed(data.get("session_history", [])):
         if entry["scenario_type"] == scenario_type:
             return entry["intake"]
     return None
+
+
+def _display_field_value(field: dict, value: Any, lang: str, unfilled: str) -> str:
+    """Resolve select codes to labels; leave lists/text as-is."""
+    if value in (None, "", []):
+        return unfilled
+    if field.get("type") == "select" and isinstance(value, str):
+        for opt in field.get("options") or []:
+            if str(opt.get("value")) == value:
+                lab = opt.get("label")
+                if isinstance(lab, dict):
+                    return pick(lab, lang) or value
+                if lab:
+                    return str(lab)
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if field.get("type") == "multi_select" or field.get("options"):
+                matched = None
+                for opt in field.get("options") or []:
+                    if str(opt.get("value")) == str(item):
+                        lab = opt.get("label")
+                        matched = pick(lab, lang) if isinstance(lab, dict) else (str(lab) if lab else str(item))
+                        break
+                parts.append(matched or str(item))
+            else:
+                parts.append(str(item))
+        return ", ".join(parts)
+    return str(value)
 
 
 # -------------------------------------------------------------------------
@@ -287,14 +338,14 @@ def format_known_context(scenario_type: str, profile: dict, intake: dict,
     profile_label = "Profile" if lang == "en" else "用户画像"
     scenario_label = "This decision" if lang == "en" else "本次场景"
     lines.append(f"[{profile_label}]")
-    for field in cfg["profile_fields"]:
+    for field in cfg.get("profile_fields") or []:
         key = field["key"]
         label = pick(field["question"], lang)
         value = profile.get(key)
-        lines.append(f"- {label} -> {value if value not in (None, '', []) else unfilled}")
+        lines.append(f"- {label} -> {_display_field_value(field, value, lang, unfilled)}")
 
     lines.append(f"[{scenario_label}]")
-    for field in cfg["scenario_fields"]:
+    for field in cfg.get("scenario_fields") or []:
         key = field["key"]
         label = pick(field["question"], lang)
         value = intake.get(key)
@@ -303,7 +354,14 @@ def format_known_context(scenario_type: str, profile: dict, intake: dict,
         # a parent's account, never the child's own words — flag it inline.
         if scenario_type == "parent_child" and key == "child_stated_preference" and value not in (None, "", []):
             suffix = f" {reported_by_parent}"
-        lines.append(f"- {label} -> {value if value not in (None, '', []) else unfilled}{suffix}")
+        display = _display_field_value(field, value, lang, unfilled)
+        lines.append(f"- {label} -> {display}{suffix}")
+
+    # Free-text setup hint (not a template field) — always surface when present
+    hint = (intake.get("hint") or profile.get("hint") or "").strip()
+    if hint:
+        hint_label = "Setup hint" if lang == "en" else "开场补充"
+        lines.append(f"- {hint_label} -> {hint}")
 
     return "\n".join(lines)
 

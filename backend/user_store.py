@@ -67,6 +67,60 @@ class UserStore:
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 );
+                CREATE TABLE IF NOT EXISTS chat_rooms (
+                    room_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    scenario_type TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    phase TEXT NOT NULL DEFAULT 'Exploration',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    concluded INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_rooms_user
+                    ON chat_rooms(user_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    room_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    character TEXT NOT NULL DEFAULT '',
+                    txt TEXT NOT NULL DEFAULT '',
+                    clarifying_question_json TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(room_id, seq)
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_room
+                    ON chat_messages(room_id, seq);
+                CREATE TABLE IF NOT EXISTS session_memory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    scenario_type TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    date TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    open_threads_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, scenario_type, session_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_memory_user
+                    ON session_memory(user_id, scenario_type, created_at DESC);
+                CREATE TABLE IF NOT EXISTS session_intake (
+                    session_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    scenario_type TEXT NOT NULL,
+                    intake_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_intake_user
+                    ON session_intake(user_id, scenario_type, created_at DESC);
+                CREATE TABLE IF NOT EXISTS session_board_snapshot (
+                    session_id TEXT PRIMARY KEY,
+                    option_facts_json TEXT NOT NULL DEFAULT '{}',
+                    constraints_json TEXT NOT NULL DEFAULT '[]',
+                    eliminations_json TEXT NOT NULL DEFAULT '[]',
+                    artifact_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -372,11 +426,524 @@ class UserStore:
                 ).fetchone()["c"]
                 if int(admin_count) <= 1:
                     return False, "Cannot delete the last admin"
+            # Cascade chat / memory rows for this user
+            room_ids = [
+                r["room_id"]
+                for r in conn.execute(
+                    "SELECT room_id FROM chat_rooms WHERE user_id = ?", (uid,)
+                ).fetchall()
+            ]
+            for rid in room_ids:
+                conn.execute("DELETE FROM chat_messages WHERE room_id = ?", (rid,))
+                conn.execute("DELETE FROM session_board_snapshot WHERE session_id = ?", (rid,))
+            conn.execute("DELETE FROM chat_rooms WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM session_memory WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM session_intake WHERE user_id = ?", (uid,))
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
             conn.execute("DELETE FROM profiles WHERE user_id = ?", (uid,))
             conn.execute("DELETE FROM users WHERE user_id = ?", (uid,))
             conn.commit()
         return True, None
+
+    # ------------------------------------------------------------------
+    # Chat rooms / messages / memory / intake / board snapshots
+    # ------------------------------------------------------------------
+
+    def create_chat_room(
+        self,
+        room_id: str,
+        user_id: str,
+        scenario_type: str = "",
+        title: str = "",
+        phase: str = "Exploration",
+    ) -> dict:
+        now = _iso(_now())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_rooms
+                    (room_id, user_id, scenario_type, title, phase, created_at, updated_at, concluded)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT(room_id) DO UPDATE SET
+                    updated_at = excluded.updated_at,
+                    -- Never steal ownership: only fill user_id when previously empty
+                    user_id = CASE
+                        WHEN chat_rooms.user_id = '' AND excluded.user_id != '' THEN excluded.user_id
+                        ELSE chat_rooms.user_id END,
+                    scenario_type = CASE
+                        WHEN excluded.scenario_type != '' THEN excluded.scenario_type
+                        ELSE chat_rooms.scenario_type END,
+                    title = CASE
+                        WHEN excluded.title != '' THEN excluded.title
+                        ELSE chat_rooms.title END
+                """,
+                (room_id, user_id or "", scenario_type or "", title or "", phase or "Exploration", now, now),
+            )
+            conn.commit()
+        return {
+            "room_id": room_id,
+            "user_id": user_id,
+            "scenario_type": scenario_type,
+            "title": title,
+            "phase": phase,
+            "created_at": now,
+            "updated_at": now,
+            "concluded": False,
+        }
+
+    def update_chat_room(
+        self,
+        room_id: str,
+        *,
+        title: Optional[str] = None,
+        phase: Optional[str] = None,
+        concluded: Optional[bool] = None,
+    ) -> None:
+        now = _iso(_now())
+        sets = ["updated_at = ?"]
+        args: List[Any] = [now]
+        if title is not None:
+            sets.append("title = ?")
+            args.append(title)
+        if phase is not None:
+            sets.append("phase = ?")
+            args.append(phase)
+        if concluded is not None:
+            sets.append("concluded = ?")
+            args.append(1 if concluded else 0)
+        args.append(room_id)
+        with self._connect() as conn:
+            conn.execute(f"UPDATE chat_rooms SET {', '.join(sets)} WHERE room_id = ?", args)
+            conn.commit()
+
+    def append_chat_message(
+        self,
+        room_id: str,
+        character: str,
+        txt: str,
+        clarifying_question: Optional[dict] = None,
+        created_at: Optional[str] = None,
+    ) -> int:
+        """Append one message; returns seq. Idempotent on (room_id, seq) via next seq."""
+        ts = created_at or _iso(_now())
+        cq_json = json.dumps(clarifying_question, ensure_ascii=False) if clarifying_question else None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS m FROM chat_messages WHERE room_id = ?",
+                (room_id,),
+            ).fetchone()
+            seq = int(row["m"] or 0) + 1
+            conn.execute(
+                """
+                INSERT INTO chat_messages
+                    (room_id, seq, character, txt, clarifying_question_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (room_id, seq, character or "", txt or "", cq_json, ts),
+            )
+            conn.execute(
+                "UPDATE chat_rooms SET updated_at = ? WHERE room_id = ?",
+                (ts, room_id),
+            )
+            conn.commit()
+        return seq
+
+    def list_chat_rooms(self, user_id: str, limit: int = 50) -> List[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT room_id, user_id, scenario_type, title, phase,
+                       created_at, updated_at, concluded
+                FROM chat_rooms
+                WHERE user_id = ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (user_id, max(1, int(limit))),
+            ).fetchall()
+        return [
+            {
+                "room_id": r["room_id"],
+                "user_id": r["user_id"],
+                "scenario_type": r["scenario_type"],
+                "title": r["title"],
+                "phase": r["phase"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+                "concluded": bool(r["concluded"]),
+            }
+            for r in rows
+        ]
+
+    def get_chat_room(self, room_id: str) -> Optional[dict]:
+        with self._connect() as conn:
+            r = conn.execute(
+                """
+                SELECT room_id, user_id, scenario_type, title, phase,
+                       created_at, updated_at, concluded
+                FROM chat_rooms WHERE room_id = ?
+                """,
+                (room_id,),
+            ).fetchone()
+        if not r:
+            return None
+        return {
+            "room_id": r["room_id"],
+            "user_id": r["user_id"],
+            "scenario_type": r["scenario_type"],
+            "title": r["title"],
+            "phase": r["phase"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+            "concluded": bool(r["concluded"]),
+        }
+
+    def delete_chat_room(self, room_id: str) -> Tuple[bool, Optional[str], Optional[dict]]:
+        """Delete one session (room + messages + intake/board/memory for that session_id).
+
+        Does not touch users/profiles. Returns (ok, error, deleted_meta).
+        """
+        rid = (room_id or "").strip()
+        if not rid:
+            return False, "room_id required", None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT room_id, user_id, scenario_type, title FROM chat_rooms WHERE room_id = ?",
+                (rid,),
+            ).fetchone()
+            if not row:
+                return False, "Room not found", None
+            meta = {
+                "room_id": row["room_id"],
+                "user_id": row["user_id"],
+                "scenario_type": row["scenario_type"] or "",
+                "title": row["title"] or "",
+            }
+            conn.execute("DELETE FROM chat_messages WHERE room_id = ?", (rid,))
+            conn.execute("DELETE FROM session_board_snapshot WHERE session_id = ?", (rid,))
+            conn.execute("DELETE FROM session_intake WHERE session_id = ?", (rid,))
+            conn.execute(
+                "DELETE FROM session_memory WHERE session_id = ?",
+                (rid,),
+            )
+            conn.execute("DELETE FROM chat_rooms WHERE room_id = ?", (rid,))
+            conn.commit()
+        return True, None, meta
+
+    def delete_session_memory(
+        self, user_id: str, session_id: str, scenario_type: str = ""
+    ) -> Tuple[bool, Optional[str]]:
+        """Delete a memory row (and optionally scope by scenario_type)."""
+        uid = (user_id or "").strip()
+        sid = (session_id or "").strip()
+        if not uid or not sid:
+            return False, "user_id and session_id required"
+        with self._connect() as conn:
+            if scenario_type:
+                cur = conn.execute(
+                    """
+                    DELETE FROM session_memory
+                    WHERE user_id = ? AND session_id = ? AND scenario_type = ?
+                    """,
+                    (uid, sid, scenario_type),
+                )
+            else:
+                cur = conn.execute(
+                    "DELETE FROM session_memory WHERE user_id = ? AND session_id = ?",
+                    (uid, sid),
+                )
+            conn.commit()
+            if cur.rowcount <= 0:
+                return False, "Memory record not found"
+        return True, None
+
+    def list_chat_messages(self, room_id: str) -> List[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT seq, character, txt, clarifying_question_json, created_at
+                FROM chat_messages
+                WHERE room_id = ?
+                ORDER BY seq ASC
+                """,
+                (room_id,),
+            ).fetchall()
+        out = []
+        for r in rows:
+            cq = None
+            if r["clarifying_question_json"]:
+                try:
+                    cq = json.loads(r["clarifying_question_json"])
+                except json.JSONDecodeError:
+                    cq = None
+            out.append({
+                "seq": r["seq"],
+                "character": r["character"],
+                "txt": r["txt"],
+                "clarifying_question": cq,
+                "created_at": r["created_at"],
+            })
+        return out
+
+    def upsert_session_memory(
+        self,
+        user_id: str,
+        scenario_type: str,
+        session_id: str,
+        date: str,
+        summary: str,
+        open_threads: Optional[List[str]] = None,
+    ) -> dict:
+        now = _iso(_now())
+        threads = [str(t).strip() for t in (open_threads or []) if str(t).strip()]
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO session_memory
+                    (user_id, scenario_type, session_id, date, summary, open_threads_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, scenario_type, session_id) DO UPDATE SET
+                    date = excluded.date,
+                    summary = excluded.summary,
+                    open_threads_json = excluded.open_threads_json
+                """,
+                (
+                    user_id,
+                    scenario_type,
+                    session_id,
+                    date or "",
+                    summary or "",
+                    json.dumps(threads, ensure_ascii=False),
+                    now,
+                ),
+            )
+            conn.commit()
+        return {
+            "session_id": session_id,
+            "date": date,
+            "summary": summary,
+            "open_threads": threads,
+        }
+
+    def load_session_memory(
+        self, user_id: str, scenario_type: str, limit: int = 3
+    ) -> List[dict]:
+        with self._connect() as conn:
+            if limit and limit > 0:
+                rows = conn.execute(
+                    """
+                    SELECT session_id, date, summary, open_threads_json, created_at
+                    FROM session_memory
+                    WHERE user_id = ? AND scenario_type = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, scenario_type, limit),
+                ).fetchall()
+                rows = list(reversed(rows))
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT session_id, date, summary, open_threads_json, created_at
+                    FROM session_memory
+                    WHERE user_id = ? AND scenario_type = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (user_id, scenario_type),
+                ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                threads = json.loads(r["open_threads_json"] or "[]")
+            except json.JSONDecodeError:
+                threads = []
+            if not isinstance(threads, list):
+                threads = []
+            out.append({
+                "session_id": r["session_id"],
+                "date": r["date"],
+                "summary": r["summary"],
+                "open_threads": threads,
+            })
+        return out
+
+    def upsert_session_intake(
+        self,
+        session_id: str,
+        user_id: str,
+        scenario_type: str,
+        intake: dict,
+    ) -> None:
+        now = _iso(_now())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO session_intake
+                    (session_id, user_id, scenario_type, intake_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    intake_json = excluded.intake_json,
+                    scenario_type = excluded.scenario_type
+                """,
+                (session_id, user_id, scenario_type, json.dumps(intake or {}, ensure_ascii=False), now),
+            )
+            conn.commit()
+
+    def get_session_intake(self, session_id: str) -> Optional[dict]:
+        with self._connect() as conn:
+            r = conn.execute(
+                "SELECT session_id, user_id, scenario_type, intake_json, created_at FROM session_intake WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if not r:
+            return None
+        try:
+            intake = json.loads(r["intake_json"] or "{}")
+        except json.JSONDecodeError:
+            intake = {}
+        return {
+            "session_id": r["session_id"],
+            "user_id": r["user_id"],
+            "scenario_type": r["scenario_type"],
+            "intake": intake if isinstance(intake, dict) else {},
+            "created_at": r["created_at"],
+        }
+
+    def most_recent_session_intake(self, user_id: str, scenario_type: str) -> Optional[dict]:
+        with self._connect() as conn:
+            r = conn.execute(
+                """
+                SELECT intake_json FROM session_intake
+                WHERE user_id = ? AND scenario_type = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (user_id, scenario_type),
+            ).fetchone()
+        if not r:
+            return None
+        try:
+            intake = json.loads(r["intake_json"] or "{}")
+        except json.JSONDecodeError:
+            return None
+        return intake if isinstance(intake, dict) else None
+
+    def upsert_board_snapshot(
+        self,
+        session_id: str,
+        *,
+        option_facts: Optional[dict] = None,
+        constraints: Optional[list] = None,
+        eliminations: Optional[list] = None,
+        artifact: Optional[dict] = None,
+    ) -> None:
+        now = _iso(_now())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO session_board_snapshot
+                    (session_id, option_facts_json, constraints_json,
+                     eliminations_json, artifact_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    option_facts_json = excluded.option_facts_json,
+                    constraints_json = excluded.constraints_json,
+                    eliminations_json = excluded.eliminations_json,
+                    artifact_json = excluded.artifact_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    session_id,
+                    json.dumps(option_facts or {}, ensure_ascii=False),
+                    json.dumps(constraints or [], ensure_ascii=False),
+                    json.dumps(eliminations or [], ensure_ascii=False),
+                    json.dumps(artifact or {}, ensure_ascii=False),
+                    now,
+                ),
+            )
+            conn.commit()
+
+    def get_board_snapshot(self, session_id: str) -> Optional[dict]:
+        with self._connect() as conn:
+            r = conn.execute(
+                """
+                SELECT option_facts_json, constraints_json, eliminations_json,
+                       artifact_json, updated_at
+                FROM session_board_snapshot WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        if not r:
+            return None
+
+        def _loads(s, default):
+            try:
+                return json.loads(s or json.dumps(default))
+            except json.JSONDecodeError:
+                return default
+
+        return {
+            "option_facts": _loads(r["option_facts_json"], {}),
+            "constraints": _loads(r["constraints_json"], []),
+            "eliminations": _loads(r["eliminations_json"], []),
+            "artifact": _loads(r["artifact_json"], {}),
+            "updated_at": r["updated_at"],
+        }
+
+    def export_user_bundle(
+        self, user_id: str, scenario_type: Optional[str] = None
+    ) -> dict:
+        """Full export payload for admin/user download."""
+        uid = (user_id or "").strip()
+        profile = self.get_profile(uid)
+        rooms = self.list_chat_rooms(uid, limit=500)
+        if scenario_type:
+            rooms = [r for r in rooms if r.get("scenario_type") == scenario_type]
+        room_payloads = []
+        for room in rooms:
+            rid = room["room_id"]
+            room_payloads.append({
+                "room": room,
+                "messages": self.list_chat_messages(rid),
+                "intake": self.get_session_intake(rid),
+                "board_snapshot": self.get_board_snapshot(rid),
+            })
+        memory: List[dict] = []
+        scenarios = {r.get("scenario_type") for r in rooms if r.get("scenario_type")}
+        if scenario_type:
+            scenarios = {scenario_type}
+        if not scenarios:
+            # still export all memory rows for user
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT user_id, scenario_type, session_id, date, summary, open_threads_json
+                    FROM session_memory WHERE user_id = ? ORDER BY created_at ASC
+                    """,
+                    (uid,),
+                ).fetchall()
+            for r in rows:
+                try:
+                    threads = json.loads(r["open_threads_json"] or "[]")
+                except json.JSONDecodeError:
+                    threads = []
+                memory.append({
+                    "session_id": r["session_id"],
+                    "scenario_type": r["scenario_type"],
+                    "date": r["date"],
+                    "summary": r["summary"],
+                    "open_threads": threads,
+                })
+        else:
+            for sc in sorted(scenarios):
+                for rec in self.load_session_memory(uid, sc, limit=0):
+                    memory.append({**rec, "scenario_type": sc})
+        return {
+            "user_id": uid,
+            "profile": profile.get("profile") or {},
+            "rooms": room_payloads,
+            "session_memory": memory,
+            "exported_at": _iso(_now()),
+        }
 
 
 def profile_complete(profile: dict, fields: List[dict]) -> bool:

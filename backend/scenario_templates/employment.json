@@ -137,8 +137,8 @@
       "type": "list",
       "optional": false,
       "question": {
-        "zh": "目前在比较的选项有哪些？（公司名、职级、薪酬、地点，可多条）",
-        "en": "What options are you comparing? (company, level, salary, location — multiple allowed)"
+        "zh": "目前在比较的选项有哪些？每条是一个完整选项（可写：公司、职级、薪酬、地点）；用「添加」加下一条。",
+        "en": "What options are you comparing? Each entry is one full option (e.g. company, level, salary, location in one line); use Add for the next option."
       }
     },
     {

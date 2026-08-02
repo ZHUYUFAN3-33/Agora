@@ -9,34 +9,5 @@
     "past_conflict_pattern": "",
     "last_updated": "2026-07-22T09:10:06+00:00"
   },
-  "session_history": [
-    {
-      "session_id": "parent_child_20260722090947",
-      "scenario_type": "parent_child",
-      "intake": {
-        "decision_topic": "whether to sign the child up for a weekend coding class",
-        "decision_owner": "child_decides_with_guidance",
-        "child_stated_preference": "the child wants to learn coding because a classmate is doing it",
-        "parent_stated_concern": "worried it will eat into outdoor time and rest, and unsure if the interest is genuine or just peer influence",
-        "disagreement_exists": "no",
-        "urgency": "registration for the next term closes next week",
-        "external_input": "the teacher thinks the child has good logical thinking and could try it"
-      },
-      "date": "2026-07-22T09:09:47+00:00"
-    },
-    {
-      "session_id": "parent_child_20260722091006",
-      "scenario_type": "parent_child",
-      "intake": {
-        "decision_topic": "whether to sign the child up for a weekend coding class",
-        "decision_owner": "child_decides_with_guidance",
-        "child_stated_preference": "the child wants to learn coding because a classmate is doing it",
-        "parent_stated_concern": "worried it will eat into outdoor time and rest, and unsure if the interest is genuine or just peer influence",
-        "disagreement_exists": "no",
-        "urgency": "registration for the next term closes next week",
-        "external_input": "the teacher thinks the child has good logical thinking and could try it"
-      },
-      "date": "2026-07-22T09:10:06+00:00"
-    }
-  ]
+  "session_history": []
 }

@@ -50,11 +50,18 @@ def load_recent_sessions(
 ) -> List[dict]:
     """Return up to `limit` most-recent session records (oldest -> newest).
 
-    Empty list when there is no user_id/scenario_type or no file yet (first-ever
-    session for this pair). Malformed lines are skipped, not fatal.
+    Prefers SQLite (UserStore); falls back to JSONL when DB is empty/unavailable.
     """
     if not user_id or not scenario_type:
         return []
+    # Prefer DB
+    try:
+        from user_store import get_user_store
+        db_recs = get_user_store().load_session_memory(user_id, scenario_type, limit=limit)
+        if db_recs:
+            return db_recs
+    except Exception:
+        pass
     path = memory_path(user_id, scenario_type, dir_path)
     if not os.path.exists(path):
         return []
@@ -186,6 +193,19 @@ def append_session_record(
         "summary": summary,
         "open_threads": open_threads or [],
     }
+    # Dual-write: JSONL (legacy) + SQLite (source of truth for UI/admin)
     with open(memory_path(user_id, scenario_type, dir_path), "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    try:
+        from user_store import get_user_store
+        get_user_store().upsert_session_memory(
+            user_id=user_id,
+            scenario_type=scenario_type,
+            session_id=session_id,
+            date=date,
+            summary=summary or "",
+            open_threads=open_threads or [],
+        )
+    except Exception:
+        pass
     return record

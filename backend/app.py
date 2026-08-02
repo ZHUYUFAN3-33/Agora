@@ -51,7 +51,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 import agentwake_new as agent_module
 
-# Agora-2 adapter (friend backend: profile/intake/stance/assembly)
+# Agora-2 adapter (profile/intake/stance/assembly)
 try:
     import agora2_http
     HAVE_AGORA2 = True
@@ -101,12 +101,13 @@ CORS(app)
 # Configuration
 TZ = ZoneInfo("Asia/Tokyo")
 Speaker = Literal["A", "B", "C", "U"]
-PREFER_AGENTS = 0.85  # When admin chooses U, override to random agent with this probability
-
 # Load API key from environment (.env supported). No hardcoded fallback key.
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 load_dotenv(os.path.join(os.path.dirname(BASE_DIR), ".env"))
 API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
+# Agora-2: high prefer_agents starved the moderator / blocked hand-back to user.
+# Default 0 = respect Admin U; override via AGORA_PREFER_AGENTS if needed.
+PREFER_AGENTS = float(os.getenv("AGORA_PREFER_AGENTS") or "0.85")
 
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
@@ -314,6 +315,79 @@ def append_jsonl(fp, obj: dict):
     fp.flush()
 
 
+def _room_title_for_session(session: Optional[dict], room_id: str = "") -> str:
+    s = session or {}
+    scenario = (s.get("scenario_type") or s.get("scene_id") or "").strip()
+    if scenario == "employment":
+        return "Employment Decision"
+    if scenario == "parent_child":
+        return "Parent-Child Decision"
+    if scenario:
+        return scenario.replace("_", " ").title()
+    return (room_id or "Chat").strip() or "Chat"
+
+
+def _persist_chat_message_db(
+    room_id: str,
+    msg: dict,
+    session: Optional[dict] = None,
+) -> None:
+    """Dual-write one chat line into SQLite (best-effort). Ensures room row exists."""
+    if not HAVE_USER_STORE or not room_id or not isinstance(msg, dict):
+        return
+    try:
+        store = get_user_store()
+        if not store.get_chat_room(room_id):
+            uid = ""
+            scenario = ""
+            if isinstance(session, dict):
+                uid = str(session.get("user_id") or "")
+                scenario = str(session.get("scenario_type") or session.get("scene_id") or "")
+            if not uid:
+                try:
+                    auth_user = store.resolve_token(_bearer_token())
+                    if auth_user:
+                        uid = auth_user["user_id"]
+                except Exception:
+                    pass
+            if uid:
+                store.create_chat_room(
+                    room_id,
+                    uid,
+                    scenario_type=scenario,
+                    title=_room_title_for_session(session, room_id),
+                    phase=((session or {}).get("moderator_state") or {}).get("state") or "Exploration",
+                )
+        store.append_chat_message(
+            room_id,
+            character=str(msg.get("character") or ""),
+            txt=str(msg.get("txt") or ""),
+            clarifying_question=None,
+            created_at=str(msg.get("time") or "") or None,
+        )
+    except Exception as e:
+        print(f"⚠ chat_messages persist: {e}")
+
+
+def _sync_room_meta(session: dict, room_id: str, *, title: Optional[str] = None) -> None:
+    if not HAVE_USER_STORE or not room_id:
+        return
+    try:
+        phase = (session.get("moderator_state") or {}).get("state") or "Exploration"
+        concluded = phase == "Concluded"
+        if not title:
+            existing = get_user_store().get_chat_room(room_id)
+            if not existing or not (existing.get("title") or "").strip():
+                title = _room_title_for_session(session, room_id)
+        get_user_store().update_chat_room(
+            room_id, title=title, phase=phase, concluded=concluded
+        )
+    except Exception as e:
+        print(f"⚠ room meta persist: {e}")
+
+
+
+
 @app.route('/')
 def index():
     """API root — product UI is the React app on :5173"""
@@ -328,7 +402,7 @@ def index():
 def start_chat():
     """Start a new chat session"""
     data = request.json or {}
-    scene_id = (data.get("scene_id") or "scene1").strip()
+    scene_id = (data.get("scene_id") or "").strip()
     mode = (data.get("mode") or "full").strip().lower()
     if mode not in {"full", "limited", "single"}:
         mode = "full"
@@ -344,9 +418,14 @@ def start_chat():
         and agora2_http.is_agora2_scenario(scenario_type)
     )
 
+    if not scene_id:
+        return jsonify({"error": "scene_id is required. Select a scenario before starting."}), 400
+
     if not use_agora2:
         if scene_id not in SCENES:
-            scene_id = "scene1" if SCENES else ""
+            return jsonify({
+                "error": f"Unknown scene_id '{scene_id}'. Available: {sorted(SCENES.keys())}",
+            }), 400
 
     room_id = make_room_id_6()
     session = init_session(room_id)
@@ -398,6 +477,10 @@ def start_chat():
                     profile = raw.get("profile", raw) if isinstance(raw, dict) else {}
                     break
 
+        # Surface setup hint inside known_context via intake.hint
+        if hint and isinstance(intake, dict):
+            intake = {**intake, "hint": hint}
+
         ctx = agora2_http.prepare_http_context(
             scenario_type=scenario_type,
             lang=lang,
@@ -406,6 +489,7 @@ def start_chat():
             user_id=user_id,
             persist=True,
             session_update=session_update,
+            session_id=room_id,
         )
         session["agora2"] = ctx
         session["scenario_type"] = scenario_type
@@ -441,6 +525,34 @@ def start_chat():
 
     session_agents, _, _ = _make_session_agents(session)
     chat_sessions[room_id] = session
+
+    # Persist room row for re-login / admin (even for legacy pipeline)
+    if HAVE_USER_STORE:
+        try:
+            uid = session.get("user_id") or ""
+            if not uid and HAVE_USER_STORE:
+                auth_user = get_user_store().resolve_token(_bearer_token())
+                if auth_user:
+                    uid = auth_user["user_id"]
+                    session["user_id"] = uid
+            if uid:
+                get_user_store().create_chat_room(
+                    room_id,
+                    uid,
+                    scenario_type=session.get("scenario_type") or session.get("scene_id") or "",
+                    title=_room_title_for_session(session, room_id),
+                    phase=(session.get("moderator_state") or {}).get("state") or "Exploration",
+                )
+                if session.get("pipeline") == "agora2":
+                    agora2 = session.get("agora2") or {}
+                    get_user_store().upsert_session_intake(
+                        room_id,
+                        uid,
+                        session.get("scenario_type") or "",
+                        agora2.get("intake") or {},
+                    )
+        except Exception as room_err:
+            print(f"⚠ chat_rooms create: {room_err}")
 
     agents_payload = []
     for slot in SLOT_KEYS:
@@ -480,160 +592,35 @@ def normalize_lang_safe(lang: str) -> str:
 
 @app.route('/api/message', methods=['POST'])
 def send_message():
-    """Send a user message and get agent responses"""
-    data = request.json
+    """Send a user message and get agent responses (Agora-2 loop, prose only)."""
+    data = request.json or {}
     room_id = data.get("room_id")
-    user_message = data.get("message", "").strip()
-    
+    user_message = (data.get("message") or "").strip()
+
     if not room_id or room_id not in chat_sessions:
         return jsonify({"error": "Invalid room_id"}), 400
-    
     if not user_message:
         return jsonify({"error": "Message cannot be empty"}), 400
-    
+
     session = chat_sessions[room_id]
-    session_mode = session.get("mode", "full")
     agents, agent_list, all_agent_names = _make_session_agents(session)
 
-    # Emotion mode: optional emotion_tag + emotion_target from frontend
-    emotion_tag    = data.get("emotion_tag")     # e.g. "joy", "anger", None
-    emotion_target = data.get("emotion_target")  # "all" | "A" | "B" | "C" | None
-
-    # Per-agent emotion overrides from customizer (key→emotion_tag)
-    agent_emotion_overrides = data.get("agent_emotion_overrides") or {}  # {"A": "joy", ...}
-
-    # Per-agent additional rules from customizer
-    additional_rules = data.get("additional_rules") or {}  # {"A": "...", ...}
-
-    # Per-agent decision block (Rational, Intuitive, etc.)
-    agent_decision_block = data.get("agent_decision_block") or {}  # {"A": "Rational", ...}
-
-    # Global pacing: when to let user speak (NOT per-agent)
+    emotion_tag = data.get("emotion_tag")
+    emotion_target = data.get("emotion_target")
     max_agent_turns_before_user = int(data.get("max_agent_turns_before_user") or 5)
     max_user_gap = int(data.get("max_user_gap") or 12)
-
-    # Single mode: plain AI, no persona/scene/emotion/decision
     single_mode = data.get("single_mode") is True
 
-    # Scene: update session if scene_id provided
-    req_scene_id = (data.get("scene_id") or "").strip()
     if session.get("pipeline") == "agora2":
         base_scene = (session.get("agora2") or {}).get("scene_text") or ""
     else:
+        req_scene_id = (data.get("scene_id") or "").strip()
         if req_scene_id and req_scene_id in SCENES:
             session["scene_id"] = req_scene_id
         base_scene = SCENES.get(session.get("scene_id", "scene1"), scene)
 
-    def _load_emotion_prompt(tag: str) -> str:
-        """Load emotion prompt. Prefer Newst emotion block, fallback to legacy prompts."""
-        if not tag:
-            return ""
-        tag_lower = tag.lower()
-        for ep_dir in [EMOTION_BLOCK_DIR, EMOTION_PROMPTS_LEGACY]:
-            path = os.path.join(ep_dir, f"{tag_lower}.txt")
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as _f:
-                    return _f.read()
-        return ""
-
-    def _load_decision_block(name: str) -> str:
-        """Load decision block prompt (Rational, Intuitive, Dependent, Avoidant, Spontaneous)."""
-        if not name or not os.path.isdir(DECISION_BLOCK_DIR):
-            return ""
-        path = os.path.join(DECISION_BLOCK_DIR, f"{name}.txt")
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as _f:
-                return _f.read()
-        return ""
-
-    def _normalize_style_hint(text: str) -> str:
-        """Ensure style hint is plain content so STYLE PREFERENCE wrapper appears exactly once."""
-        t = (text or "").strip()
-        if not t:
-            return ""
-
-        # If user pasted wrapped blocks, keep only inner contents.
-        wrapped = re.findall(
-            r"\[STYLE PREFERENCE[^\]]*\](.*?)\[END STYLE PREFERENCE\]",
-            t,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if wrapped:
-            t = "\n".join(s.strip() for s in wrapped if s.strip())
-
-        # Remove stray wrapper marker lines if present.
-        t = re.sub(r"(?im)^\s*\[STYLE PREFERENCE[^\]]*\]\s*$", "", t)
-        t = re.sub(r"(?im)^\s*\[END STYLE PREFERENCE\]\s*$", "", t)
-
-        return t.strip()[:500]
-
-    # Load sidebar emotion prompt (shared)
-    sidebar_emotion_prompt = _load_emotion_prompt(emotion_tag)
-
-    def get_scene_for_agent(agent_key: str) -> str:
-        """Return scene string with emotion prompt + decision block + additional rules injected."""
-        result = base_scene
-        agora2_mode = session.get("pipeline") == "agora2"
-
-        # Agora-2: decision/emotion already baked into assembled role_text; keep scene clean
-        if not agora2_mode:
-            # 1. Per-agent emotion override (from customizer) takes priority
-            override_tag = agent_emotion_overrides.get(agent_key)
-            if not override_tag and session_mode == "limited":
-                override_tag = session.get("agent_runtime_config", {}).get(agent_key, {}).get("emotion")
-            if override_tag:
-                ep = _load_emotion_prompt(override_tag)
-                if ep:
-                    result += (
-                        "\n\n" + "=" * 60
-                        + f"\nEMOTIONAL CONTEXT — {override_tag.upper()} (agent-specific):\n"
-                        + "=" * 60 + "\n" + ep
-                        + "\n\nVISIBLE EXPRESSION RULE:\n"
-                        + "- After any required greeting, your wording should clearly reflect this emotional tone.\n"
-                        + "- Do not default to generic upbeat phrasing unless this emotion block supports it."
-                    )
-            elif sidebar_emotion_prompt and emotion_target in (None, "all", agent_key):
-                # 2. Sidebar emotion (global or targeted)
-                result += (
-                    "\n\n" + "=" * 60
-                    + f"\nEMOTIONAL CONTEXT — {emotion_tag.upper()} (applied to this agent):\n"
-                    + "=" * 60 + "\n" + sidebar_emotion_prompt
-                    + "\n\nVISIBLE EXPRESSION RULE:\n"
-                    + "- After any required greeting, your wording should clearly reflect this emotional tone.\n"
-                    + "- Do not default to generic upbeat phrasing unless this emotion block supports it."
-                )
-
-            # 3. Decision block (frontend overrides info.jsonl default)
-            block_name = (
-                agent_decision_block.get(agent_key)
-                or session.get("agent_runtime_config", {}).get(agent_key, {}).get("decision")
-                or AGENT_CONFIGS.get(agent_key, {}).get("decision", "Rational")
-            )
-            block_prompt = _load_decision_block(block_name)
-            if block_prompt:
-                result += (
-                    "\n\n" + "=" * 60
-                    + f"\nDECISION ARCHITECTURE — {block_name}:\n"
-                    + "=" * 60 + "\n" + block_prompt
-                )
-
-        # 4. Additional rules from customizer
-        extra = (additional_rules.get(agent_key) or "").strip()
-        if extra:
-            # Treat user-provided text as style preference only, not task override.
-            safe_extra = _normalize_style_hint(extra)
-            if safe_extra:
-                result += (
-                    "\n\n" + "=" * 60
-                    + "\n[STYLE PREFERENCE — does not override role, structure, safety, or task]\n"
-                    + safe_extra
-                    + "\n[END STYLE PREFERENCE]\n"
-                    + "=" * 60
-                )
-
-        return result
-
-    # Add user message to history
+    # Persist user message
+    session["known_user_facts"] = update_user_facts(session.get("known_user_facts") or {}, user_message)
     user_msg = {
         "chat_room_id": room_id,
         "time": now_local_iso(),
@@ -642,87 +629,34 @@ def send_message():
     }
     append_jsonl(session["chat_fp"], user_msg)
     session["history"].append(user_msg)
-    
-    # Update user facts
-    session["known_user_facts"] = update_user_facts(session["known_user_facts"], user_message)
-    
-    # Update speaker tracking
-    if session["last_speaker_label"] == "user":
-        session["consecutive_count"] += 1
-    else:
-        session["last_speaker_label"] = "user"
-        session["consecutive_count"] = 1
-    
-    session["bots_since_user"] = 0
-    session["turn_idx"] += 1
-    session["user_turn_count"] = session.get("user_turn_count", 0) + 1
+    _persist_chat_message_db(room_id, user_msg, session)
 
-    # Initialize OpenAI clients on first use
     try:
         client_chat, client_admin = get_openai_clients()
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
 
-    # Merge agent config: frontend agent_decision_block overrides info.jsonl
-    def _effective_decision(agent_key):
-        return (
-            agent_decision_block.get(agent_key)
-            or session.get("agent_runtime_config", {}).get(agent_key, {}).get("decision")
-            or AGENT_CONFIGS.get(agent_key, {}).get("decision", "Rational")
-        )
-
-    def _get_phase_context(agent_key: str) -> str:
-        ms = session["moderator_state"]
-        decision = _effective_decision(agent_key)
-        mode = ms.get("mode") or "S"
-        stall = ms.get("stall", False)
-        assignment = get_phase_prompt(ms.get("state", "Exploration"), mode, decision, stall)
-        lines = ["=== DELIBERATION STATE ===", f"Phase: {ms.get('state', 'Exploration')}"]
-        if ms.get("goal"):
-            lines.append(f"Goal: {ms['goal']}")
-        lines.append(f"Your task: {assignment}")
-        return "\n".join(lines)
-
-    def _run_moderator():
-        """Admin-3: classify deliberation state."""
-        transcript_lines = history_to_transcript_lines(session["history"])
-        history_str = clamp_history(transcript_lines, 12000)
-        roles = build_roles_summary(agent_list)
-        turns = session.get("turns_in_current_state", 0)
-        stall_eligible = turns > MODERATOR_STALL_TURNS
-        stall_hint = f"In '{session['moderator_state'].get('state','Exploration')}' for {turns} agent turns."
-        if not stall_eligible:
-            stall_hint += " Do NOT set stall: true yet."
-        msgs = [
-            {"role": "system", "content": ADMIN3_SYSTEM},
-            {"role": "user", "content": f"=== SCENE ===\n{base_scene}\n\n=== ROLES ===\n{roles}\n\n{stall_hint}\n\n=== TRANSCRIPT ===\n{history_str}"},
-        ]
-        raw = create_response_with_client(client_admin, "gpt-4o", msgs, 0.0, 300)
-        append_jsonl(session["moderator_fp"], {"time": now_local_iso(), "admin3": raw})
-        parsed = parse_moderator_plan(raw)
-        if parsed:
-            prev = session["moderator_state"]["state"]
-            session["moderator_state"].update(parsed)
-            if parsed["state"] != prev:
-                session["turns_in_current_state"] = 0
-            else:
-                session["turns_in_current_state"] = session.get("turns_in_current_state", 0) + MODERATOR_INTERVAL
-
-    # Run moderator when appropriate (before agent loop)
-    if session["user_turn_count"] % MODERATOR_INTERVAL == 0 or session.get("turns_in_current_state", 0) > MODERATOR_STALL_TURNS:
-        _run_moderator()
-
-    # Single mode: plain AI, no persona/emotion/decision; but scene context is used when available
     if single_mode:
-        print("[single_mode] Using plain AI (scene context included, no persona/emotion/decision)")
         transcript = build_transcript(session["history"], max_turns=12)
         scene_context = ""
         if base_scene and base_scene.strip():
-            scene_context = f"\n\n[Scene context — use to inform answers when relevant]\n{base_scene.strip()}\n"
+            scene_context = (
+                "\n\n[Scene context — use to inform answers when relevant]\n"
+                + base_scene.strip()
+                + "\n"
+            )
         try:
-            sys_content = "You are a helpful AI assistant. Reply concisely and neutrally. Do not adopt any persona, emotion, or role." + scene_context
-            user_content = f"Conversation:\n{transcript}\n\nRespond to the user:"
-            msgs = [{"role": "system", "content": sys_content}, {"role": "user", "content": user_content}]
+            sys_content = (
+                "You are a helpful AI assistant. Reply concisely and neutrally. "
+                "Do not adopt any persona, emotion, or role." + scene_context
+            )
+            msgs = [
+                {"role": "system", "content": sys_content},
+                {
+                    "role": "user",
+                    "content": "Conversation:\n" + transcript + "\n\nRespond to the user:",
+                },
+            ]
             txt = create_response_with_client(client_chat, "gpt-4o", msgs, 0.5, 500).strip() or "..."
         except Exception as e:
             print(f"[single_mode] Error: {e}")
@@ -735,246 +669,64 @@ def send_message():
         }
         append_jsonl(session["chat_fp"], agent_msg)
         session["history"].append(agent_msg)
+        _persist_chat_message_db(room_id, agent_msg, session)
         session["has_spoken"]["A"] = True
-        return jsonify({"responses": [{"agent_key": "A", "message": txt}], "phase": None, "stall": False})
-    
-    # Get agent responses (Newst: phase-based, Admin-1/2 for next speaker)
-    responses = []
-    responded_keys_this_turn: List[str] = []
-    transcript_lines = history_to_transcript_lines(session["history"])
-    name_map = {a.key: a.name for a in agent_list}
-    max_history_chars = 12000
+        return jsonify({"responses": [{"agent_key": "A", "agent": "ChatbotA", "message": txt}], "phase": None, "stall": False})
 
-    def _user_gap(hist):
-        li = next((i for i in range(len(hist) - 1, -1, -1) if hist[i].get("character") == "user"), None)
-        return (len(hist) - 1) - li if li is not None else len(hist)
-
-    def _last_agent_key() -> Optional[str]:
-        last_label = session.get("last_speaker_label") or ""
-        for key, agent in agents.items():
-            if agent.name == last_label:
-                return key
-        return None
-
-    def _pick_alternative_agent(*exclude_keys: str) -> Optional[str]:
-        excluded = {k for k in exclude_keys if k in SLOT_KEYS}
-        candidates = [k for k in SLOT_KEYS if k not in excluded]
-        if not candidates:
-            return None
-        candidates.sort(
-            key=lambda k: (
-                k in responded_keys_this_turn,
-                session["has_spoken"].get(k, False),
-                k,
-            )
-        )
-        return candidates[0]
-
-    def _normalize_next_speaker(choice: Optional[str]) -> Optional[str]:
-        if choice not in {"A", "B", "C", "U"}:
-            return _pick_alternative_agent()
-        if choice == "U":
-            return "U"
-
-        last_key = _last_agent_key()
-        if last_key and choice == last_key and int(session.get("consecutive_count", 0) or 0) >= 1:
-            alt = _pick_alternative_agent(choice)
-            if alt:
-                return alt
-
-        # Within one user turn, avoid reusing the same speaker until others have had a chance.
-        if choice in responded_keys_this_turn and len(responded_keys_this_turn) < len(SLOT_KEYS):
-            alt = _pick_alternative_agent(*responded_keys_this_turn)
-            if alt:
-                return alt
-        return choice
-
-    def _append_agent_response(speaker: str, txt: str) -> None:
-        agent = agents[speaker]
-        agent_msg = {"chat_room_id": room_id, "time": now_local_iso(), "character": agent.name, "txt": txt}
-        append_jsonl(session["chat_fp"], agent_msg)
-        session["history"].append(agent_msg)
-        transcript_lines.append(f"{agent.name}: {txt}")
-        responses.append({"agent": agent.name, "agent_key": speaker, "message": txt, "time": agent_msg["time"]})
-
-        agent.spoke += 1
-        session["has_spoken"][speaker] = True
-        session["bots_since_user"] += 1
-        session["turn_idx"] += 1
-        session["turns_in_current_state"] = session.get("turns_in_current_state", 0) + 1
-        responded_keys_this_turn.append(speaker)
-
-        if session.get("last_speaker_label") == agent.name:
-            session["consecutive_count"] = session.get("consecutive_count", 0) + 1
-        else:
-            session["last_speaker_label"] = agent.name
-            session["consecutive_count"] = 1
-
-    def _admin_choose_next() -> Optional[str]:
-        if session["bots_since_user"] >= max_agent_turns_before_user:
-            return "U"
-        li = last_user_index(transcript_lines)
-        gap = (len(transcript_lines) - 1 - li) if li is not None else len(transcript_lines)
-        if gap >= max_user_gap:
-            return "U"
-        history_str = clamp_history(transcript_lines, max_history_chars)
-        roles = build_roles_summary(agent_list)
-        stats = (
-            f"bots_since_user={session['bots_since_user']}, "
-            f"moderator_state={session['moderator_state'].get('state','Exploration')}, "
-            f"last_speaker={session.get('last_speaker_label') or '(none)'}, "
-            f"consecutive_count={session.get('consecutive_count', 0)}, "
-            f"responded_this_turn={','.join(responded_keys_this_turn) or '(none)'}"
-        )
-        admin1_msgs = [
-            {"role": "system", "content": ADMIN1_SYSTEM},
-            {"role": "user", "content": f"=== SCENE ===\n{base_scene}\n\n=== ROLES ===\n{roles}\n\n=== STATS ===\n{stats}\n\n=== TRANSCRIPT ===\n{history_str}\n\nDecide NEXT."},
-        ]
-        admin1_out = create_response_with_client(client_admin, "gpt-4o", admin1_msgs, 0.2, 260)
-        append_jsonl(session["think_fp"], {
-            "chat_room_id": room_id,
-            "time": now_local_iso(),
-            "turn": session.get("user_turn_count", 0),
-            "turn_idx": session.get("turn_idx", 0),
-            "phase": session["moderator_state"].get("state", "Exploration"),
-            "admin1": admin1_out,
-        })
-        admin2_msgs = [{"role": "system", "content": ADMIN2_SYSTEM}, {"role": "user", "content": admin1_out}]
-        admin2_out = create_response_with_client(client_admin, "gpt-4o", admin2_msgs, 0.0, 16)
-        admin2_out = (admin2_out or "").strip().upper()
-        append_jsonl(session["think_fp"], {
-            "chat_room_id": room_id,
-            "time": now_local_iso(),
-            "turn": session.get("user_turn_count", 0),
-            "turn_idx": session.get("turn_idx", 0),
-            "phase": session["moderator_state"].get("state", "Exploration"),
-            "admin2": admin2_out,
-        })
-        if admin2_out not in {"A", "B", "C", "U"}:
-            admin2_out = _pick_alternative_agent() or random.choice(["A", "B", "C"])
-        if admin2_out == "U" and random.random() < PREFER_AGENTS:
-            admin2_out = _pick_alternative_agent(_last_agent_key() or "") or random.choice(["A", "B", "C"])
-        return _normalize_next_speaker(admin2_out)
-
-    def _call_chat_agent_new(speaker: str, force_intro: bool = False, stall_mode: bool = False) -> str:
-        agent = agents[speaker]
-        scene_for_agent = get_scene_for_agent(speaker)
-        phase_ctx = _get_phase_context(speaker)
-        stall = session["moderator_state"].get("stall", False)
-        temp = 0.8 if not (stall or stall_mode) else min(1.05, 1.4)
-        extra = (
-            f"\n\n(Important) This is your FIRST message. Start with: Hi, I'm {agent.name}."
-            " After that opening, the rest of your message must follow the current runtime emotional tone and decision style."
-            " Do not default to cheerful language unless the runtime configuration supports it."
-        ) if force_intro else ""
-        history_str = clamp_history(transcript_lines, max_history_chars)
-        if stall_mode:
-            user_prompt = (
-                "Below is the full group chat transcript so far.\n"
-                "The moderator has flagged a stall — the group is going in circles.\n"
-                "You MUST make a decisive move: propose something new, force a comparison, "
-                "ask a direct question that demands an answer, or take a clear position.\n"
-                "Never call the human participant 'U'. If you address them, say 'user' or use their nickname.\n"
-                "Do NOT repeat what has already been said.\n\n"
-                "[TRANSCRIPT START]\n"
-                f"{history_str}\n"
-                "[TRANSCRIPT END]\n"
-            )
-        else:
-            user_prompt = (
-                "Below is the full group chat transcript so far.\n"
-                "Each line is formatted as: Speaker: message\n"
-                f"You are ONLY writing the next message for {agent.name}. Do NOT reproduce or repeat any line from the transcript.\n"
-                "Continue the conversation as your character.\n"
-                "Try to keep a lively group dynamic by engaging other bots (react, ask them questions, build on their points), "
-                "while still keeping the user included.\n"
-                "Never call the human participant 'U'. If you address them, say 'user' or use their nickname.\n\n"
-                "[TRANSCRIPT START]\n"
-                f"{history_str}\n"
-                "[TRANSCRIPT END]\n"
-                f"{extra}"
-            )
-        agora2_ctx = session.get("agora2") or {}
-        agora2_specs = session.get("agora2_specs") or {}
-        spec = agora2_specs.get(speaker) or {}
-        stance = spec.get("stance")
-        lang_for_agent = session.get("lang") or agora2_ctx.get("lang") or "en"
-        # Per-turn dynamic stance knowledge from latest user message
-        dynamic_sk = ""
-        if session.get("pipeline") == "agora2" and HAVE_AGORA2 and stance:
-            last_user = ""
-            for h in reversed(session.get("history") or []):
-                who = (h.get("character") or h.get("role") or "").strip().lower()
-                if who == "user":
-                    last_user = (h.get("txt") or h.get("content") or "").strip()
-                    break
-            if last_user:
-                dynamic_sk = agora2_http.stance_knowledge_on_hit(
-                    agora2_ctx.get("scenario_type") or session.get("scenario_type") or "",
-                    stance,
-                    last_user,
-                    lang_for_agent,
-                    include_header=True,
-                )
-        phase_with_sk = phase_ctx or ""
-        if dynamic_sk:
-            phase_with_sk = f"{phase_with_sk}\n{dynamic_sk}" if phase_with_sk else dynamic_sk
-        sys_prompt = agent.system_prompt(
-            scene_for_agent,
-            name_map,
-            phase_with_sk,
-            known_context=agora2_ctx.get("known_context", ""),
-            domain_background=agora2_ctx.get("domain_background", ""),
-            stance_text=spec.get("stance_text", ""),
-            lang=lang_for_agent,
-            session_memory_text=agora2_ctx.get("session_memory_text", ""),
-            preloaded_knowledge_text=spec.get("preloaded_knowledge", ""),
-        )
-        msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}]
-        txt = create_response_with_client(client_chat, "gpt-4o", msgs, temp, 220)
-        return sanitize_single_message((txt or "").strip() or "…", agent.name, all_agent_names)
-
-    def _run_stall_burst(skip_key: Optional[str] = None):
-        """When stall: force A->B->C burst with stall-specific prompt."""
-        for key in ["A", "B", "C"]:
-            if key == skip_key:
-                continue
-            if session["bots_since_user"] >= max_agent_turns_before_user:
+    agora2 = session.get("agora2") or {}
+    known_context = agora2.get("known_context") or ""
+    domain_background = agora2.get("domain_background") or ""
+    session_memory_text = agora2.get("session_memory_text") or ""
+    # Hint / stance-knowledge preload lives on assembled agent specs
+    preloaded_knowledge_text = agora2.get("preloaded_knowledge_text") or ""
+    if not preloaded_knowledge_text:
+        specs = session.get("agora2_specs") or {}
+        for slot in SLOT_KEYS:
+            pk = (specs.get(slot) or {}).get("preloaded_knowledge") or ""
+            if pk:
+                preloaded_knowledge_text = pk
                 break
-            if _user_gap(session["history"]) >= max_user_gap:
-                break
-            txt = _call_chat_agent_new(key, force_intro=not session["has_spoken"][key], stall_mode=True)
-            _append_agent_response(key, txt)
+    intake_data = agora2.get("intake") or {}
+    lang = session.get("lang") or "en"
+    scenario_type = session.get("scenario_type")
+
+    # Apply runtime emotion/decision overrides from customizer (optional)
+    agent_emotion_overrides = data.get("agent_emotion_overrides") or {}
+    agent_decision_block = data.get("agent_decision_block") or {}
+    additional_rules = data.get("additional_rules") or {}
+    for slot in SLOT_KEYS:
+        conf = session.setdefault("agent_runtime_config", {}).setdefault(slot, {})
+        if slot in agent_decision_block and agent_decision_block[slot]:
+            conf["decision"] = agent_decision_block[slot]
+        if slot in agent_emotion_overrides and agent_emotion_overrides[slot]:
+            conf["emotion"] = agent_emotion_overrides[slot]
+        # Rebuild role if additional rules (append once per turn into role via agora2_specs is heavy;
+        # skip — Agora-2 path uses assembled role_text)
 
     try:
-        for _ in range(max_agent_turns_before_user + 2):
-            if session["bots_since_user"] >= max_agent_turns_before_user:
-                break
-            if _user_gap(session["history"]) >= max_user_gap:
-                break
-
-            speaker = _admin_choose_next()
-            if speaker == "U":
-                break
-
-            txt = _call_chat_agent_new(speaker, force_intro=not session["has_spoken"][speaker])
-            _append_agent_response(speaker, txt)
-
-            if session["moderator_state"].get("stall"):
-                _run_stall_burst(skip_key=speaker)
-                break
-
-        current_phase = session["moderator_state"].get("state", "Exploration")
-        return jsonify({
-            "room_id": room_id,
-            "user_message": user_message,
-            "responses": responses,
-            "known_facts": list(session["known_user_facts"].values()),
-            "emotion_tag": emotion_tag,
-            "emotion_target": emotion_target,
-            "phase": current_phase,
-            "stall": session["moderator_state"].get("stall", False),
-        })
+        from agora2_loop import run_user_turn
+        result = run_user_turn(
+            session=session,
+            user_message=user_message,
+            agents=agents,
+            agent_list=agent_list,
+            all_agent_names=all_agent_names,
+            client_chat=client_chat,
+            client_admin=client_admin,
+            scene=base_scene,
+            known_context=known_context,
+            domain_background=domain_background,
+            session_memory_text=session_memory_text,
+            preloaded_knowledge_text=preloaded_knowledge_text,
+            intake_data=intake_data,
+            scenario_type=scenario_type,
+            lang=lang,
+            max_user_gap=max_user_gap,
+            max_agent_turns_before_user=max_agent_turns_before_user,
+            prefer_agents=PREFER_AGENTS,
+            persist_chat=lambda msg: _persist_chat_message_db(room_id, msg, session),
+            create_response_with_client=create_response_with_client,
+        )
     except AuthenticationError:
         return jsonify({
             "error": "OpenAI API key is invalid. Set OPENAI_API_KEY in backend/.env and restart the API."
@@ -984,24 +736,86 @@ def send_message():
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
 
+    title_guess = None
+    for h in session.get("history") or []:
+        if str(h.get("character") or "").lower() == "user" and (h.get("txt") or "").strip():
+            t = str(h["txt"]).strip()
+            title_guess = (t[:48] + "…") if len(t) > 48 else t
+            break
+    _sync_room_meta(session, room_id, title=title_guess)
+
+    return jsonify({
+        "room_id": room_id,
+        "user_message": user_message,
+        "responses": result.get("responses") or [],
+        "known_facts": list(session.get("known_user_facts", {}).values()),
+        "emotion_tag": emotion_tag,
+        "emotion_target": emotion_target,
+        "phase": result.get("phase"),
+        "stall": result.get("stall", False),
+        "concluded": bool(result.get("concluded")),
+    })
+
+
 
 @app.route('/api/history/<room_id>', methods=['GET'])
 def get_history(room_id):
-    """Get chat history for a session"""
-    if room_id not in chat_sessions:
-        return jsonify({"error": "Session not found"}), 404
+    """Get chat history for a session (memory or SQLite replay)."""
+    room_id = _safe_room_id(room_id) or room_id
     
-    session = chat_sessions[room_id]
-    session_agents, _, _ = _make_session_agents(session)
+    # Live in-memory session
+    if room_id in chat_sessions:
+        session = chat_sessions[room_id]
+        # Auth: owner or admin when room has user_id
+        owner = session.get("user_id")
+        if owner and HAVE_USER_STORE:
+            auth = get_user_store().resolve_token(_bearer_token())
+            if not auth or (auth["user_id"] != owner and not auth.get("is_admin")):
+                return jsonify({"error": "Forbidden"}), 403
+        session_agents, _, _ = _make_session_agents(session)
+        return jsonify({
+            "room_id": room_id,
+            "mode": session.get("mode", "full"),
+            "active_agents": [
+                {"key": slot, "pool_key": session.get("slot_to_profile", {}).get(slot, slot), "name": session_agents[slot].name}
+                for slot in SLOT_KEYS
+            ],
+            "history": session["history"],
+            "known_facts": list(session["known_user_facts"].values()),
+            "phase": (session.get("moderator_state") or {}).get("state"),
+            "source": "memory",
+        })
+
+    # SQLite replay after restart
+    if not HAVE_USER_STORE:
+        return jsonify({"error": "Session not found"}), 404
+    store = get_user_store()
+    room = store.get_chat_room(room_id)
+    if not room:
+        return jsonify({"error": "Session not found"}), 404
+    auth = store.resolve_token(_bearer_token())
+    if not auth or (auth["user_id"] != room["user_id"] and not auth.get("is_admin")):
+        return jsonify({"error": "Forbidden"}), 403
+    msgs = store.list_chat_messages(room_id)
+    history = []
+    for m in msgs:
+        history.append({
+            "character": m["character"],
+            "txt": m["txt"],
+            "time": m.get("created_at"),
+            "chat_room_id": room_id,
+        })
     return jsonify({
         "room_id": room_id,
-        "mode": session.get("mode", "full"),
-        "active_agents": [
-            {"key": slot, "pool_key": session.get("slot_to_profile", {}).get(slot, slot), "name": session_agents[slot].name}
-            for slot in SLOT_KEYS
-        ],
-        "history": session["history"],
-        "known_facts": list(session["known_user_facts"].values()),
+        "mode": "full",
+        "active_agents": [],
+        "history": history,
+        "known_facts": [],
+        "phase": room.get("phase"),
+        "scenario_type": room.get("scenario_type"),
+        "title": room.get("title"),
+        "concluded": room.get("concluded"),
+        "source": "db",
     })
 
 
@@ -1048,14 +862,26 @@ def _safe_room_id(room_id: str) -> Optional[str]:
 
 @app.route('/api/export-logs/<room_id>', methods=['GET'])
 def export_logs(room_id):
-    """Export this session's logs as a zip (tied to room_id / log files on disk)."""
+    """Export this session's logs as a zip (disk jsonl + SQLite transcript when available)."""
     room_id = _safe_room_id(room_id)
     if not room_id:
         return jsonify({"error": "Invalid room id"}), 400
 
     chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
-    if room_id not in chat_sessions and not os.path.exists(chat_path):
+    db_room = None
+    if HAVE_USER_STORE:
+        try:
+            db_room = get_user_store().get_chat_room(room_id)
+        except Exception:
+            db_room = None
+    if room_id not in chat_sessions and not os.path.exists(chat_path) and not db_room:
         return jsonify({"error": "Session not found"}), 404
+
+    # Ownership check when DB room exists
+    if db_room and HAVE_USER_STORE:
+        auth = get_user_store().resolve_token(_bearer_token())
+        if auth and auth["user_id"] != db_room["user_id"] and not auth.get("is_admin"):
+            return jsonify({"error": "Forbidden"}), 403
 
     buf = io.BytesIO()
     wrote = 0
@@ -1071,6 +897,16 @@ def export_logs(room_id):
                 with open(path, "r", encoding="utf-8") as f:
                     zf.writestr(name, f.read())
                 wrote += 1
+        if HAVE_USER_STORE and db_room:
+            store = get_user_store()
+            payload = {
+                "room": db_room,
+                "messages": store.list_chat_messages(room_id),
+                "intake": store.get_session_intake(room_id),
+                "board_snapshot": store.get_board_snapshot(room_id),
+            }
+            zf.writestr(f"{room_id}_db.json", json.dumps(payload, ensure_ascii=False, indent=2))
+            wrote += 1
 
     if wrote == 0:
         return jsonify({"error": "No log files for this session"}), 404
@@ -1151,7 +987,27 @@ def session_summary(room_id):
                 create_response=agent_module.create_response,
             )
             if memory_record:
+                # Merge board open_threads (parked digressions) into archival memory
+                seeded = [str(t).strip() for t in (session.get("pending_open_threads") or []) if str(t).strip()]
+                if seeded:
+                    existing = [str(t).strip() for t in (memory_record.get("open_threads") or []) if str(t).strip()]
+                    merged = existing[:]
+                    for t in seeded:
+                        if t not in merged:
+                            merged.append(t)
+                    memory_record["open_threads"] = merged[:12]
+                    # Re-persist merged threads to JSONL+SQLite
+                    if HAVE_USER_STORE:
+                        get_user_store().upsert_session_memory(
+                            user_id=session["user_id"],
+                            scenario_type=session["scenario_type"],
+                            session_id=room_id,
+                            date=datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d"),
+                            summary=memory_record.get("summary") or "",
+                            open_threads=memory_record["open_threads"],
+                        )
                 session["memory_saved"] = True
+                _sync_room_meta(session, room_id)
         except Exception as mem_err:
             print(f"⚠ session memory save failed: {mem_err}")
 
@@ -1336,6 +1192,165 @@ def me_profile():
         "complete": complete,
         "scenario_type": scenario_type or None,
     })
+
+
+@app.route('/api/me/rooms', methods=['GET'])
+def me_rooms():
+    """List chat rooms for the logged-in user (survives re-login)."""
+    user, err = _require_user()
+    if err:
+        return err
+    limit = request.args.get("limit", 50)
+    try:
+        limit_n = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        limit_n = 50
+    rooms = get_user_store().list_chat_rooms(user["user_id"], limit=limit_n)
+    return jsonify({"user_id": user["user_id"], "rooms": rooms})
+
+
+@app.route('/api/admin/users/<user_id>/rooms', methods=['GET'])
+def admin_user_rooms(user_id):
+    _, err = _require_admin()
+    if err:
+        return err
+    uid = (user_id or "").strip()
+    rooms = get_user_store().list_chat_rooms(uid, limit=200)
+    memory = []
+    scenarios = sorted({r.get("scenario_type") for r in rooms if r.get("scenario_type")})
+    # Always include Agora-2 scenario memories even when rooms were cleared
+    for sc in ("employment", "parent_child"):
+        if sc not in scenarios:
+            scenarios.append(sc)
+    seen_mem = set()
+    for sc in scenarios:
+        for rec in get_user_store().load_session_memory(uid, sc, limit=0):
+            key = (sc, rec.get("session_id"))
+            if key in seen_mem:
+                continue
+            seen_mem.add(key)
+            memory.append({**rec, "scenario_type": sc})
+    return jsonify({"user_id": uid, "rooms": rooms, "session_memory": memory})
+
+
+@app.route('/api/admin/rooms/<room_id>', methods=['GET', 'DELETE'])
+def admin_room_detail(room_id):
+    admin, err = _require_admin()
+    if err:
+        return err
+    store = get_user_store()
+    rid = _safe_room_id(room_id) or (room_id or "").strip()
+    if request.method == "DELETE":
+        ok, msg, meta = store.delete_chat_room(rid)
+        if not ok:
+            return jsonify({"error": msg or "Delete failed"}), 404
+        # Drop live session + close file handles
+        sess = chat_sessions.pop(rid, None)
+        if isinstance(sess, dict):
+            for fp_key in ("chat_fp", "think_fp", "moderator_fp"):
+                fp = sess.get(fp_key)
+                try:
+                    if fp and not fp.closed:
+                        fp.close()
+                except Exception:
+                    pass
+        # Remove jsonl logs for this room
+        for suffix in ("", "_thinkinglog", "_thinking", "_moderator", "_params"):
+            path = os.path.join(LOG_DIR, f"{rid}{suffix}.jsonl")
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception:
+                pass
+        # Strip matching line from memory/{user}__{scenario}.jsonl if present
+        try:
+            if meta and HAVE_AGORA2:
+                from session_memory import memory_path, MEMORY_DIR_DEFAULT
+                mem_dir = getattr(agora2_http, "MEMORY_DIR", None) or os.path.join(BASE_DIR, MEMORY_DIR_DEFAULT)
+                uid = meta.get("user_id") or ""
+                sc = meta.get("scenario_type") or ""
+                if uid and sc:
+                    mpath = memory_path(uid, sc, mem_dir)
+                    if os.path.isfile(mpath):
+                        kept = []
+                        with open(mpath, "r", encoding="utf-8") as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    rec = json.loads(line)
+                                except json.JSONDecodeError:
+                                    kept.append(line)
+                                    continue
+                                if str(rec.get("session_id") or "") == rid:
+                                    continue
+                                kept.append(line)
+                        with open(mpath, "w", encoding="utf-8") as f:
+                            for line in kept:
+                                f.write(line + "\n")
+        except Exception as mem_err:
+            print(f"⚠ memory jsonl prune: {mem_err}")
+        return jsonify({"ok": True, "deleted": meta, "by": admin["user_id"]})
+
+    room = store.get_chat_room(rid)
+    if not room:
+        return jsonify({"error": "Room not found"}), 404
+    return jsonify({
+        "room": room,
+        "messages": store.list_chat_messages(rid),
+        "intake": store.get_session_intake(rid),
+        "board_snapshot": store.get_board_snapshot(rid),
+        "viewer": admin["user_id"],
+    })
+
+
+@app.route('/api/admin/users/<user_id>/memory/<session_id>', methods=['DELETE'])
+def admin_delete_session_memory(user_id, session_id):
+    """Delete a standalone memory summary row (user profile untouched)."""
+    _, err = _require_admin()
+    if err:
+        return err
+    uid = (user_id or "").strip()
+    sid = (session_id or "").strip()
+    scenario_type = (request.args.get("scenario_type") or "").strip()
+    ok, msg = get_user_store().delete_session_memory(uid, sid, scenario_type)
+    if not ok:
+        return jsonify({"error": msg or "Delete failed"}), 404
+    return jsonify({"ok": True, "user_id": uid, "session_id": sid, "scenario_type": scenario_type or None})
+
+
+@app.route('/api/admin/export', methods=['GET'])
+def admin_export_bundle():
+    _, err = _require_admin()
+    if err:
+        return err
+    uid = (request.args.get("user_id") or "").strip()
+    if not uid:
+        return jsonify({"error": "user_id required"}), 400
+    scenario_type = (request.args.get("scenario_type") or "").strip() or None
+    bundle = get_user_store().export_user_bundle(uid, scenario_type=scenario_type)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            f"{uid}_export.json",
+            json.dumps(bundle, ensure_ascii=False, indent=2),
+        )
+        # Also flatten chat transcripts per room
+        for item in bundle.get("rooms") or []:
+            room = item.get("room") or {}
+            rid = room.get("room_id") or "room"
+            lines = []
+            for m in item.get("messages") or []:
+                lines.append(f"{m.get('character')}: {m.get('txt')}")
+            zf.writestr(f"transcripts/{rid}.txt", "\n".join(lines))
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"agora_export_{uid}.zip",
+    )
 
 
 @app.route('/api/admin/users', methods=['GET', 'POST'])

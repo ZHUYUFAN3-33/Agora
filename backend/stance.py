@@ -96,7 +96,16 @@ def get_stance_text(scenario_type: str, stance: Optional[str], lang: str = "zh")
     bilingual = STANCE_PROMPTS.get(scenario_type, {}).get(stance)
     if not bilingual:
         return ""
-    return pick(bilingual, normalize_lang(lang))
+    base = pick(bilingual, normalize_lang(lang))
+    # Obey Decision Board: do not open a side-quest question before top-constraint facts exist.
+    obey = pick(
+        {
+            "zh": "服从决策板：在最高优先级约束尚无比对事实前，不要另开副线向用户追问。",
+            "en": "Obey the Decision Board: until the top constraint has comparable facts, do not open a side-quest question to the user.",
+        },
+        normalize_lang(lang),
+    )
+    return f"{base}\n{obey}"
 
 
 # -------------------------------------------------------------------------

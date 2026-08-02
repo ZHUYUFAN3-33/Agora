@@ -13,6 +13,23 @@ type AdminUser = {
   profile_field_count?: number;
 };
 
+type AdminRoom = {
+  room_id: string;
+  scenario_type?: string;
+  title?: string;
+  phase?: string;
+  updated_at?: string;
+  concluded?: boolean;
+};
+
+type MemoryRec = {
+  session_id: string;
+  scenario_type?: string;
+  date?: string;
+  summary?: string;
+  open_threads?: string[];
+};
+
 export default function Admin() {
   const navigate = useNavigate();
   const auth = getAuth();
@@ -26,6 +43,9 @@ export default function Admin() {
   const [addPassword, setAddPassword] = useState("");
   const [addAsAdmin, setAddAsAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [rooms, setRooms] = useState<AdminRoom[]>([]);
+  const [memory, setMemory] = useState<MemoryRec[]>([]);
+  const [roomDetail, setRoomDetail] = useState<string | null>(null);
 
   const reloadUsers = useCallback(async () => {
     setLoading(true);
@@ -144,6 +164,114 @@ export default function Admin() {
       setSelected(null);
       setNewPassword("");
       await reloadUsers();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadUserSessions = useCallback(async (userId: string) => {
+    setRooms([]);
+    setMemory([]);
+    setRoomDetail(null);
+    try {
+      const res = await authFetch(`/admin/users/${encodeURIComponent(userId)}/rooms`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      setRooms(data.rooms || []);
+      setMemory(data.session_memory || []);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selected?.user_id) void loadUserSessions(selected.user_id);
+  }, [selected?.user_id, loadUserSessions]);
+
+  const exportUser = async () => {
+    if (!selected) return;
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const res = await authFetch(`/admin/export?user_id=${encodeURIComponent(selected.user_id)}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setActionMsg(data.error || "Export failed");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `agora_export_${selected.user_id}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setActionMsg(`Exported ${selected.user_id}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openRoom = async (roomId: string) => {
+    setBusy(true);
+    try {
+      const res = await authFetch(`/admin/rooms/${encodeURIComponent(roomId)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionMsg(data.error || "Failed to load room");
+        return;
+      }
+      setRoomDetail(JSON.stringify(data, null, 2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteRoom = async (roomId: string, title?: string) => {
+    if (!selected) return;
+    const label = title || roomId;
+    if (!window.confirm(`Delete session "${label}"?\nRoom ${roomId} — messages, intake, and memory for this session will be removed. User profile is kept.`)) {
+      return;
+    }
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const res = await authFetch(`/admin/rooms/${encodeURIComponent(roomId)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionMsg(data.error || "Delete session failed");
+        return;
+      }
+      setActionMsg(`Deleted session ${roomId}`);
+      setRoomDetail(null);
+      await loadUserSessions(selected.user_id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteMemory = async (rec: MemoryRec) => {
+    if (!selected) return;
+    if (!window.confirm(`Delete memory summary for session ${rec.session_id}?`)) return;
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const qs = rec.scenario_type
+        ? `?scenario_type=${encodeURIComponent(rec.scenario_type)}`
+        : "";
+      const res = await authFetch(
+        `/admin/users/${encodeURIComponent(selected.user_id)}/memory/${encodeURIComponent(rec.session_id)}${qs}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionMsg(data.error || "Delete memory failed");
+        return;
+      }
+      setActionMsg(`Deleted memory ${rec.session_id}`);
+      await loadUserSessions(selected.user_id);
     } finally {
       setBusy(false);
     }
@@ -336,6 +464,93 @@ export default function Admin() {
                 >
                   {JSON.stringify(selected.profile || {}, null, 2)}
                 </pre>
+              </div>
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <p className="text-[11px] text-[var(--app-muted-text)]" style={monoFont}>
+                    Sessions ({rooms.length}) / Memory ({memory.length})
+                  </p>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void exportUser()}
+                    className="h-[32px] px-3 bg-black text-white rounded-[8px] text-[11px] hover:bg-neutral-800 disabled:opacity-40"
+                    style={monoFont}
+                  >
+                    Export zip
+                  </button>
+                </div>
+                <ul className="border border-black/10 rounded-[8px] max-h-[220px] overflow-y-auto mb-2">
+                  {rooms.length === 0 && (
+                    <li className="px-3 py-2 text-[11px] text-[var(--app-muted-text)]" style={monoFont}>No sessions</li>
+                  )}
+                  {rooms.map((r) => (
+                    <li
+                      key={r.room_id}
+                      className="flex items-stretch border-b border-black/5 hover:bg-black/[0.03]"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void openRoom(r.room_id)}
+                        className="flex-1 min-w-0 text-left px-3 py-2"
+                      >
+                        <span className="text-[11px] truncate block" style={monoFont}>
+                          {r.title || r.room_id}
+                        </span>
+                        <span className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>
+                          {r.room_id} · {r.scenario_type || "—"} · {r.phase || "—"} · {r.updated_at || ""}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void deleteRoom(r.room_id, r.title)}
+                        className="flex-shrink-0 px-3 text-[10px] text-red-600 hover:bg-red-50 disabled:opacity-40"
+                        style={monoFont}
+                        title="Delete this session"
+                      >
+                        Delete
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {memory.length > 0 && (
+                  <ul className="border border-black/10 rounded-[8px] max-h-[140px] overflow-y-auto mb-2">
+                    {memory.map((m) => (
+                      <li
+                        key={`${m.scenario_type || ""}-${m.session_id}`}
+                        className="flex items-stretch border-b border-black/5 last:border-b-0"
+                      >
+                        <div className="flex-1 min-w-0 px-3 py-2">
+                          <span className="text-[10px] text-[var(--app-muted-text)] block" style={monoFont}>
+                            [{m.date || "—"}] {m.scenario_type || "—"} · {m.session_id}
+                          </span>
+                          <span className="text-[10px] leading-relaxed whitespace-pre-wrap break-words" style={monoFont}>
+                            {m.summary || "(no summary)"}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void deleteMemory(m)}
+                          className="flex-shrink-0 px-3 text-[10px] text-red-600 hover:bg-red-50 disabled:opacity-40"
+                          style={monoFont}
+                          title="Delete this memory summary"
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {roomDetail && (
+                  <pre
+                    className="text-[10px] leading-relaxed whitespace-pre-wrap break-words border border-black/10 rounded-[8px] p-2 bg-black/[0.02] max-h-[220px] overflow-y-auto"
+                    style={monoFont}
+                  >
+                    {roomDetail}
+                  </pre>
+                )}
               </div>
               <div>
                 <p className="text-[11px] text-[var(--app-muted-text)] mb-2" style={monoFont}>Reset password</p>

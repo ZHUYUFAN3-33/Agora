@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-HTTP adapter for Agora-2 scenario context (friend backend).
+HTTP adapter for Agora-2 scenario context (profile/intake/stance/assembly).
 
 Wraps profile_store / scenario_background / agent_assembly / stance /
 session_memory / stance_knowledge so Flask can build session context
@@ -152,6 +152,7 @@ def prepare_http_context(
     user_id: str = "web_user",
     persist: bool = True,
     session_update: str = "",
+    session_id: str = "",
 ) -> Dict:
     """
     Non-interactive context build for Flask.
@@ -177,7 +178,13 @@ def prepare_http_context(
         save_profile(user_id, data, PROFILES_DIR)
         profile = merged
         if intake:
-            append_session_history(user_id, scenario_type, intake, PROFILES_DIR)
+            append_session_history(
+                user_id,
+                scenario_type,
+                intake,
+                PROFILES_DIR,
+                session_id=session_id or None,
+            )
 
     known_context = format_known_context(
         scenario_type=scenario_type,
@@ -206,7 +213,7 @@ def prepare_http_context(
     session_count = 0
     if HAVE_SESSION_MEMORY and user_id:
         all_recent = load_recent_sessions(user_id, scenario_type, limit=0, dir_path=MEMORY_DIR)
-        # limit=0 means all in friend code? Check - `records[-limit:] if limit and limit > 0 else records`
+        # limit=0 means all in Agora-2: `records[-limit:] if limit and limit > 0 else records`
         # so limit=0 returns all. Good for count.
         session_count = len(all_recent)
         recent_sessions = all_recent[-3:] if all_recent else []

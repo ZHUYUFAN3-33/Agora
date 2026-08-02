@@ -180,7 +180,7 @@ function formatTime(ts: number): string {
   return `${Math.floor(diff / 86400000)}d ago`;
 }
 
-// Replace backend names (ChatbotA/B/C) with user-defined display names; replace generic user label with nickname.
+// Replace backend names (ChatbotA/B/C) with user-defined display names; replace @U / "user" with nickname.
 function applyDisplayNames(
   content: string,
   names: Record<AgentKey, string>,
@@ -200,10 +200,35 @@ function applyDisplayNames(
       out = out.replace(new RegExp(`\\b${escaped}\\b`, "g"), names[k]);
     });
   }
+  const label = (nickname || "").trim() || "You";
+  out = out.replace(/@U\b/gi, `@${label}`);
   if (nickname && nickname.trim()) {
     out = out.replace(/\buser\b/gi, nickname.trim());
   }
   return out;
+}
+
+/** Highlight @userName (and leftover @U) in red. */
+function highlightUserMentions(text: string, nickname?: string): ReactNode {
+  const label = (nickname || "").trim() || "You";
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`@(?:${escaped}|U)\\b`, "gi");
+  const nodes: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let i = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    nodes.push(
+      <span key={`um-${i++}`} className="text-red-500">
+        {m[0].replace(/^@U$/i, `@${label}`)}
+      </span>,
+    );
+    last = m.index + m[0].length;
+  }
+  if (last === 0) return text;
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
 }
 
 function stripRepeatedFirstTurnIntro(content: string, agentName: string): string {
@@ -317,25 +342,38 @@ function renderChatAnnotatedText(
   text: string,
   annotations: ChatLayerAnnotation[],
   variant: "agent" | "user",
+  nickname?: string,
 ): ReactNode {
-  if (!annotations.length) return text;
+  if (!annotations.length) return highlightUserMentions(text, nickname);
   const sorted = [...annotations].sort((a, b) => a.start - b.start);
   let cursor = 0;
   const out: React.ReactNode[] = [];
   sorted.forEach((a) => {
-    if (cursor < a.start) out.push(<span key={`p-${a.id}-${cursor}`}>{text.slice(cursor, a.start)}</span>);
+    if (cursor < a.start) {
+      out.push(
+        <span key={`p-${a.id}-${cursor}`}>
+          {highlightUserMentions(text.slice(cursor, a.start), nickname)}
+        </span>,
+      );
+    }
     out.push(
       <span
         key={a.id}
         className={layerSpanClass(a.layer, variant)}
         title={layerTitle(a.layer)}
       >
-        {text.slice(a.start, a.end)}
+        {highlightUserMentions(text.slice(a.start, a.end), nickname)}
       </span>,
     );
     cursor = a.end;
   });
-  if (cursor < text.length) out.push(<span key={`tail-${cursor}`}>{text.slice(cursor)}</span>);
+  if (cursor < text.length) {
+    out.push(
+      <span key={`tail-${cursor}`}>
+        {highlightUserMentions(text.slice(cursor), nickname)}
+      </span>,
+    );
+  }
   return out;
 }
 
@@ -907,8 +945,8 @@ const AgentMessage = React.memo(function AgentMessage({
           style={{ ...monoFont, color: isError ? "#ef4444" : undefined }}
         >
           {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
-            ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent")
-            : finalContent}
+            ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent", nickname)
+            : highlightUserMentions(finalContent, nickname)}
         </p>
       </div>
     </motion.div>
@@ -1054,7 +1092,7 @@ function SummaryPanel({
   markdown,
   loading,
   error,
-  onRefresh,
+  onGenerate,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1062,9 +1100,10 @@ function SummaryPanel({
   markdown: string | null;
   loading: boolean;
   error: string | null;
-  onRefresh: () => void;
+  onGenerate: () => void;
 }) {
   if (!open) return null;
+  const hasMarkdown = !!(markdown || "").trim();
   return (
     <motion.div
       className="fixed inset-0 z-[220] flex items-center justify-center p-4"
@@ -1088,15 +1127,17 @@ function SummaryPanel({
             </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={loading}
-              className="px-2.5 py-1.5 rounded-[8px] border border-black/10 text-[11px] text-black/70 hover:bg-black/5 disabled:opacity-40"
-              style={monoFont}
-            >
-              {loading ? "Generating…" : "Refresh"}
-            </button>
+            {hasMarkdown && (
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={loading}
+                className="px-2.5 py-1.5 rounded-[8px] border border-black/10 text-[11px] text-black/70 hover:bg-black/5 disabled:opacity-40"
+                style={monoFont}
+              >
+                {loading ? "Generating…" : "Regenerate"}
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -1108,17 +1149,43 @@ function SummaryPanel({
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading && !markdown && (
+          {loading && (
             <p className="text-[12px] text-[var(--app-muted-text)]" style={monoFont}>
               Reading this session&apos;s log and drafting the direction summary…
             </p>
           )}
-          {error && (
-            <p className="text-[12px] text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded-[8px]" style={monoFont}>
-              {error}
-            </p>
+          {!loading && error && (
+            <div className="space-y-3">
+              <p className="text-[12px] text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded-[8px]" style={monoFont}>
+                {error}
+              </p>
+              <button
+                type="button"
+                onClick={onGenerate}
+                className="h-[36px] px-4 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800"
+                style={monoFont}
+              >
+                Try again
+              </button>
+            </div>
           )}
-          {markdown && (
+          {!loading && !error && !hasMarkdown && (
+            <div className="flex flex-col items-start gap-3 py-2">
+              <p className="text-[12px] text-[var(--app-muted-text)] leading-relaxed" style={monoFont}>
+                Generate a short decision-direction summary from this session&apos;s chat log.
+                Nothing is requested until you press Generate.
+              </p>
+              <button
+                type="button"
+                onClick={onGenerate}
+                className="h-[36px] px-4 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800"
+                style={monoFont}
+              >
+                Generate
+              </button>
+            </div>
+          )}
+          {!loading && hasMarkdown && (
             <pre
               className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-black/85"
               style={monoFont}
@@ -2520,15 +2587,9 @@ export default function Chat() {
     }
   };
 
-  const fetchSessionSummary = async (force = false) => {
+  const fetchSessionSummary = async () => {
     const roomId = currentConv?.roomId;
     if (!roomId) return;
-    if (!force && summaryByRoom[roomId]) {
-      setSummaryError(null);
-      setSummaryOpen(true);
-      return;
-    }
-    setSummaryOpen(true);
     setSummaryLoading(true);
     setSummaryError(null);
     try {
@@ -2550,8 +2611,11 @@ export default function Chat() {
     }
   };
 
+  /** Open panel only — API runs when user presses Generate. */
   const handleOpenSummary = () => {
-    void fetchSessionSummary(false);
+    setSummaryError(null);
+    setSummaryLoading(false);
+    setSummaryOpen(true);
   };
 
   const defaultConvSettings = (mode: ExperimentMode = "full"): ConvSettings => ({
@@ -3531,7 +3595,7 @@ export default function Chat() {
           markdown={summaryByRoom[currentConv.roomId] || null}
           loading={summaryLoading}
           error={summaryError}
-          onRefresh={() => void fetchSessionSummary(true)}
+          onGenerate={() => void fetchSessionSummary()}
         />
       )}
     </AnimatePresence>

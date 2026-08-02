@@ -105,8 +105,7 @@ Speaker = Literal["A", "B", "C", "U"]
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 load_dotenv(os.path.join(os.path.dirname(BASE_DIR), ".env"))
 API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
-# Agora-2: high prefer_agents starved the moderator / blocked hand-back to user.
-# Default 0 = respect Admin U; override via AGORA_PREFER_AGENTS if needed.
+# Faithful CLI default (Agora-2 backend-dev): prefer_agents=0.85
 PREFER_AGENTS = float(os.getenv("AGORA_PREFER_AGENTS") or "0.85")
 
 # Global state for chat sessions
@@ -273,10 +272,14 @@ def init_session(room_id: str) -> dict:
     chat_log_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
     thinking_log_path = os.path.join(LOG_DIR, f"{room_id}_thinkinglog.jsonl")
     moderator_log_path = os.path.join(LOG_DIR, f"{room_id}_moderator.jsonl")
+    rationale_log_path = os.path.join(LOG_DIR, f"{room_id}_rationale.jsonl")
+    memory_log_path = os.path.join(LOG_DIR, f"{room_id}_memory.jsonl")
 
     chat_fp = open(chat_log_path, "a", encoding="utf-8")
     think_fp = open(thinking_log_path, "a", encoding="utf-8")
     moderator_fp = open(moderator_log_path, "a", encoding="utf-8")
+    rationale_fp = open(rationale_log_path, "a", encoding="utf-8")
+    memory_fp = open(memory_log_path, "a", encoding="utf-8")
 
     session = {
         "room_id": room_id,
@@ -294,18 +297,33 @@ def init_session(room_id: str) -> dict:
         "turn_idx": 0,
         "fallback_queue": [],
         "last_speaker_label": "",
+        "last_speaker_key": None,
+        "mention_queue": [],
         "consecutive_count": 0,
         "has_spoken": {"A": False, "B": False, "C": False},
         "chat_log_path": chat_log_path,
         "thinking_log_path": thinking_log_path,
         "moderator_log_path": moderator_log_path,
+        "rationale_log_path": rationale_log_path,
+        "memory_log_path": memory_log_path,
         "chat_fp": chat_fp,
         "think_fp": think_fp,
         "moderator_fp": moderator_fp,
-        # Newst: phase-based moderator state
+        "rationale_fp": rationale_fp,
+        "memory_fp": memory_fp,
+        # In-session per-agent position snapshots (CLI maybe_distill_snippet)
+        "memory_snippets": {"A": [], "B": [], "C": []},
+        "turns_since_distill": {"A": 0, "B": 0, "C": 0},
+        "latest_rationale": {"A": "", "B": "", "C": ""},
+        "latest_snippet_id": {"A": None, "B": None, "C": None},
+        "snippet_counters": {"A": 0, "B": 0, "C": 0},
+        # Phase-based moderator state (CLI-faithful)
         "moderator_state": {"mode": None, "state": "Exploration", "stall": False, "goal": ""},
         "user_turn_count": 0,
         "turns_in_current_state": 0,
+        "turns_since_moderator": 0,
+        "user_turns_since_moderator": 0,
+        "user_spoke_since_moderator": False,
     }
     return session
 
@@ -704,7 +722,7 @@ def send_message():
         # skip — Agora-2 path uses assembled role_text)
 
     try:
-        from agora2_loop import run_user_turn
+        from agentwake_new import run_user_turn
         result = run_user_turn(
             session=session,
             user_message=user_message,
@@ -1247,7 +1265,7 @@ def admin_room_detail(room_id):
         # Drop live session + close file handles
         sess = chat_sessions.pop(rid, None)
         if isinstance(sess, dict):
-            for fp_key in ("chat_fp", "think_fp", "moderator_fp"):
+            for fp_key in ("chat_fp", "think_fp", "moderator_fp", "rationale_fp", "memory_fp"):
                 fp = sess.get(fp_key)
                 try:
                     if fp and not fp.closed:

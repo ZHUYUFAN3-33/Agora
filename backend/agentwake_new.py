@@ -9,7 +9,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 # Scenario information layer: User Profile + Scenario Intake + Domain Background.
@@ -34,30 +34,81 @@ try:
 except ImportError:
     HAVE_AGENT_ASSEMBLY = False
 
+# Stance Knowledge: keyword-triggered, per-stance background cards injected into
+# the speaking agent's prompt. Pure local dict lookup (no network / no LLM). See
+# stance_knowledge.py. Optional import so the script still runs standalone.
+try:
+    # _match_topic_card is reused (not reimplemented) so the "did a keyword hit"
+    # gate below shares one source of truth with the module's own matching.
+    from stance_knowledge import (
+        load_stance_knowledge,
+        get_stance_knowledge_block,
+        _match_topic_card as sk_match_topic_card,
+    )
+    HAVE_STANCE_KNOWLEDGE = True
+except ImportError:
+    HAVE_STANCE_KNOWLEDGE = False
+
+# Cross-session memory: carry a short recap of the last few sessions into the
+# next one (implicit auto-carry, keyed by user_id + scenario_type). Adds exactly
+# one extra LLM call at session end, reusing create_response. See session_memory.py.
+try:
+    from session_memory import (
+        load_recent_sessions,
+        build_session_memory_text,
+        summarize_session,
+        append_session_record,
+    )
+    HAVE_SESSION_MEMORY = True
+except ImportError:
+    HAVE_SESSION_MEMORY = False
+
 # ===============================
-# API KEY — from env only (never hardcode)
+# API KEY — read from the environment, never hardcode.
+# The key that used to sit here was committed to git history and must be
+# treated as leaked: revoke it in the OpenAI dashboard.
 # ===============================
 API_KEY = ""  # unused; _effective_api_key reads OPENAI_API_KEY
-
 MIN_OUTPUT_TOKENS = 16
 
 # ===============================
 # MODERATOR CONFIG
 # ===============================
-# How many speaking turns of ANY kind (agent or user) between moderator checks.
-# This used to count user inputs only, which meant that with --prefer_agents at
-# its default the moderator effectively never ran: the user speaks roughly once
-# every 8-9 lines, so three user turns — the old trigger — sat 25+ lines away.
-# The whole four-phase machinery (PHASE_PROMPTS beyond Exploration, stall
-# detection, the Convergence stance weighting) was unreachable as a result.
-MODERATOR_TURN_INTERVAL = 4
-MODERATOR_INTERVAL = MODERATOR_TURN_INTERVAL  # Flask alias
+# Phase progression is driven by USER participation, with a total-turn backstop.
+#
+# History of this trigger, because both extremes were observed in real runs:
+#   v1 counted user inputs only, at 3 — with --prefer_agents 0.85 the user
+#     speaks about once every 8-9 lines, so the moderator effectively never ran
+#     and the whole four-phase machinery was unreachable.
+#   v2 counted turns of ANY kind, at 4 — which decoupled progression from the
+#     user entirely: in logs/316347 three agents exchanged greetings and that
+#     alone advanced Exploration -> Structuring before the user had typed a
+#     single character. All four phases completed on three user sentences.
+# The deliberation belongs to the user, so a phase advances when the USER has
+# contributed; the total-turn backstop only exists so a silent user can't
+# freeze the state machine forever.
+MODERATOR_USER_TURN_INTERVAL = 2   # primary: moderator re-runs every N user turns
+MODERATOR_TURN_FALLBACK = 10       # backstop: ...or after N turns of any kind
 # How many consecutive turns in the same state before moderator tries to unstick (strictly greater, first turn excluded)
 MODERATOR_STALL_TURNS = 6
 # Once past the stall threshold, re-check this often instead of waiting for the
 # full interval — but not every single turn, which would be one extra API call
 # per line for the rest of the session.
 MODERATOR_STALL_RECHECK = 2
+
+# Terminal state. Convergence is a phase the group works IN; without an exit it
+# has no floor — logs/316347 shows three consecutive Convergence verdicts whose
+# goals decayed into noise ("confirm alignment" -> "encourage the user to
+# finalize" -> "address remaining concerns") while the agents recycled the same
+# recommendation at novelty 0.00. Once the group has converged twice with no new
+# user input, the discussion is over: the state latches to CONCLUDED and the
+# floor goes to the user instead of to another agent.
+CONCLUDED_STATE = "Concluded"
+
+# Upper bound on how many agents a stall burst may force to speak. The burst is
+# exempt from the consecutive-turn valve (see stall_burst), so it needs a bound
+# of its own — without one, a large agent pool could monopolise the floor.
+MAX_STALL_BURST_TURNS = 3
 
 # -------------------------------
 # OpenAI client (SDK + fallback)
@@ -85,7 +136,7 @@ def _responses_create_http(payload: dict) -> dict:
     import requests  # type: ignore
     api_key = _effective_api_key()
     if not api_key or api_key == "sk-xxxx":
-        raise RuntimeError("No API key. Set API_KEY at top of script.")
+        raise RuntimeError("No API key. Set the OPENAI_API_KEY environment variable.")
     url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1") + "/responses"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     r = requests.post(url, headers=headers, json=payload, timeout=120)
@@ -93,14 +144,50 @@ def _responses_create_http(payload: dict) -> dict:
         raise RuntimeError(f"OpenAI HTTP error {r.status_code}: {r.text}")
     return r.json()
 
-def create_response(model: str, messages: List[dict], temperature: float, max_output_tokens: int) -> str:
+def _collect_meta_sdk(resp, meta: dict) -> None:
+    """
+    Why this exists: a run produced the bare string "I'm sorry, I can't assist
+    with that." as a chat message, and the logs gave no way to tell whether it
+    was a content filter, a truncation, or a normal completion. The Responses
+    API carries that answer in status/incomplete_details/refusal — record it so
+    the next occurrence is diagnosable instead of a guess.
+    """
+    meta["status"] = getattr(resp, "status", None)
+    details = getattr(resp, "incomplete_details", None)
+    if details is not None:
+        meta["incomplete_reason"] = getattr(details, "reason", None) or (
+            details.get("reason") if isinstance(details, dict) else None)
+    try:
+        for item in getattr(resp, "output", []) or []:
+            if getattr(item, "type", None) == "refusal":
+                meta["refusal"] = getattr(item, "refusal", "") or "(refusal item)"
+            for c in getattr(item, "content", []) or []:
+                if getattr(c, "type", None) == "refusal":
+                    meta["refusal"] = getattr(c, "refusal", "") or "(refusal content)"
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            meta["output_tokens"] = getattr(usage, "output_tokens", None)
+    except Exception:
+        pass
+
+
+def create_response(model: str, messages: List[dict], temperature: float, max_output_tokens: int,
+                    meta: Optional[dict] = None) -> str:
+    """
+    meta: optional dict filled in-place with generation metadata (status,
+    incomplete_reason, refusal, output_tokens). Callers that want to log why a
+    generation came back short/empty/refused pass a dict; everyone else omits it.
+    """
     max_output_tokens = max(int(max_output_tokens), MIN_OUTPUT_TOKENS)
+    if meta is None:
+        meta = {}
     client = _load_openai_client()
     if client is not None:
         resp = client.responses.create(
             model=model, input=messages,
             temperature=temperature, max_output_tokens=max_output_tokens,
         )
+        _collect_meta_sdk(resp, meta)
         if hasattr(resp, "output_text") and resp.output_text:
             return resp.output_text.strip()
         try:
@@ -119,12 +206,25 @@ def create_response(model: str, messages: List[dict], temperature: float, max_ou
 
     payload = {"model": model, "input": messages, "temperature": temperature, "max_output_tokens": max_output_tokens}
     resp = _responses_create_http(payload)
+    meta["status"] = resp.get("status")
+    if isinstance(resp.get("incomplete_details"), dict):
+        meta["incomplete_reason"] = resp["incomplete_details"].get("reason")
+    if isinstance(resp.get("usage"), dict):
+        meta["output_tokens"] = resp["usage"].get("output_tokens")
     out_parts: List[str] = []
     for item in resp.get("output", []) or []:
         for c in item.get("content", []) or []:
             if c.get("type") == "output_text" and "text" in c:
                 out_parts.append(c["text"])
+            elif c.get("type") == "refusal":
+                meta["refusal"] = c.get("refusal") or "(refusal content)"
     return "".join(out_parts).strip()
+
+
+def format_generation_meta(meta: dict) -> str:
+    """Compact one-line rendering for the log; empty when nothing notable."""
+    parts = [f"{k}={v}" for k, v in meta.items() if v not in (None, "")]
+    return " ".join(parts)
 
 # -------------------------------
 # Helpers
@@ -186,6 +286,29 @@ def last_user_index(transcript_lines: List[str]) -> Optional[int]:
         if transcript_lines[i].startswith("user:"):
             return i
     return None
+
+
+def stance_knowledge_on_hit(scenario_type, stance, message, lang, knowledge,
+                            include_header: bool = True) -> str:
+    """Stance-knowledge block for `message`, but ONLY when it actually hits a
+    topic-card keyword; "" otherwise. This suppresses the module's generic
+    fallback so the block is tied to a real keyword match — the single rule both
+    channels share: the per-turn dynamic trigger (get_phase_context, latest user
+    message) and the session-start preloaded hint (build once from info.jsonl's
+    hint). include_header=False returns the body alone, for callers that add
+    their own distinct block title.
+    """
+    if not (HAVE_STANCE_KNOWLEDGE and knowledge and stance and message):
+        return ""
+    scenario_cfg = knowledge.get(scenario_type, {}) or {}
+    stance_cfg = scenario_cfg.get(stance)
+    topic_cards = stance_cfg.get("topic_cards", []) if isinstance(stance_cfg, dict) else []
+    if not sk_match_topic_card(message, topic_cards, lang):
+        return ""
+    return get_stance_knowledge_block(
+        scenario_type, stance, message, lang,
+        knowledge=knowledge, include_header=include_header,
+    )
 
 # -------------------------------
 # Message-quality guards
@@ -358,6 +481,8 @@ class ChatAgent:
                      if lang == "zh" else
                      "Write every message in English. Do not switch language mid-message.")
         others = ", ".join(f"@{v}" for k, v in name_map.items() if k != self.key)
+        # Any other agent's name works for the "defer to" example — take the first.
+        defer_name = next((v for k, v in name_map.items() if k != self.key), "another bot")
         prompt = (
             f"You are {self.name} in a group chat.\n"
             f"Participants (remember their names):\n{roster}\n"
@@ -387,7 +512,7 @@ class ChatAgent:
             f"- an elimination: an option or component that should be dropped, plus the reason\n"
             f"- a direct challenge to a specific claim someone made\n"
             f"If you genuinely have nothing new, say so in one sentence (\"I have nothing to add beyond X; "
-            f"I'll defer to @{name_map.get('B', 'ChatbotB')} on Y\") and stop. That is a valid, useful turn.\n"
+            f"I'll defer to @{defer_name} on Y\") and stop. That is a valid, useful turn.\n"
             f"Never restate a point already made, including your own. Rephrasing is not new information.\n"
             f"\n=== HOW YOUR EMOTION SHOULD SHOW ===\n"
             f"Your emotional character is part of who you are and should be visible in every message — "
@@ -405,41 +530,64 @@ class ChatAgent:
                 f"being sacrificed. Accept a conclusion only after you have stated the cost it imposes on "
                 f"the interest you represent.\n"
             )
+        # Preloaded background from the user's setup hint — fixed for the whole
+        # session. Distinct title from the per-turn "=== BACKGROUND KNOWLEDGE ==="
+        # block (carried in phase_context) so the two channels never blur together.
+        if preloaded_knowledge_text:
+            prompt += f"\n=== BACKGROUND (from setup) ===\n{preloaded_knowledge_text}\n"
         if known_context:
             prompt += f"\n{known_context}\n"
         if domain_background:
             prompt += f"\n{domain_background}\n"
-        if preloaded_knowledge_text:
-            prompt += f"\n=== BACKGROUND (from setup) ===\n{preloaded_knowledge_text}\n"
         if session_memory_text:
             prompt += f"\n{session_memory_text}\n"
         if phase_context:
             prompt += f"\n{phase_context}"
+        prompt += (
+            "\n\nOUTPUT FORMAT (required):\n"
+            "[MESSAGE]\n"
+            "your chat message here\n"
+            "[/MESSAGE]\n"
+            "[RATIONALE]\n"
+            "one short sentence: why you said this, given your persona and the current phase goal\n"
+            "[/RATIONALE]\n"
+        )
         return prompt
 
 # -------------------------------
 # Admin prompts
 # -------------------------------
 
-ADMIN1_SYSTEM = """You are Admin-1: the group-chat pacing analyst.
-You will read: the shared scene, the three role settings, and the full transcript.
+def build_admin_prompts(agent_keys: List[str], max_consecutive: int) -> tuple[str, str]:
+    """
+    Admin-1/Admin-2 system prompts, built at runtime from the actual agent key
+    set (info.jsonl's "agents" field is the single source of truth for how many
+    agents exist). The old module-level constants hardcoded "A or B or C or U"
+    and "after 5 consecutive agent turns", which silently broke any pool size
+    other than three.
+    """
+    keys_or = " or ".join(agent_keys)
+    keys_slash = "/".join(agent_keys)
+    admin1 = f"""You are Admin-1: the group-chat pacing analyst.
+You will read: the shared scene, the {len(agent_keys)} role settings, and the full transcript.
 
 Your job: infer who SHOULD speak next and give a brief reason.
 
 PACING GOAL (important):
-- Strongly prefer A/B/C speaking over the user, as long as the conversation still feels coherent.
+- Strongly prefer {keys_slash} speaking over the user, as long as the conversation still feels coherent.
 - Promote natural FRIEND group dynamics with more bot-to-bot discussion.
 - Still keep the user included regularly, but less frequently than the bots.
-- Always obey the hard rule: after 5 consecutive agent turns, the next speaker must be U.
+- Always obey the hard rule: after {max_consecutive} consecutive agent turns, the next speaker must be U.
 
 You MUST end your output with a single clear decision:
-NEXT = A or B or C or U (choose exactly one).
+NEXT = {keys_or} or U (choose exactly one).
 This analysis is NOT shown to the user, but is saved to the thinking log."""
 
-ADMIN2_SYSTEM = """You are Admin-2: the strict next-speaker selector.
+    admin2 = f"""You are Admin-2: the strict next-speaker selector.
 You will receive Admin-1's analysis text.
-Your job: output ONLY ONE character: A or B or C or U.
+Your job: output ONLY ONE choice: {keys_or} or U.
 Do not output anything else (no spaces, punctuation, explanation, or newline)."""
+    return admin1, admin2
 
 # Admin-3 design rationale:
 # Admin-3 only classifies the deliberation state and detects stalls.
@@ -663,10 +811,10 @@ def validate_agent_configs(agent_configs: Dict[str, dict], info_path: str,
     problems: List[str] = []
     warnings: List[str] = []
 
-    missing_agents = [k for k in ("A", "B", "C") if k not in agent_configs]
-    if missing_agents:
-        problems.append(f"missing agent key(s): {', '.join(missing_agents)} "
-                        f"(expected all of A, B, C under the \"agents\" object)")
+    # The "agents" object in info.jsonl is the single source of truth for how
+    # many agents exist and what their keys are — no fixed key set is assumed.
+    if not agent_configs:
+        problems.append("no agent keys found (expected a non-empty \"agents\" object)")
 
     available = {"decision": [], "emotion": []}
     if HAVE_AGENT_ASSEMBLY:
@@ -676,7 +824,7 @@ def validate_agent_configs(agent_configs: Dict[str, dict], info_path: str,
         except Exception:
             pass  # preset listing is a nicety; never let it block startup
 
-    for key in ("A", "B", "C"):
+    for key in sorted(agent_configs):
         cfg = agent_configs.get(key)
         if cfg is None:
             continue
@@ -765,8 +913,811 @@ def parse_moderator_plan(text: str) -> Optional[dict]:
     }
 
 # -------------------------------
+# Agent turn output parser (message / rationale split)
+# -------------------------------
+
+RATIONALE_MAX_WORDS = 30
+
+_MESSAGE_TAG_RE = re.compile(r"\[MESSAGE\](.*?)\[/MESSAGE\]", re.DOTALL | re.IGNORECASE)
+_RATIONALE_TAG_RE = re.compile(r"\[RATIONALE\](.*?)\[/RATIONALE\]", re.DOTALL | re.IGNORECASE)
+_STRAY_TAG_RE = re.compile(r"\[/?(?:MESSAGE|RATIONALE)\]", re.IGNORECASE)
+
+
+def parse_agent_turn(raw: str) -> dict:
+    """
+    Splits one LLM generation into the chat-visible message and the private
+    rationale. Both fields come from the SAME generation (never a second call).
+    Tolerant by design: a malformed output must never crash a turn — if the
+    tags are missing, the whole raw text becomes the message (stray tag tokens
+    stripped so they can't leak into the chat log) and rationale stays empty.
+    """
+    raw = (raw or "").strip()
+    msg_match = _MESSAGE_TAG_RE.search(raw)
+    rat_match = _RATIONALE_TAG_RE.search(raw)
+
+    if msg_match:
+        message = msg_match.group(1).strip()
+    else:
+        message = _STRAY_TAG_RE.sub("", raw).strip()
+
+    rationale = rat_match.group(1).strip() if rat_match else ""
+    words = rationale.split()
+    if len(words) > RATIONALE_MAX_WORDS:
+        rationale = " ".join(words[:RATIONALE_MAX_WORDS]) + "..."
+
+    return {"message": message, "rationale": rationale}
+
+# -------------------------------
+# @-mention parsing
+#
+# User-side mentions are a HARD route (the mentioned agents speak next, in
+# order, bypassing Admin-1/2). Agent-side mentions are a SOFT cue: recorded to
+# the rationale log only, never routed — Admin-1/2 still pick the next speaker.
+# -------------------------------
+
+MAX_MENTIONS_PER_MESSAGE = 4
+
+
+def build_mention_patterns(agent_keys: List[str], name_map: Dict[str, str]) -> Dict[str, str]:
+    """Maps every accepted @-alias (lowercased) to its canonical agent key:
+    both the key itself (@A) and the display name (@ChatbotA)."""
+    patterns: Dict[str, str] = {}
+    for key in agent_keys:
+        patterns[key.lower()] = key
+        name = name_map.get(key)
+        if name:
+            patterns[name.lower()] = key
+    return patterns
+
+
+def parse_mentions(text: str, mention_patterns: Dict[str, str],
+                   max_mentions: int = MAX_MENTIONS_PER_MESSAGE) -> List[str]:
+    """Canonical agent keys @-mentioned in text, in order of first appearance,
+    deduplicated, capped at max_mentions. Unknown names (@Z) are ignored."""
+    found: List[str] = []
+    for token in re.findall(r"@(\w+)", text or ""):
+        key = mention_patterns.get(token.lower())
+        if key and key not in found:
+            found.append(key)
+            if len(found) >= max_mentions:
+                break
+    return found
+
+# -------------------------------
+# Memory snippet distillation
+# -------------------------------
+
+# Fallback trigger: an agent gets a snippet at latest every N of its own
+# speaking turns, even with no phase change or stall in between. The trigger
+# decision itself is fully deterministic — the LLM is only used to write the
+# snippet text once a trigger has fired.
+DISTILL_TRIGGER_INTERVAL = 4
+
+# -------------------------------
 # Core loop
 # -------------------------------
+
+# -------------------------------
+# Flask / HTTP turn API (shared scheduling core)
+# -------------------------------
+
+CreateFn = Callable[[Any, str, List[dict], float, int], str]
+
+
+def run_user_turn(
+    *,
+    session: dict,
+    user_message: str,
+    agents: Dict[str, "ChatAgent"],
+    agent_list: List["ChatAgent"],
+    all_agent_names: List[str],
+    client_chat,
+    client_admin,
+    scene: str,
+    known_context: str = "",
+    domain_background: str = "",
+    session_memory_text: str = "",
+    preloaded_knowledge_text: str = "",
+    intake_data: Optional[dict] = None,
+    scenario_type: Optional[str] = None,
+    lang: str = "en",
+    model: str = "gpt-4o",
+    temperature: float = 0.8,
+    max_output_tokens: int = 320,
+    max_history_chars: int = 12000,
+    max_user_gap: int = 12,
+    max_agent_turns_before_user: Optional[int] = None,
+    prefer_agents: Optional[float] = None,
+    novelty_threshold: Optional[float] = None,
+    novelty_window: int = 10,
+    persist_chat: Optional[Callable[[dict], None]] = None,
+    create_response_with_client: Optional[CreateFn] = None,
+) -> Dict[str, Any]:
+    """Run one user turn; mutate session; return API-shaped responses."""
+    intake_data = intake_data or {}
+    prefer = float(
+        prefer_agents if prefer_agents is not None else os.getenv("AGORA_PREFER_AGENTS", "0.85")
+    )
+    nov_th = float(
+        novelty_threshold
+        if novelty_threshold is not None
+        else os.getenv("AGORA_NOVELTY_THRESHOLD", "0.35")
+    )
+
+    key_to_agent = agents
+    agent_keys = [a.key for a in agent_list]
+    name_map = {a.key: a.name for a in agent_list}
+    mention_patterns = build_mention_patterns(agent_keys, name_map)
+
+    if max_agent_turns_before_user is None:
+        max_consecutive = min(len(agent_keys) + 2, 8)
+    else:
+        max_consecutive = int(max_agent_turns_before_user)
+
+    admin1_system, admin2_system = build_admin_prompts(agent_keys, max_consecutive)
+
+    agent_configs = {
+        slot: {
+            "decision": (session.get("agent_runtime_config") or {}).get(slot, {}).get(
+                "decision", "Rational"
+            ),
+            "emotion": (session.get("agent_runtime_config") or {}).get(slot, {}).get(
+                "emotion", "Joy"
+            ),
+            "stance": (session.get("agent_runtime_config") or {}).get(slot, {}).get("stance"),
+            "preloaded_knowledge": (
+                (session.get("agora2_specs") or {}).get(slot) or {}
+            ).get("preloaded_knowledge")
+            or preloaded_knowledge_text
+            or "",
+        }
+        for slot in agent_keys
+    }
+
+    moderator_state = session.setdefault(
+        "moderator_state", {"mode": None, "state": "Exploration", "stall": False, "goal": ""}
+    )
+    session.setdefault("turns_in_current_state", 0)
+    session.setdefault("turns_since_moderator", 0)
+    session.setdefault("user_turns_since_moderator", 0)
+    session.setdefault("user_spoke_since_moderator", False)
+    session.setdefault("bots_since_user", 0)
+    session.setdefault("has_spoken", {k: False for k in agent_keys})
+    session.setdefault("mention_queue", [])
+    session.setdefault("last_speaker_key", None)
+    session.setdefault("memory_snippets", {k: [] for k in agent_keys})
+    session.setdefault("turns_since_distill", {k: 0 for k in agent_keys})
+    session.setdefault("latest_rationale", {k: "" for k in agent_keys})
+    session.setdefault("latest_snippet_id", {k: None for k in agent_keys})
+    session.setdefault("snippet_counters", {k: 0 for k in agent_keys})
+    # Ensure keys exist even if session was created with a fixed A/B/C dict.
+    for k in agent_keys:
+        session["memory_snippets"].setdefault(k, [])
+        session["turns_since_distill"].setdefault(k, 0)
+        session["latest_rationale"].setdefault(k, "")
+        session["latest_snippet_id"].setdefault(k, None)
+        session["snippet_counters"].setdefault(k, 0)
+
+    transcript_lines = history_to_transcript_lines(session.get("history") or [])
+    responses: List[dict] = []
+    room_id = session.get("room_id")
+
+    def _append_jsonl(fp, obj: dict) -> None:
+        if fp is None:
+            return
+        import json
+
+        fp.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        fp.flush()
+
+    def create(client, messages: List[dict], temp: float, max_tok: int, meta: Optional[dict] = None) -> str:
+        if create_response_with_client is not None and client is not None:
+            return create_response_with_client(client, model, messages, temp, max_tok) or ""
+        return create_response(model, messages, temp, max_tok, meta=meta) or ""
+
+    def log_thinking(character: str, txt: str) -> None:
+        _append_jsonl(
+            session.get("think_fp"),
+            {"chat_room_id": room_id, "time": now_local_iso(), "character": character, "txt": txt},
+        )
+
+    def log_moderator(character: str, txt: str) -> None:
+        _append_jsonl(
+            session.get("moderator_fp"),
+            {"chat_room_id": room_id, "time": now_local_iso(), "character": character, "txt": txt},
+        )
+
+    def log_agent_event(agent_key: str, event_type: str, detail: str) -> None:
+        _append_jsonl(
+            session.get("rationale_fp"),
+            {
+                "chat_room_id": room_id,
+                "time": now_local_iso(),
+                "agent": agent_key,
+                "event": event_type,
+                "detail": detail,
+            },
+        )
+
+    def log_memory(record: dict) -> None:
+        _append_jsonl(session.get("memory_fp"), record)
+
+    def get_memory_context(agent_key: str, max_snippets: int = 3) -> str:
+        snips = (session.get("memory_snippets") or {}).get(agent_key) or []
+        snips = snips[-max_snippets:]
+        if not snips:
+            return ""
+        lines = ["\n=== YOUR MEMORY (your own recent position snapshots, oldest first) ==="]
+        lines += [f"- [{s['trigger']}] {s['content']}" for s in snips]
+        lines.append(
+            "Stay consistent with this trajectory unless you explicitly say you are revising it."
+        )
+        return "\n".join(lines)
+
+    def maybe_distill_snippet(agent_key: str, last_message: str, stall_active: bool) -> None:
+        """Rule-triggered in-session position snapshot (CLI-faithful)."""
+        turns_since = session["turns_since_distill"]
+        turns_since[agent_key] = int(turns_since.get(agent_key) or 0) + 1
+
+        phase_changed = moderator_state.pop("_just_changed", False)
+        if phase_changed:
+            trigger = "phase_change"
+        elif stall_active:
+            trigger = "stall"
+        elif turns_since[agent_key] >= DISTILL_TRIGGER_INTERVAL:
+            trigger = "periodic"
+        else:
+            return
+
+        source = (session.get("latest_rationale") or {}).get(agent_key) or last_message
+        snippets = session["memory_snippets"][agent_key]
+        parent = snippets[-1] if snippets else None
+
+        prompt_lines = [
+            f"Agent {agent_key} in a group deliberation (phase: {moderator_state['state']}) "
+            f"just explained its last message with: \"{source}\"",
+        ]
+        if parent:
+            prompt_lines.append(
+                f"The agent's previously recorded position was: \"{parent['content']}\" — "
+                f"state whether the new snapshot continues, refines, or reverses it."
+            )
+        prompt_lines.append(
+            "Distill the agent's CURRENT position into 1-2 short sentences. "
+            "Output only the distilled sentences, nothing else."
+        )
+        try:
+            content = create(
+                client_chat,
+                [{"role": "user", "content": "\n".join(prompt_lines)}],
+                0.3,
+                60,
+            ).strip()
+        except Exception as e:
+            log_thinking("memory_distill_error", f"{agent_key}: {e}")
+            content = ""
+        if not content:
+            content = source
+
+        session["snippet_counters"][agent_key] = int(session["snippet_counters"].get(agent_key) or 0) + 1
+        snippet = {
+            "id": f"snip_{agent_key}_{session['snippet_counters'][agent_key]:04d}",
+            "agent_key": agent_key,
+            "chat_room_id": room_id,
+            "time": now_local_iso(),
+            "content": content,
+            "trigger": trigger,
+            "parent_id": session["latest_snippet_id"].get(agent_key),
+        }
+        snippets.append(snippet)
+        session["latest_snippet_id"][agent_key] = snippet["id"]
+        turns_since[agent_key] = 0
+        log_memory(snippet)
+
+    def get_stance_block(agent_key: str) -> str:
+        try:
+            from stance import get_stance_text, stance_enabled
+
+            if not scenario_type or not stance_enabled(scenario_type):
+                return ""
+            stance = agent_configs.get(agent_key, {}).get("stance")
+            return get_stance_text(scenario_type, stance, lang) if stance else ""
+        except Exception:
+            return ""
+
+    def get_phase_context(agent_key: str) -> str:
+        s = moderator_state
+        decision = agent_configs.get(agent_key, {}).get("decision", "Rational")
+        mode = s.get("mode") or "S"
+        lookup_state = "Convergence" if s.get("state") == CONCLUDED_STATE else s.get("state", "Exploration")
+        assignment = get_phase_prompt(lookup_state, mode, decision, bool(s.get("stall")))
+        lines = ["=== DELIBERATION STATE ==="]
+        if s.get("mode"):
+            lines.append(
+                f"Mode: {'Selection' if mode == 'S' else 'Package'} | Phase: {s['state']}"
+            )
+        else:
+            lines.append(f"Phase: {s['state']}")
+        if s.get("goal"):
+            lines.append(f"Current goal: {s['goal']}")
+        lines.append(f"Your task this turn: {assignment}")
+        budget = QUESTION_BUDGET.get(lookup_state)
+        if budget and not s.get("stall") and s.get("state") != CONCLUDED_STATE:
+            lines.append(budget)
+        if known_context or domain_background:
+            lines.append(
+                "Anchor this message to the user's actual case: name at least one specific detail "
+                "from KNOWN USER CONTEXT. A statement that would read the same for any user is not "
+                "a contribution. Do not re-ask for anything already listed there as filled in."
+            )
+        recent = [ln for ln in transcript_lines[-6:] if not ln.lower().startswith("user:")]
+        if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
+            lines.append(
+                "CONSENSUS WARNING: the last several messages contained no real disagreement. "
+                "Before adding anything, state plainly where your stance differs from where the "
+                "group is heading, and what that direction costs the interest you represent."
+            )
+        try:
+            from stance import get_convergence_weight_hint
+
+            if lookup_state == "Convergence":
+                stance = agent_configs.get(agent_key, {}).get("stance")
+                weight_hint = get_convergence_weight_hint(scenario_type, intake_data, stance, lang)
+                if weight_hint:
+                    lines.append(f"Stance weighting for this closing stage: {weight_hint}")
+        except Exception:
+            pass
+        return "\n".join(lines)
+
+    def append_agent(agent: "ChatAgent", txt: str) -> None:
+        txt = sanitize_single_message(txt, agent.name, all_agent_names)
+        msg = {
+            "chat_room_id": room_id,
+            "time": now_local_iso(),
+            "character": agent.name,
+            "txt": txt,
+        }
+        session.setdefault("history", []).append(msg)
+        _append_jsonl(session.get("chat_fp"), msg)
+        if persist_chat:
+            persist_chat(msg)
+        transcript_lines.append(f"{agent.name}: {txt}")
+        responses.append({"agent_key": agent.key, "agent": agent.name, "message": txt})
+        session.setdefault("has_spoken", {})[agent.key] = True
+        agent.spoke += 1
+
+    def run_moderator(allow_state_change: bool = True) -> None:
+        history = clamp_history(transcript_lines, max_history_chars)
+        roles_summary = build_roles_summary(agent_list)
+        turns_in_state = int(session.get("turns_in_current_state") or 0)
+        stall_eligible = turns_in_state > MODERATOR_STALL_TURNS
+        had_user_input = bool(session.get("user_spoke_since_moderator"))
+        session["turns_since_moderator"] = 0
+        session["user_turns_since_moderator"] = 0
+        session["user_spoke_since_moderator"] = False
+
+        reported_state = (
+            "Convergence"
+            if moderator_state.get("state") == CONCLUDED_STATE
+            else moderator_state.get("state", "Exploration")
+        )
+        stall_hint = (
+            f"The conversation has been in '{reported_state}' state for "
+            f"{turns_in_state} agent turns."
+            + ("" if stall_eligible else " Do NOT set stall: true — not enough turns yet.")
+        )
+        msgs = [
+            {"role": "system", "content": ADMIN3_SYSTEM},
+            {
+                "role": "user",
+                "content": (
+                    f"=== SCENE ===\n{scene}\n\n"
+                    f"=== AGENT PERSONALITIES ===\n{roles_summary}\n\n"
+                    f"=== CURRENT STATE ===\n{reported_state}\n"
+                    f"{stall_hint}\n\n"
+                    f"=== TRANSCRIPT ===\n{history}\n"
+                ),
+            },
+        ]
+        raw = create(client_admin, msgs, 0.0, 300)
+        log_moderator("admin3_moderator", raw or "")
+        parsed = parse_moderator_plan(raw or "")
+        if not parsed:
+            return
+
+        prev_state = moderator_state.get("state")
+        if not allow_state_change and parsed["state"] != prev_state:
+            log_moderator(
+                "admin3_state_change_suppressed",
+                f"{prev_state} -> {parsed['state']} withheld: stall re-check only, "
+                f"no user input since the last classification.",
+            )
+            parsed = dict(parsed)
+            parsed["state"] = prev_state
+
+        if (
+            parsed["state"] == "Convergence"
+            and prev_state in ("Convergence", CONCLUDED_STATE)
+            and not had_user_input
+        ):
+            parsed = dict(parsed)
+            parsed["state"] = CONCLUDED_STATE
+            parsed["stall"] = False
+            parsed["goal"] = (
+                "The group has converged. Stop discussing; the floor is the "
+                "user's until they confirm, object, or raise something new."
+            )
+
+        moderator_state.update(parsed)
+        # One-shot phase-change signal for memory distillation (consumed via .pop()).
+        moderator_state["_just_changed"] = parsed["state"] != prev_state
+        if parsed["state"] != prev_state:
+            session["turns_in_current_state"] = 0
+            log_moderator(
+                "admin3_state_change",
+                f"{prev_state} -> {parsed['state']}  |  {parsed['goal']}",
+            )
+            if parsed["state"] == CONCLUDED_STATE:
+                log_moderator(
+                    "admin3_concluded",
+                    "Converged twice with no user input in between — discussion closed, "
+                    "floor returns to the user.",
+                )
+        elif parsed["stall"] and stall_eligible:
+            log_moderator(
+                "admin3_stall",
+                f"Stall in state={parsed['state']} after {session.get('turns_in_current_state')} turns | {parsed['goal']}",
+            )
+        if not stall_eligible or parsed["state"] != prev_state:
+            moderator_state["stall"] = False
+
+    def maybe_run_moderator() -> None:
+        user_turns = int(session.get("user_turns_since_moderator") or 0)
+        any_turns = int(session.get("turns_since_moderator") or 0)
+        due_user = user_turns >= MODERATOR_USER_TURN_INTERVAL
+        due_fallback = (not session.get("user_spoke_since_moderator")) and (
+            any_turns >= MODERATOR_TURN_FALLBACK
+        )
+        stalling = (
+            int(session.get("turns_in_current_state") or 0) > MODERATOR_STALL_TURNS
+            and any_turns >= MODERATOR_STALL_RECHECK
+        )
+        if due_user or due_fallback or stalling:
+            # Stall-only recheck must not advance phase (CLI semantics).
+            allow = due_user or due_fallback
+            run_moderator(allow_state_change=allow)
+
+    def enforce_novelty(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float) -> dict:
+        txt = parsed.get("message") or ""
+        if nov_th <= 0 or not transcript_lines or not txt:
+            return parsed
+        prior = transcript_lines[-novelty_window:]
+        ratio = novelty_ratio(txt, prior)
+        if ratio >= nov_th:
+            return parsed
+        log_thinking(
+            "novelty_retry",
+            f"{agent.key}: novelty={ratio:.2f} < {nov_th:.2f}, retrying once",
+        )
+        retry_messages = messages + [
+            {"role": "assistant", "content": txt},
+            {
+                "role": "user",
+                "content": (
+                    "That message restates points the group already has on the table and adds nothing new. "
+                    "Replace it entirely.\n"
+                    "Contribute exactly one of: a new evaluation dimension, a specific fact from KNOWN USER "
+                    "CONTEXT that nobody has cited yet, a concrete comparison of two options along one named "
+                    "dimension, an elimination with its reason, or a direct challenge to a specific claim "
+                    "someone made.\n"
+                    "If you genuinely have nothing new, reply with one short sentence saying so and naming "
+                    "whose point you are deferring to. Either way, do not ask a question this time. "
+                    "Keep the required [MESSAGE]/[RATIONALE] output format."
+                ),
+            },
+        ]
+        retry_raw = create(client_chat, retry_messages, min(temp + 0.15, 1.4), max_output_tokens)
+        retry_parsed = parse_agent_turn(retry_raw)
+        retry_ratio = (
+            novelty_ratio(retry_parsed["message"], prior) if retry_parsed.get("message") else 0.0
+        )
+        if retry_ratio >= nov_th:
+            log_thinking("novelty_retry", f"{agent.key}: retry novelty={retry_ratio:.2f} (kept)")
+            return retry_parsed
+        log_thinking(
+            "novelty_retry",
+            f"{agent.key}: retry novelty={retry_ratio:.2f}, still below {nov_th:.2f} — turn dropped",
+        )
+        return {"message": "", "rationale": "", "dropped": True}
+
+    def stall_burst(trigger_key: Optional[str] = None) -> None:
+        stall_temp = min(temperature + 0.25, 1.4)
+        burst_agents = [a for a in agent_list if a.key != trigger_key][:MAX_STALL_BURST_TURNS]
+        log_thinking(
+            "stall_burst",
+            f"Forcing {'->'.join(a.key for a in burst_agents)} burst at temp={stall_temp:.2f} "
+            f"(exempt from the consecutive-turn valve by design)",
+        )
+        for burst_agent in burst_agents:
+            session["bots_since_user"] = int(session.get("bots_since_user") or 0) + 1
+            session["turns_in_current_state"] = int(session.get("turns_in_current_state") or 0) + 1
+            session["turns_since_moderator"] = int(session.get("turns_since_moderator") or 0) + 1
+            history = clamp_history(transcript_lines, max_history_chars)
+            phase_context = get_phase_context(burst_agent.key)
+            user_prompt = (
+                "Below is the full group chat transcript so far.\n"
+                "The moderator has flagged a stall — the group is going in circles.\n"
+                "You MUST make a decisive move: propose something new, force a comparison, "
+                "ask a direct question that demands an answer, or take a clear position.\n"
+                "Do NOT repeat what has already been said.\n\n"
+                f"{history}"
+            )
+            pk = agent_configs.get(burst_agent.key, {}).get("preloaded_knowledge") or ""
+            messages = [
+                {
+                    "role": "system",
+                    "content": burst_agent.system_prompt(
+                        scene,
+                        name_map,
+                        phase_context,
+                        known_context=known_context,
+                        domain_background=domain_background,
+                        stance_text=get_stance_block(burst_agent.key),
+                        lang=lang,
+                        session_memory_text=session_memory_text,
+                        preloaded_knowledge_text=pk,
+                    )
+                    + get_memory_context(burst_agent.key),
+                },
+                {"role": "user", "content": user_prompt},
+            ]
+            raw = create(client_chat, messages, stall_temp, max_output_tokens)
+            parsed = parse_agent_turn(raw)
+            txt = parsed.get("message") or "…"
+            if parsed.get("rationale"):
+                session["latest_rationale"][burst_agent.key] = parsed["rationale"]
+                log_agent_event(burst_agent.key, "rationale", parsed["rationale"])
+            agent_mentions = parse_mentions(txt, mention_patterns)
+            if agent_mentions:
+                log_agent_event(
+                    burst_agent.key,
+                    "agent_mention",
+                    f"{burst_agent.key} mentioned {agent_mentions} "
+                    f"(soft cue, not routed, admin still decides next speaker)",
+                )
+            append_agent(burst_agent, txt)
+            session["last_speaker_key"] = burst_agent.key
+            maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
+        moderator_state["stall"] = False
+
+    def agent_turn(
+        agent: "ChatAgent", force_intro: bool = False, mention_trigger: bool = False
+    ) -> None:
+        session["last_speaker_key"] = agent.key
+        session["bots_since_user"] = int(session.get("bots_since_user") or 0) + 1
+        session["turns_in_current_state"] = int(session.get("turns_in_current_state") or 0) + 1
+        session["turns_since_moderator"] = int(session.get("turns_since_moderator") or 0) + 1
+        stall_triggered = bool(moderator_state.get("stall"))
+        history = clamp_history(transcript_lines, max_history_chars)
+        extra = ""
+        if force_intro:
+            extra = f"\n\n(Important) This is your FIRST message. Start with: Hi, I'm {agent.name}"
+        effective_temp = temperature
+        if stall_triggered:
+            effective_temp = min(temperature + 0.25, 1.4)
+        phase_context = get_phase_context(agent.key)
+        if mention_trigger:
+            user_prompt = (
+                "Below is the full group chat transcript so far.\n"
+                "Each line is formatted as: Speaker: message\n"
+                "The user just mentioned YOU by name in their last message. "
+                "Respond to the user directly first — address what they asked or said to you — "
+                "before anything else. Stay in character.\n\n"
+                f"{history}\n{extra}"
+            )
+        else:
+            user_prompt = (
+                "Below is the full group chat transcript so far.\n"
+                "Each line is formatted as: Speaker: message\n"
+                "Continue the conversation as your character.\n"
+                "Try to keep a lively group dynamic by engaging other bots (react, ask them questions, build on their points), "
+                "while still keeping the user included.\n\n"
+                f"{history}\n{extra}"
+            )
+        pk = agent_configs.get(agent.key, {}).get("preloaded_knowledge") or ""
+        messages = [
+            {
+                "role": "system",
+                "content": agent.system_prompt(
+                    scene,
+                    name_map,
+                    phase_context,
+                    known_context=known_context,
+                    domain_background=domain_background,
+                    stance_text=get_stance_block(agent.key),
+                    lang=lang,
+                    session_memory_text=session_memory_text,
+                    preloaded_knowledge_text=pk,
+                )
+                + get_memory_context(agent.key),
+            },
+            {"role": "user", "content": user_prompt},
+        ]
+        raw = create(client_chat, messages, effective_temp, max_output_tokens)
+        parsed = parse_agent_turn(raw)
+        parsed = enforce_novelty(agent, messages, parsed, effective_temp)
+        if parsed.get("dropped"):
+            log_agent_event(
+                agent.key,
+                "turn_dropped",
+                "novelty guard rejected both the original and the retry; "
+                "agent stayed silent this turn",
+            )
+            maybe_run_moderator()
+            return
+        txt = parsed.get("message") or "…"
+        if parsed.get("rationale"):
+            session["latest_rationale"][agent.key] = parsed["rationale"]
+            log_agent_event(agent.key, "rationale", parsed["rationale"])
+        agent_mentions = parse_mentions(txt, mention_patterns)
+        if agent_mentions:
+            log_agent_event(
+                agent.key,
+                "agent_mention",
+                f"{agent.key} mentioned {agent_mentions} "
+                f"(soft cue, not routed, admin still decides next speaker)",
+            )
+        append_agent(agent, txt)
+        maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
+        if stall_triggered:
+            stall_burst(trigger_key=agent.key)
+        maybe_run_moderator()
+
+    def admin_choose_next() -> str:
+        consecutive = int(session.get("bots_since_user") or 0)
+        if consecutive >= max_consecutive:
+            log_thinking(
+                "admin_rule",
+                f"Force U: consecutive_agent_turns >= {max_consecutive}",
+            )
+            return "U"
+        li = last_user_index(transcript_lines)
+        gap = (len(transcript_lines) - 1 - li) if li is not None else len(transcript_lines)
+        if gap >= max_user_gap:
+            log_thinking("admin_rule", f"Force U: user gap {gap} >= max_user_gap {max_user_gap}")
+            return "U"
+
+        history = clamp_history(transcript_lines, max_history_chars)
+        roles_summary = build_roles_summary(agent_list)
+        last_speaker_key = session.get("last_speaker_key")
+        spoke_counts = ", ".join(f"{k}={key_to_agent[k].spoke}" for k in agent_keys)
+        stats = (
+            f"Spoke counts: {spoke_counts}. "
+            f"Consecutive agent turns={consecutive}. "
+            f"User gap(lines)={gap}. "
+            f"Moderator state={moderator_state['state']}."
+        )
+        admin1_messages = [
+            {"role": "system", "content": admin1_system},
+            {
+                "role": "user",
+                "content": (
+                    f"=== SCENE ===\n{scene}\n\n"
+                    f"=== ROLES ===\n{roles_summary}\n\n"
+                    f"=== STATS ===\n{stats}\n\n"
+                    f"=== TRANSCRIPT (Speaker: message) ===\n{history}\n\n"
+                    f"Decide NEXT."
+                ),
+            },
+        ]
+        admin1_out = create(client_admin, admin1_messages, 0.2, 260)
+        log_thinking("admin1", admin1_out or "")
+        admin2_messages = [
+            {"role": "system", "content": admin2_system},
+            {"role": "user", "content": admin1_out or ""},
+        ]
+        admin2_out = (create(client_admin, admin2_messages, 0.0, MIN_OUTPUT_TOKENS) or "").strip().upper()
+        log_thinking("admin2", admin2_out)
+
+        def eligible() -> List[str]:
+            pool = [k for k in agent_keys if k != last_speaker_key]
+            return pool or list(agent_keys)
+
+        if admin2_out not in set(agent_keys) | {"U"}:
+            pick = random.choice(eligible())
+            log_thinking("admin_fallback", f"Invalid admin2_out={admin2_out!r}, fallback to {pick}")
+            admin2_out = pick
+
+        if admin2_out == "U":
+            if random.random() < prefer:
+                pick = random.choice(eligible())
+                log_thinking("admin_bias", f"Override U -> {pick} (prefer_agents={prefer})")
+                return pick
+            return "U"
+
+        if admin2_out == last_speaker_key:
+            pick = random.choice(eligible())
+            if pick != admin2_out:
+                log_thinking(
+                    "admin_no_repeat",
+                    f"Admin re-picked {admin2_out} (just spoke) -> rerouted to {pick}",
+                )
+                return pick
+        return admin2_out
+
+    # --- user message already appended by Flask caller ---
+    session["bots_since_user"] = 0
+    session["last_speaker_key"] = None
+    session["user_turn_count"] = int(session.get("user_turn_count") or 0) + 1
+    session["turns_since_moderator"] = int(session.get("turns_since_moderator") or 0) + 1
+    session["user_turns_since_moderator"] = int(session.get("user_turns_since_moderator") or 0) + 1
+    session["user_spoke_since_moderator"] = True
+
+    if moderator_state.get("state") == CONCLUDED_STATE:
+        moderator_state["state"] = "Convergence"
+        moderator_state["goal"] = ""
+        log_moderator(
+            "admin3_reopened",
+            "User spoke after Concluded — back to Convergence for re-classification.",
+        )
+
+    mentioned = parse_mentions(user_message or "", mention_patterns)
+    if mentioned:
+        q = session.setdefault("mention_queue", [])
+        q.extend(mentioned)
+        log_agent_event(
+            "user",
+            "mention_override",
+            f"user mentioned {mentioned}; queued for hard-routed replies",
+        )
+
+    maybe_run_moderator()
+
+    # Burst: mention hard-route (bypasses consecutive valve, CLI-faithful),
+    # then Admin picks until U / Concluded / safety bound.
+    safety = max_consecutive + MAX_MENTIONS_PER_MESSAGE + MAX_STALL_BURST_TURNS + 4
+    for _ in range(safety):
+        mq = session.get("mention_queue") or []
+        if mq:
+            key = mq.pop(0)
+            session["mention_queue"] = mq
+            if key not in key_to_agent:
+                continue
+            log_agent_event(
+                key,
+                "mention_dispatch",
+                f"hard-routing {key} to speak (from user mention queue, "
+                f"admin selection skipped)",
+            )
+            force_intro = not bool((session.get("has_spoken") or {}).get(key))
+            agent_turn(key_to_agent[key], force_intro=force_intro, mention_trigger=True)
+            if moderator_state.get("state") == CONCLUDED_STATE:
+                break
+            continue
+
+        if moderator_state.get("state") == CONCLUDED_STATE:
+            break
+
+        nxt = admin_choose_next()
+        if nxt == "U":
+            break
+        if nxt not in key_to_agent:
+            break
+        force_intro = not bool((session.get("has_spoken") or {}).get(nxt))
+        agent_turn(key_to_agent[nxt], force_intro=force_intro)
+        if moderator_state.get("state") == CONCLUDED_STATE:
+            break
+
+    phase = moderator_state.get("state", "Exploration")
+    concluded = phase == CONCLUDED_STATE
+    return {
+        "responses": responses,
+        "phase": phase,
+        "stall": bool(moderator_state.get("stall")),
+        "concluded": concluded,
+        "moderator_state": dict(moderator_state),
+    }
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -777,13 +1728,22 @@ def main():
     ap.add_argument("--scenes_dir", default="scenes",
                     help="Folder holding per-scenario, per-language scene files. Default: ./scenes")
     ap.add_argument("--info", default="info.jsonl", help="Path to info.jsonl (agent emotion+decision type names)")
-    ap.add_argument("--bot1", default="chatbot1.txt", help="Path to chatbot1.txt (A)")
-    ap.add_argument("--bot2", default="chatbot2.txt", help="Path to chatbot2.txt (B)")
-    ap.add_argument("--bot3", default="chatbot3.txt", help="Path to chatbot3.txt (C)")
-    ap.add_argument("--start_order", default="ABCU", help="Up to 4 chars from {A,B,C,U}, default ABCU")
+    ap.add_argument("--bot1", default="chatbot1.txt", help="Path to chatbot1.txt (A) — legacy, only valid when agent keys are exactly A/B/C")
+    ap.add_argument("--bot2", default="chatbot2.txt", help="Path to chatbot2.txt (B) — legacy, only valid when agent keys are exactly A/B/C")
+    ap.add_argument("--bot3", default="chatbot3.txt", help="Path to chatbot3.txt (C) — legacy, only valid when agent keys are exactly A/B/C")
+    ap.add_argument("--roles-dir", dest="roles_dir", default=None,
+                    help="Folder holding one role file per agent key, named {KEY}.txt (A.txt, B.txt, "
+                         "D.txt, ...). The agent key set itself always comes from info.jsonl's "
+                         "\"agents\" field. Default: ./roles (used automatically when the key set "
+                         "is not exactly A/B/C)")
+    ap.add_argument("--start_order", default="ABCU", help="Chars from the agent key set plus U, default ABCU")
     ap.add_argument("--model", default="gpt-4o")
     ap.add_argument("--temperature", type=float, default=0.8)
-    ap.add_argument("--max_output_tokens", type=int, default=220)
+    ap.add_argument("--max_output_tokens", type=int, default=320,
+                    help="Raised from 220 once agents had to emit [MESSAGE] plus [RATIONALE] in one "
+                         "generation: in logs/316347 two thirds of turns ran out of budget before "
+                         "the rationale block (one message was cut off mid-sentence). Watch for "
+                         "TRUNCATED in the rationale log if you lower it. Default 320")
     ap.add_argument("--max_history_chars", type=int, default=12000)
     ap.add_argument("--log_dir", default="logs", help="Directory to write jsonl logs")
     ap.add_argument("--prefer_agents", type=float, default=0.85,
@@ -792,14 +1752,16 @@ def main():
                     help="Force U if user hasn't spoken in this many transcript lines. Default 12")
 
     # ---- Message quality guards ----
-    ap.add_argument("--novelty_threshold", type=float, default=0.35,
+    ap.add_argument("--novelty_threshold", type=float, default=0.5,
                     help="If a reply's share of content words unseen in the recent transcript falls "
-                         "below this, the agent gets one corrective retry (one extra API call). "
-                         "0 disables the check. Calibrated on logs/442575: clear restatements scored "
-                         "0.19-0.44, genuine contributions 0.55-0.69. 0.35 is deliberately on the "
-                         "conservative side of that gap — this is a backstop for egregious recycling, "
-                         "not a precision classifier. Re-check with transcript_report.py on your own "
-                         "logs. Default 0.35")
+                         "below this, the agent gets one corrective retry (one extra API call); if "
+                         "the retry still misses the bar the turn is DROPPED and the agent stays "
+                         "silent. 0 disables the check. Calibrated on logs/442575: clear "
+                         "restatements scored 0.19-0.44, genuine contributions 0.55-0.69. Raised "
+                         "from 0.35 to 0.5 after logs/316347. Note the bigger change is the drop "
+                         "rule: retries used to be kept merely for scoring better than the "
+                         "original (0.52 > 0.00 was 'kept'), independently of this threshold. "
+                         "Default 0.5")
     ap.add_argument("--novelty_window", type=int, default=10,
                     help="How many recent transcript lines the novelty check compares against. Short "
                          "enough that a deliberate callback to something said 20 turns ago isn't "
@@ -839,7 +1801,7 @@ def main():
     args.max_output_tokens = max(int(args.max_output_tokens), MIN_OUTPUT_TOKENS)
 
     if not _effective_api_key() or _effective_api_key() == "sk-xxxx":
-        print("ERROR: No API key. Please set API_KEY at the top of this script.", file=sys.stderr)
+        print("ERROR: No API key. Set the OPENAI_API_KEY environment variable.", file=sys.stderr)
         sys.exit(2)
 
     # Load scene: explicit --scene always wins; otherwise auto-resolve from
@@ -860,30 +1822,55 @@ def main():
                             decision_dir=args.decision_dir, emotion_dir=args.emotion_dir,
                             require_presets=args.assemble_roles)
 
-    # Load role text: either pre-composed chatbot1/2/3.txt (legacy, default), or
-    # spliced live from decision/{name}.txt + emotion/{name}.txt via agent_assembly.py
-    if args.assemble_roles:
-        if not HAVE_AGENT_ASSEMBLY:
-            print("WARNING: --assemble_roles was set but agent_assembly.py could not be imported; "
-                  "falling back to --bot1/2/3 files.", file=sys.stderr)
-            role_a = safe_read_text(args.bot1, default="(chatbot1.txt missing)")
-            role_b = safe_read_text(args.bot2, default="(chatbot2.txt missing)")
-            role_c = safe_read_text(args.bot3, default="(chatbot3.txt missing)")
-        else:
-            specs = build_all_agent_specs(
-                agent_configs,
-                scenario_type=args.scenario_type,
-                lang=args.lang,
-                decision_dir=args.decision_dir,
-                emotion_dir=args.emotion_dir,
-            )
-            role_a = specs["A"]["role_text"]
-            role_b = specs["B"]["role_text"]
-            role_c = specs["C"]["role_text"]
+    # The agent key set — and therefore the pool size — comes from info.jsonl's
+    # "agents" field alone. Nothing below is allowed to hardcode agent count.
+    agent_keys: List[str] = sorted(agent_configs.keys())
+    is_legacy_abc = set(agent_keys) == {"A", "B", "C"}
+
+    def _load_roles_from_dir(roles_dir: str) -> Dict[str, str]:
+        missing = [k for k in agent_keys
+                   if not os.path.exists(os.path.join(roles_dir, f"{k}.txt"))]
+        if missing:
+            print(f"ERROR: info.jsonl defines agent keys {agent_keys}, but role file(s) "
+                  f"{', '.join(os.path.join(roles_dir, k + '.txt') for k in missing)} "
+                  f"do not exist. Each key needs a {{KEY}}.txt in --roles-dir.", file=sys.stderr)
+            sys.exit(2)
+        return {k: read_text(os.path.join(roles_dir, f"{k}.txt")) for k in agent_keys}
+
+    # Role-text source, resolved by deterministic priority:
+    #   1. --assemble_roles       -> spliced from decision/emotion presets (any key set)
+    #   2. explicit --roles-dir   -> {roles_dir}/{KEY}.txt per key
+    #   3. keys exactly {A,B,C}   -> legacy --bot1/2/3 files (backward compatible default)
+    #   4. otherwise              -> default ./roles dir; a clear startup error if absent
+    role_texts: Dict[str, str] = {}
+    if args.assemble_roles and HAVE_AGENT_ASSEMBLY:
+        specs = build_all_agent_specs(
+            agent_configs,
+            scenario_type=args.scenario_type,
+            lang=args.lang,
+            decision_dir=args.decision_dir,
+            emotion_dir=args.emotion_dir,
+        )
+        role_texts = {k: specs[k]["role_text"] for k in agent_keys}
     else:
-        role_a = safe_read_text(args.bot1, default="(chatbot1.txt missing)")
-        role_b = safe_read_text(args.bot2, default="(chatbot2.txt missing)")
-        role_c = safe_read_text(args.bot3, default="(chatbot3.txt missing)")
+        if args.assemble_roles:
+            print("WARNING: --assemble_roles was set but agent_assembly.py could not be imported; "
+                  "falling back to role files.", file=sys.stderr)
+        if args.roles_dir is not None:
+            role_texts = _load_roles_from_dir(args.roles_dir)
+        elif is_legacy_abc:
+            role_texts = {
+                "A": safe_read_text(args.bot1, default="(chatbot1.txt missing)"),
+                "B": safe_read_text(args.bot2, default="(chatbot2.txt missing)"),
+                "C": safe_read_text(args.bot3, default="(chatbot3.txt missing)"),
+            }
+        elif os.path.isdir("roles"):
+            role_texts = _load_roles_from_dir("roles")
+        else:
+            print(f"ERROR: info.jsonl defines agent keys {agent_keys}. The legacy --bot1/2/3 "
+                  f"path only supports exactly A/B/C; use --roles-dir with one {{KEY}}.txt "
+                  f"file per key instead.", file=sys.stderr)
+            sys.exit(2)
 
     # Scenario information layer: Profile confirm/collect + Scenario Intake +
     # Domain Background matching. Shared by all three agents (not per-agent),
@@ -907,35 +1894,81 @@ def main():
             domain_background = ctx["domain_background"]
             intake_data = ctx.get("intake", {})
 
+    # Stance Knowledge base: load the per-scenario keyword cards once here and
+    # reuse across every turn (never re-read per turn). None when the module is
+    # unavailable; get_stance_knowledge_block() is a no-op in that case.
+    stance_knowledge_data = load_stance_knowledge() if HAVE_STANCE_KNOWLEDGE else None
+
+    # Cross-session memory (read side): pull the last few sessions for this
+    # user_id + scenario_type and build the recap block injected into every
+    # agent's system prompt this session. Empty in legacy runs (no scenario_type)
+    # or on the first-ever session for this pair. The write side runs at shutdown.
+    session_memory_text = ""
+    if HAVE_SESSION_MEMORY and args.scenario_type:
+        recent_sessions = load_recent_sessions(args.user_id, args.scenario_type, limit=3)
+        session_memory_text = build_session_memory_text(recent_sessions, args.lang)
+
     # Stance: forced binding, overrides whatever (if anything) info.jsonl had.
     # Scenario types not in stance.STANCE_ASSIGNMENTS simply get no stance —
     # agent_configs[key]["stance"] stays unset and the block is skipped.
     if HAVE_STANCE and stance_enabled(args.scenario_type):
-        for key in ("A", "B", "C"):
-            agent_configs.setdefault(key, {})
+        for key in agent_keys:
             agent_configs[key]["stance"] = assign_stance(args.scenario_type, key)
     elif args.scenario_type and not HAVE_STANCE:
         print("WARNING: --scenario_type was set but stance.py could not be imported; "
               "continuing without the stance dimension.", file=sys.stderr)
 
+    # Stance Knowledge — PRELOADED channel: each agent's optional info.jsonl
+    # `hint` is matched against the knowledge base ONCE here, and the matched card
+    # body becomes that agent's fixed, whole-session background (body only — the
+    # distinct "=== BACKGROUND (from setup) ===" header is added in system_prompt).
+    # A missing/empty hint, or one that hits no keyword, stores "" (no fallback).
+    # This is a separate channel from the per-turn dynamic trigger above.
+    for key in agent_keys:
+        hint = agent_configs.get(key, {}).get("hint")
+        agent_configs[key]["preloaded_knowledge"] = stance_knowledge_on_hit(
+            args.scenario_type, agent_configs[key].get("stance"),
+            hint, args.lang, stance_knowledge_data, include_header=False,
+        ) if hint else ""
+
     agents: List[ChatAgent] = [
-        ChatAgent("A", "ChatbotA", role_a),
-        ChatAgent("B", "ChatbotB", role_b),
-        ChatAgent("C", "ChatbotC", role_c),
+        ChatAgent(k, f"Chatbot{k}", role_texts[k]) for k in agent_keys
     ]
     key_to_agent = {a.key: a for a in agents}
     name_map = {a.key: a.name for a in agents}
 
+    # Hard "pull the user back in" threshold, scaled to the pool size: with more
+    # agents a longer bot-to-bot stretch is natural, capped so the user is never
+    # sidelined for long. Must be computed after agent_keys is known.
+    MAX_CONSECUTIVE_AGENT_TURNS = min(len(agent_keys) + 2, 8)
+    admin1_system, admin2_system = build_admin_prompts(agent_keys, MAX_CONSECUTIVE_AGENT_TURNS)
+
     chat_room_id = f"{random.randint(0, 999999):06d}"
     os.makedirs(args.log_dir, exist_ok=True)
+    # Log file layout:
+    #   {room}.jsonl            chat transcript                       (unchanged)
+    #   {room}_thinking.jsonl   admin1/admin2 reasoning traces        (unchanged)
+    #   {room}_moderator.jsonl  admin3 state classification           (unchanged)
+    #   {room}_rationale.jsonl  per-agent rationale + mention events  (new)
+    #   {room}_memory.jsonl     memory snippet chains                 (new)
     chat_path = os.path.join(args.log_dir, f"{chat_room_id}.jsonl")
     thinking_path = os.path.join(args.log_dir, f"{chat_room_id}_thinking.jsonl")
     moderator_path = os.path.join(args.log_dir, f"{chat_room_id}_moderator.jsonl")
+    rationale_path = os.path.join(args.log_dir, f"{chat_room_id}_rationale.jsonl")
+    memory_path = os.path.join(args.log_dir, f"{chat_room_id}_memory.jsonl")
 
     transcript_lines: List[str] = []
     consecutive_agent_turns = 0
-    turns_since_moderator = 0   # speaking turns of any kind since the last moderator run
-    turns_in_current_state = 0  # stall detection: turns since last state change
+    # Key of the agent that most recently held the floor (published OR dropped);
+    # reset to None when the user speaks. admin_choose_next() excludes it so the
+    # same agent is never handed the floor twice in a row — otherwise a random
+    # override (prefer_agents / fallback) could re-pick the agent that just spoke,
+    # whose second turn is a restatement the novelty guard then drops.
+    last_speaker_key: Optional[str] = None
+    turns_since_moderator = 0        # turns of any kind since the last moderator run (backstop)
+    user_turns_since_moderator = 0   # user turns since the last moderator run (primary trigger)
+    turns_in_current_state = 0       # stall detection: turns since last state change
+    user_spoke_since_moderator = False  # did the user contribute between the last two runs?
 
     # Moderator state (assignments now come from PHASE_PROMPTS lookup, not LLM)
     moderator_state = {
@@ -944,6 +1977,19 @@ def main():
         "stall": False,
         "goal":  "",
     }
+
+    # Memory snippet chains: one independent LINEAR chain per agent (not a
+    # tree) — each new snippet's parent_id points at that agent's previous one.
+    snippet_counters: Dict[str, int] = {k: 0 for k in agent_keys}
+    turns_since_distill: Dict[str, int] = {k: 0 for k in agent_keys}
+    latest_snippet_id: Dict[str, Optional[str]] = {k: None for k in agent_keys}
+    latest_rationale: Dict[str, str] = {k: "" for k in agent_keys}
+    memory_snippets: Dict[str, List[dict]] = {k: [] for k in agent_keys}
+
+    # User @-mention hard routing: keys queued here speak next, in order,
+    # before Admin-1/2 get to choose again.
+    mention_patterns = build_mention_patterns(agent_keys, name_map)
+    mention_queue: List[str] = []
 
     def log_chat(character: str, txt: str):
         record = {"chat_room_id": chat_room_id, "time": now_local_iso(), "character": character, "txt": txt}
@@ -958,11 +2004,51 @@ def main():
         record = {"chat_room_id": chat_room_id, "time": now_local_iso(), "character": character, "txt": txt}
         write_jsonl_line(moderator_fp, record)
 
+    def log_generation_meta(agent_key: str, meta: dict, raw: str = "", note: str = ""):
+        """
+        Record why a generation ended the way it did. A run once produced the
+        bare string "I'm sorry, I can't assist with that." as a chat message
+        with no way to tell a content filter from a truncation; status /
+        incomplete_reason / refusal answer that. Also flags truncation, which
+        silently eats the [RATIONALE] block when max_output_tokens is too low.
+        """
+        summary = format_generation_meta(meta)
+        flags = []
+        if meta.get("refusal"):
+            flags.append("REFUSAL")
+        if meta.get("incomplete_reason") == "max_output_tokens":
+            flags.append("TRUNCATED(raise --max_output_tokens)")
+        if raw and "[/MESSAGE]" not in raw:
+            flags.append("NO_CLOSING_MESSAGE_TAG")
+        if not summary and not flags:
+            return
+        detail = " | ".join(p for p in (note, summary, " ".join(flags)) if p)
+        log_agent_event(agent_key, "generation_meta", detail)
+
+    def log_agent_event(agent_key: str, event_type: str, detail: str):
+        """event_type ∈ {"rationale", "agent_mention", "mention_override",
+        "mention_dispatch", "generation_meta", "turn_dropped"}"""
+        record = {
+            "chat_room_id": chat_room_id,
+            "time": now_local_iso(),
+            "agent": agent_key,
+            "event": event_type,
+            "detail": detail,
+        }
+        write_jsonl_line(rationale_fp, record)
+
+    def log_memory(record: dict):
+        write_jsonl_line(memory_fp, record)
+
     def get_phase_context(agent_key: str) -> str:
         s = moderator_state
         decision = agent_configs[agent_key]["decision"]
         mode = s["mode"] or "S"  # default to Selection until mode is determined
-        assignment = get_phase_prompt(s["state"], mode, decision, s["stall"])
+        # Concluded has no PHASE_PROMPTS rows of its own — an agent only speaks
+        # in that state when the user forces it (/next or an @-mention), and
+        # Convergence is the right brief for that.
+        lookup_state = "Convergence" if s["state"] == CONCLUDED_STATE else s["state"]
+        assignment = get_phase_prompt(lookup_state, mode, decision, s["stall"])
         lines = ["=== DELIBERATION STATE ==="]
         if s["mode"]:
             lines.append(f"Mode: {'Selection' if mode == 'S' else 'Package'} | Phase: {s['state']}")
@@ -972,7 +2058,7 @@ def main():
             lines.append(f"Current goal: {s['goal']}")
         lines.append(f"Your task this turn: {assignment}")
 
-        budget = QUESTION_BUDGET.get(s["state"])
+        budget = QUESTION_BUDGET.get(lookup_state)
         if budget and not s["stall"]:
             lines.append(budget)
 
@@ -1007,6 +2093,22 @@ def main():
             weight_hint = get_convergence_weight_hint(args.scenario_type, intake_data, stance, args.lang)
             if weight_hint:
                 lines.append(f"Stance weighting for this closing stage: {weight_hint}")
+
+        # Stance Knowledge — DYNAMIC channel: keyword-triggered card for this
+        # agent's stance, matched against the user's LATEST message and re-checked
+        # every turn. Independent of the session-start preloaded hint channel
+        # (=== BACKGROUND (from setup) ===); both can appear in one prompt.
+        if HAVE_STANCE_KNOWLEDGE and stance_knowledge_data:
+            stance = agent_configs.get(agent_key, {}).get("stance")
+            li = last_user_index(transcript_lines)
+            last_user_message = (
+                transcript_lines[li].split(":", 1)[1].strip() if li is not None else ""
+            )
+            sk_block = stance_knowledge_on_hit(
+                args.scenario_type, stance, last_user_message, args.lang, stance_knowledge_data,
+            )
+            if sk_block:
+                lines.append(sk_block)
         return "\n".join(lines)
 
     def get_stance_block(agent_key: str) -> str:
@@ -1015,37 +2117,149 @@ def main():
         stance = agent_configs.get(agent_key, {}).get("stance")
         return get_stance_text(args.scenario_type, stance, args.lang)
 
+    def maybe_distill_snippet(agent_key: str, last_message: str, stall_active: bool):
+        """
+        Called once after every agent utterance. The DECISION to distill is
+        purely rule-based (no LLM guessing "should I remember this"); the LLM
+        is only invoked to write the 1-2 sentence snippet once a trigger fires:
+          1. phase_change : the moderator just moved the deliberation state
+          2. stall        : this utterance happened under an active stall
+          3. periodic     : fallback, every DISTILL_TRIGGER_INTERVAL utterances
+        """
+        turns_since_distill[agent_key] += 1
+
+        # One-shot consumption via .pop(): a plain read would leave the flag
+        # True until the next run_moderator() and over-trigger for every agent
+        # turn in between.
+        phase_changed = moderator_state.pop("_just_changed", False)
+
+        if phase_changed:
+            trigger = "phase_change"
+        elif stall_active:
+            trigger = "stall"
+        elif turns_since_distill[agent_key] >= DISTILL_TRIGGER_INTERVAL:
+            trigger = "periodic"
+        else:
+            return
+
+        # Distill from the agent's own latest rationale — that is where the
+        # "why" lives; the message is only the fallback when parsing failed.
+        source = latest_rationale.get(agent_key) or last_message
+        parent = memory_snippets[agent_key][-1] if memory_snippets[agent_key] else None
+
+        prompt_lines = [
+            f"Agent {agent_key} in a group deliberation (phase: {moderator_state['state']}) "
+            f"just explained its last message with: \"{source}\"",
+        ]
+        if parent:
+            prompt_lines.append(
+                f"The agent's previously recorded position was: \"{parent['content']}\" — "
+                f"state whether the new snapshot continues, refines, or reverses it."
+            )
+        prompt_lines.append(
+            "Distill the agent's CURRENT position into 1-2 short sentences. "
+            "Output only the distilled sentences, nothing else."
+        )
+        try:
+            content = create_response(
+                args.model,
+                [{"role": "user", "content": "\n".join(prompt_lines)}],
+                temperature=0.3, max_output_tokens=60,
+            ).strip()
+        except Exception as e:
+            log_thinking("memory_distill_error", f"{agent_key}: {e}")
+            content = ""
+        if not content:
+            content = source  # keep the chain intact even if the distill call fails
+
+        snippet_counters[agent_key] += 1
+        snippet = {
+            "id": f"snip_{agent_key}_{snippet_counters[agent_key]:04d}",
+            "agent_key": agent_key,
+            "chat_room_id": chat_room_id,
+            "time": now_local_iso(),
+            "content": content,
+            "trigger": trigger,
+            "parent_id": latest_snippet_id[agent_key],
+        }
+        memory_snippets[agent_key].append(snippet)
+        latest_snippet_id[agent_key] = snippet["id"]
+        # Any trigger resets the periodic counter, so a phase-change snippet
+        # isn't immediately followed by a near-duplicate periodic one.
+        turns_since_distill[agent_key] = 0
+        log_memory(snippet)
+
+    def get_memory_context(agent_key: str, max_snippets: int = 3) -> str:
+        """Most recent snippets of this agent's own chain, as a prompt block.
+        Appended AFTER system_prompt()'s return value, never baked into
+        role_text (role_text stays static)."""
+        snips = memory_snippets[agent_key][-max_snippets:]
+        if not snips:
+            return ""
+        lines = ["\n=== YOUR MEMORY (your own recent position snapshots, oldest first) ==="]
+        lines += [f"- [{s['trigger']}] {s['content']}" for s in snips]
+        lines.append("Stay consistent with this trajectory unless you explicitly say you are revising it.")
+        return "\n".join(lines)
+
     def maybe_run_moderator():
         """
-        Turn-based moderator scheduling. The old trigger lived inside user_turn()
-        and counted user inputs only, so with --prefer_agents at its default the
-        moderator never ran at all and the deliberation state stayed pinned at
-        Exploration for the whole session — see MODERATOR_TURN_INTERVAL.
+        Moderator scheduling: USER participation is the primary clock, total
+        turns are only a backstop. See MODERATOR_USER_TURN_INTERVAL for why —
+        counting turns of any kind let three agents greet each other into a
+        phase advance before the user had said anything.
         """
-        nonlocal turns_since_moderator
-        due = turns_since_moderator >= MODERATOR_TURN_INTERVAL
+        nonlocal turns_since_moderator, user_turns_since_moderator
+        due_user = user_turns_since_moderator >= MODERATOR_USER_TURN_INTERVAL
+        # The backstop only applies while the user is SILENT. Letting it fire
+        # regardless would re-introduce exactly what it is meant to prevent: a
+        # busy agent-to-agent stretch between two user sentences would trip the
+        # total-turn counter and advance the phase a second time, so two user
+        # sentences could still burn through two phases.
+        due_fallback = (not user_spoke_since_moderator
+                        and turns_since_moderator >= MODERATOR_TURN_FALLBACK)
         # Past the stall threshold, re-check more often so a stuck group is
         # unstuck promptly — but not on every single line.
         stalling = (turns_in_current_state > MODERATOR_STALL_TURNS
                     and turns_since_moderator >= MODERATOR_STALL_RECHECK)
-        if due or stalling:
-            turns_since_moderator = 0
-            run_moderator()
+        if due_user or due_fallback or stalling:
+            # A run triggered ONLY by the stall re-check must not advance the
+            # phase: it exists to detect and clear stalls, and it is clocked on
+            # agent turns, so letting it move the state would smuggle back the
+            # agent-driven progression this whole trigger was rewritten to stop.
+            # The fallback keeps its power to advance — that is its job as the
+            # freeze breaker.
+            run_moderator(allow_state_change=due_user or due_fallback)
 
-    def run_moderator():
-        """Classify current deliberation state and issue per-agent moves."""
-        # turns_since_moderator must be declared here too: without it, the reset
-        # below binds a fresh local and the outer counter silently never resets.
+    def run_moderator(allow_state_change: bool = True):
+        """Classify current deliberation state and issue per-agent moves.
+
+        allow_state_change=False: run the classifier and honour its stall/goal
+        output, but keep the current phase (see maybe_run_moderator)."""
+        # These must be declared here too: without it, the resets below bind
+        # fresh locals and the outer counters silently never reset.
         nonlocal turns_in_current_state, turns_since_moderator
+        nonlocal user_turns_since_moderator, user_spoke_since_moderator
 
         history = clamp_history(transcript_lines, args.max_history_chars)
         roles_summary = build_roles_summary(agents)
 
+        # Consume the scheduling counters for this run, but keep the "did the
+        # user contribute since last time" answer — the Concluded latch below
+        # needs it.
+        had_user_input = user_spoke_since_moderator
+        turns_since_moderator = 0
+        user_turns_since_moderator = 0
+        user_spoke_since_moderator = False
+
         # Include stall context so Admin-3 knows how long we've been here
         # Only allow stall detection after MODERATOR_STALL_TURNS (first turn excluded)
         stall_eligible = turns_in_current_state > MODERATOR_STALL_TURNS
+        # Admin-3 only knows the four deliberation phases; Concluded is derived
+        # here in code, so report it back to Admin-3 as the phase it came from.
+        reported_state = ("Convergence" if moderator_state["state"] == CONCLUDED_STATE
+                          else moderator_state["state"])
         stall_hint = (
-            f"The conversation has been in '{moderator_state['state']}' state for "
+            f"The conversation has been in '{reported_state}' state for "
             f"{turns_in_current_state} agent turns."
             + ("" if stall_eligible else " Do NOT set stall: true — not enough turns yet.")
         )
@@ -1055,7 +2269,7 @@ def main():
             {"role": "user", "content": (
                 f"=== SCENE ===\n{scene}\n\n"
                 f"=== AGENT PERSONALITIES ===\n{roles_summary}\n\n"
-                f"=== CURRENT STATE ===\n{moderator_state['state']}\n"
+                f"=== CURRENT STATE ===\n{reported_state}\n"
                 f"{stall_hint}\n\n"
                 f"=== TRANSCRIPT ===\n{history}\n"
             )},
@@ -1068,12 +2282,43 @@ def main():
             return
 
         prev_state = moderator_state["state"]
+
+        if not allow_state_change and parsed["state"] != prev_state:
+            log_moderator("admin3_state_change_suppressed",
+                          f"{prev_state} -> {parsed['state']} withheld: stall re-check only, "
+                          f"no user input since the last classification.")
+            parsed = dict(parsed)
+            parsed["state"] = prev_state
+
+        # Terminal-state latch (deterministic, not asked of the LLM): the group
+        # reaching Convergence twice in a row with no user input in between
+        # means the discussion is finished, not that it needs another round of
+        # "encourage the user to finalize". Latching here is what stops the
+        # recycling loop seen in logs/316347.
+        if (parsed["state"] == "Convergence"
+                and prev_state in ("Convergence", CONCLUDED_STATE)
+                and not had_user_input):
+            parsed = dict(parsed)
+            parsed["state"] = CONCLUDED_STATE
+            parsed["stall"] = False
+            parsed["goal"] = ("The group has converged. Stop discussing; the floor is the "
+                              "user's until they confirm, object, or raise something new.")
+
         moderator_state.update(parsed)
+
+        # One-shot phase-change signal for memory distillation. It is consumed
+        # with .pop() in maybe_distill_snippet(), so it triggers exactly one
+        # snippet (for the next agent that speaks) instead of staying True and
+        # over-triggering until the next moderator run.
+        moderator_state["_just_changed"] = (parsed["state"] != prev_state)
 
         if parsed["state"] != prev_state:
             turns_in_current_state = 0
-            turns_since_moderator = 0
             log_moderator("admin3_state_change", f"{prev_state} -> {parsed['state']}  |  {parsed['goal']}")
+            if parsed["state"] == CONCLUDED_STATE:
+                log_moderator("admin3_concluded",
+                              "Converged twice with no user input in between — discussion closed, "
+                              "floor returns to the user.")
         elif parsed["stall"] and stall_eligible:
             log_moderator("admin3_stall", f"Stall in state={parsed['state']} after {turns_in_current_state} turns | {parsed['goal']}")
 
@@ -1089,21 +2334,31 @@ def main():
         Called from agent_turn after a stall is confirmed.
 
         trigger_key is the agent that just spoke — it's excluded, otherwise it
-        would speak twice in a row. The burst also respects the hard "user speaks
-        after 5 consecutive agent turns" rule, and clears the stall flag on the
-        way out so it fires once per detection rather than on every subsequent
-        turn until the next moderator run.
+        would speak twice in a row. The burst clears the stall flag on the way
+        out so it fires once per detection rather than on every subsequent turn
+        until the next moderator run.
+
+        DELIBERATE EXEMPTION from the MAX_CONSECUTIVE_AGENT_TURNS valve: the
+        burst used to test that counter per iteration and, in logs/316347, a
+        stall detected at consecutive_agent_turns == 5 produced the sequence
+        "Forcing A->C burst" immediately followed by "Burst cut short" — the
+        recovery mechanism never emitted a single message, making stall
+        detection decorative. A stall is precisely the situation where more
+        agent turns are the intended remedy, so the burst runs its own bounded
+        budget (at most one turn per other agent, i.e. len(agents)-1) and the
+        valve reasserts itself right after: the burst leaves
+        consecutive_agent_turns elevated, so admin_choose_next() hands the floor
+        straight back to the user.
         """
         nonlocal consecutive_agent_turns, turns_in_current_state, turns_since_moderator
+        nonlocal last_speaker_key
         stall_temp = min(args.temperature + 0.25, 1.4)
-        burst_agents = [a for a in agents if a.key != trigger_key]
+        burst_agents = [a for a in agents if a.key != trigger_key][:MAX_STALL_BURST_TURNS]
         log_thinking("stall_burst",
-                     f"Forcing {'->'.join(a.key for a in burst_agents)} burst at temp={stall_temp:.2f}")
+                     f"Forcing {'->'.join(a.key for a in burst_agents)} burst at temp={stall_temp:.2f} "
+                     f"(exempt from the consecutive-turn valve by design)")
 
         for burst_agent in burst_agents:
-            if consecutive_agent_turns >= 5:
-                log_thinking("stall_burst", "Burst cut short: consecutive_agent_turns >= 5, user speaks next")
-                break
             consecutive_agent_turns += 1
             turns_in_current_state += 1
             turns_since_moderator += 1
@@ -1124,16 +2379,33 @@ def main():
                 {"role": "system", "content": burst_agent.system_prompt(
                     scene, name_map, phase_context,
                     known_context=known_context, domain_background=domain_background,
-                    stance_text=get_stance_block(burst_agent.key), lang=args.lang)},
+                    stance_text=get_stance_block(burst_agent.key), lang=args.lang,
+                    session_memory_text=session_memory_text,
+                    preloaded_knowledge_text=agent_configs[burst_agent.key].get("preloaded_knowledge", ""))
+                    + get_memory_context(burst_agent.key)},
                 {"role": "user", "content": user_prompt},
             ]
-            txt = create_response(args.model, messages, stall_temp, args.max_output_tokens)
-            txt = (txt or "").strip() or "…"
+            meta: dict = {}
+            raw = create_response(args.model, messages, stall_temp,
+                                  args.max_output_tokens, meta=meta)
+            log_generation_meta(burst_agent.key, meta, raw=raw, note="stall burst")
+            parsed = parse_agent_turn(raw)
+            txt = parsed["message"] or "…"
+            if parsed["rationale"]:
+                latest_rationale[burst_agent.key] = parsed["rationale"]
+                log_agent_event(burst_agent.key, "rationale", parsed["rationale"])
+            agent_mentions = parse_mentions(txt, mention_patterns, MAX_MENTIONS_PER_MESSAGE)
+            if agent_mentions:
+                log_agent_event(burst_agent.key, "agent_mention",
+                                f"{burst_agent.key} mentioned {agent_mentions} "
+                                f"(soft cue, not routed, admin still decides next speaker)")
             print(f"{burst_agent.name}> {txt}")
             log_chat(burst_agent.name, txt)
+            last_speaker_key = burst_agent.key
+            maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
 
         # One burst per detected stall. Without this the flag stays true until the
-        # next moderator run (up to MODERATOR_TURN_INTERVAL turns away) and every
+        # next moderator run (potentially many turns away) and every
         # agent turn in between would trigger another full burst.
         moderator_state["stall"] = False
 
@@ -1142,17 +2414,22 @@ def main():
         base = f"{agent_configs[key]['emotion']}+{agent_configs[key]['decision']}"
         stance = agent_configs.get(key, {}).get("stance")
         return f"{base}+{stance}" if stance else base
-    print(f"Agents: A={_agent_summary('A')}  B={_agent_summary('B')}  C={_agent_summary('C')}")
-    print(f"Moderator: every {MODERATOR_TURN_INTERVAL} turns | stall threshold={MODERATOR_STALL_TURNS} "
-          f"| novelty guard={args.novelty_threshold:g}")
+    print("Agents: " + "  ".join(f"{k}={_agent_summary(k)}" for k in agent_keys))
+    print(f"Moderator: every {MODERATOR_USER_TURN_INTERVAL} user turns "
+          f"(or {MODERATOR_TURN_FALLBACK} turns of any kind) | "
+          f"stall threshold={MODERATOR_STALL_TURNS} | novelty guard={args.novelty_threshold:g}")
     print("Commands: /exit to quit | /next to force moderator update\n")
 
     with open(chat_path, "a", encoding="utf-8") as chat_fp, \
          open(thinking_path, "a", encoding="utf-8") as thinking_fp, \
-         open(moderator_path, "a", encoding="utf-8") as moderator_fp:
+         open(moderator_path, "a", encoding="utf-8") as moderator_fp, \
+         open(rationale_path, "a", encoding="utf-8") as rationale_fp, \
+         open(memory_path, "a", encoding="utf-8") as memory_fp:
 
         def user_turn():
             nonlocal consecutive_agent_turns, turns_since_moderator
+            nonlocal user_turns_since_moderator, user_spoke_since_moderator
+            nonlocal last_speaker_key
             consecutive_agent_turns = 0
             try:
                 user_txt = input("You> ").strip()
@@ -1173,12 +2450,36 @@ def main():
                 return True
 
             log_chat("user", user_txt)
+            # The user just spoke: every agent is eligible again next.
+            last_speaker_key = None
+
+            # New user input reopens a concluded discussion — that is the whole
+            # point of latching to Concluded rather than ending the session.
+            if moderator_state["state"] == CONCLUDED_STATE:
+                moderator_state["state"] = "Convergence"
+                moderator_state["goal"] = ""
+                log_moderator("admin3_reopened",
+                              "User spoke after Concluded — back to Convergence for re-classification.")
+
+            # Hard route: agents the user @-mentioned reply next, in order,
+            # before Admin-1/2 pick speakers again (see the main loop).
+            mentioned = parse_mentions(user_txt, mention_patterns, MAX_MENTIONS_PER_MESSAGE)
+            if mentioned:
+                mention_queue.extend(mentioned)
+                log_agent_event("user", "mention_override",
+                                f"user mentioned {mentioned}; queued for hard-routed replies")
+
             turns_since_moderator += 1
+            user_turns_since_moderator += 1
+            user_spoke_since_moderator = True
             maybe_run_moderator()
             return True
 
-        def agent_turn(agent: ChatAgent, force_intro: bool = False):
+        def agent_turn(agent: ChatAgent, force_intro: bool = False,
+                       mention_trigger: bool = False):
             nonlocal consecutive_agent_turns, turns_in_current_state, turns_since_moderator
+            nonlocal last_speaker_key
+            last_speaker_key = agent.key
             consecutive_agent_turns += 1
             # Counts real agent turns, so MODERATOR_STALL_TURNS and the stall hint
             # sent to Admin-3 both mean what they say.
@@ -1200,28 +2501,73 @@ def main():
 
             phase_context = get_phase_context(agent.key)
 
-            user_prompt = (
-                "Below is the full group chat transcript so far.\n"
-                "Each line is formatted as: Speaker: message\n"
-                "Continue the conversation as your character.\n"
-                "Try to keep a lively group dynamic by engaging other bots (react, ask them questions, build on their points), "
-                "while still keeping the user included.\n\n"
-                f"{history}\n{extra}"
-            )
+            if mention_trigger:
+                # The user @-mentioned this agent by name: answer them first,
+                # instead of the generic "continue the group chat" framing.
+                user_prompt = (
+                    "Below is the full group chat transcript so far.\n"
+                    "Each line is formatted as: Speaker: message\n"
+                    "The user just mentioned YOU by name in their last message. "
+                    "Respond to the user directly first — address what they asked or said to you — "
+                    "before anything else. Stay in character.\n\n"
+                    f"{history}\n{extra}"
+                )
+            else:
+                user_prompt = (
+                    "Below is the full group chat transcript so far.\n"
+                    "Each line is formatted as: Speaker: message\n"
+                    "Continue the conversation as your character.\n"
+                    "Try to keep a lively group dynamic by engaging other bots (react, ask them questions, build on their points), "
+                    "while still keeping the user included.\n\n"
+                    f"{history}\n{extra}"
+                )
 
             messages = [
                 {"role": "system", "content": agent.system_prompt(
                     scene, name_map, phase_context,
                     known_context=known_context, domain_background=domain_background,
-                    stance_text=get_stance_block(agent.key), lang=args.lang)},
+                    stance_text=get_stance_block(agent.key), lang=args.lang,
+                    session_memory_text=session_memory_text,
+                    preloaded_knowledge_text=agent_configs[agent.key].get("preloaded_knowledge", ""))
+                    + get_memory_context(agent.key)},
                 {"role": "user", "content": user_prompt},
             ]
-            txt = create_response(args.model, messages, effective_temp, args.max_output_tokens)
-            txt = (txt or "").strip() or "…"
-            txt = enforce_novelty(agent, messages, txt, effective_temp)
+            meta: dict = {}
+            raw = create_response(args.model, messages, effective_temp,
+                                  args.max_output_tokens, meta=meta)
+            log_generation_meta(agent.key, meta, raw=raw)
+            parsed = parse_agent_turn(raw)
+            parsed = enforce_novelty(agent, messages, parsed, effective_temp)
+
+            # Novelty guard rejected both attempts: the agent contributes
+            # nothing this turn rather than publishing a restatement. The turn
+            # counters stay incremented (the turn was consumed), but spoke is
+            # rolled back since no message was actually contributed.
+            if parsed.get("dropped"):
+                agent.spoke -= 1
+                log_agent_event(agent.key, "turn_dropped",
+                                "novelty guard rejected both the original and the retry; "
+                                "agent stayed silent this turn")
+                print(f"[SYSTEM] {agent.name} had nothing new to add this turn.")
+                maybe_run_moderator()
+                return True
+
+            txt = parsed["message"] or "…"
+            if parsed["rationale"]:
+                latest_rationale[agent.key] = parsed["rationale"]
+                log_agent_event(agent.key, "rationale", parsed["rationale"])
+
+            # Agent-side mentions are a soft cue only (recorded, never routed —
+            # Admin-1/2 still decide the next speaker as usual).
+            agent_mentions = parse_mentions(txt, mention_patterns, MAX_MENTIONS_PER_MESSAGE)
+            if agent_mentions:
+                log_agent_event(agent.key, "agent_mention",
+                                f"{agent.key} mentioned {agent_mentions} "
+                                f"(soft cue, not routed, admin still decides next speaker)")
 
             print(f"{agent.name}> {txt}")
             log_chat(agent.name, txt)
+            maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
 
             # After the triggering agent speaks, run the burst for remaining agents
             if stall_triggered:
@@ -1230,8 +2576,8 @@ def main():
             maybe_run_moderator()
             return True
 
-        def enforce_novelty(agent: ChatAgent, messages: List[dict], txt: str,
-                             temp: float) -> str:
+        def enforce_novelty(agent: ChatAgent, messages: List[dict], parsed: dict,
+                             temp: float) -> dict:
             """
             Prompt rules alone don't hold: the model obeys "don't repeat yourself"
             for a few turns and then drifts back to paraphrasing the last three
@@ -1239,13 +2585,22 @@ def main():
             mostly recycled, give the model one corrective pass. The retry is kept
             only if it actually scores better, so a worse rewrite can't make things
             worse than the original.
+
+            Takes and returns a parse_agent_turn() dict: only the MESSAGE part is
+            scored, and a kept retry replaces the rationale along with it (the
+            retry is re-parsed, since it comes back in the same tagged format).
+
+            A returned dict with "dropped": True means the agent stays silent
+            this turn — see the end of this function for why keeping a failed
+            retry was worse than dropping it.
             """
-            if args.novelty_threshold <= 0 or not transcript_lines:
-                return txt
+            txt = parsed["message"]
+            if args.novelty_threshold <= 0 or not transcript_lines or not txt:
+                return parsed
             prior = transcript_lines[-args.novelty_window:]
             ratio = novelty_ratio(txt, prior)
             if ratio >= args.novelty_threshold:
-                return txt
+                return parsed
 
             log_thinking("novelty_retry",
                          f"{agent.key}: novelty={ratio:.2f} < {args.novelty_threshold:.2f}, retrying once")
@@ -1259,23 +2614,37 @@ def main():
                     "dimension, an elimination with its reason, or a direct challenge to a specific claim "
                     "someone made.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
-                    "whose point you are deferring to. Either way, do not ask a question this time."
+                    "whose point you are deferring to. Either way, do not ask a question this time. "
+                    "Keep the required [MESSAGE]/[RATIONALE] output format."
                 )},
             ]
-            retry = create_response(args.model, retry_messages,
-                                     min(temp + 0.15, 1.4), args.max_output_tokens)
-            retry = (retry or "").strip()
-            if not retry:
-                return txt
-            retry_ratio = novelty_ratio(retry, prior)
+            meta: dict = {}
+            retry_raw = create_response(args.model, retry_messages,
+                                        min(temp + 0.15, 1.4), args.max_output_tokens, meta=meta)
+            log_generation_meta(agent.key, meta, note="novelty retry")
+            retry_parsed = parse_agent_turn(retry_raw)
+            retry_ratio = novelty_ratio(retry_parsed["message"], prior) if retry_parsed["message"] else 0.0
+
+            # The retry is the last chance: it must clear the threshold on its
+            # own, or the agent says nothing at all. The old rule kept a retry
+            # whenever it merely scored HIGHER than the original — in
+            # logs/316347 that published 0.50 and 0.52 rewrites of 0.00 turns,
+            # i.e. content the guard itself had flagged as recycled, promoted
+            # purely for being less bad. Silence is an allowed turn (the system
+            # prompt says so explicitly); a rephrased restatement is not.
+            if retry_ratio >= args.novelty_threshold:
+                log_thinking("novelty_retry", f"{agent.key}: retry novelty={retry_ratio:.2f} (kept)")
+                return retry_parsed
+            best = max(ratio, retry_ratio)
             log_thinking("novelty_retry",
-                         f"{agent.key}: retry novelty={retry_ratio:.2f} "
-                         f"({'kept' if retry_ratio > ratio else 'discarded'})")
-            return retry if retry_ratio > ratio else txt
+                         f"{agent.key}: retry novelty={retry_ratio:.2f}, still below "
+                         f"{args.novelty_threshold:.2f} — turn dropped (best={best:.2f})")
+            return {"message": "", "rationale": "", "dropped": True}
 
         def admin_choose_next() -> str:
-            if consecutive_agent_turns >= 5:
-                log_thinking("admin_rule", "Force U: consecutive_agent_turns >= 5")
+            if consecutive_agent_turns >= MAX_CONSECUTIVE_AGENT_TURNS:
+                log_thinking("admin_rule",
+                             f"Force U: consecutive_agent_turns >= {MAX_CONSECUTIVE_AGENT_TURNS}")
                 return "U"
 
             li = last_user_index(transcript_lines)
@@ -1286,16 +2655,16 @@ def main():
 
             history = clamp_history(transcript_lines, args.max_history_chars)
             roles_summary = build_roles_summary(agents)
+            spoke_counts = ", ".join(f"{k}={key_to_agent[k].spoke}" for k in agent_keys)
             stats = (
-                f"Spoke counts: A={key_to_agent['A'].spoke}, "
-                f"B={key_to_agent['B'].spoke}, C={key_to_agent['C'].spoke}. "
+                f"Spoke counts: {spoke_counts}. "
                 f"Consecutive agent turns={consecutive_agent_turns}. "
                 f"User gap(lines)={gap}. "
                 f"Moderator state={moderator_state['state']}."
             )
 
             admin1_messages = [
-                {"role": "system", "content": ADMIN1_SYSTEM},
+                {"role": "system", "content": admin1_system},
                 {"role": "user", "content": (
                     f"=== SCENE ===\n{scene}\n\n"
                     f"=== ROLES ===\n{roles_summary}\n\n"
@@ -1308,32 +2677,50 @@ def main():
             log_thinking("admin1", admin1_out)
 
             admin2_messages = [
-                {"role": "system", "content": ADMIN2_SYSTEM},
+                {"role": "system", "content": admin2_system},
                 {"role": "user", "content": admin1_out},
             ]
             admin2_out = create_response(args.model, admin2_messages, temperature=0.0, max_output_tokens=MIN_OUTPUT_TOKENS)
             admin2_out = (admin2_out or "").strip().upper()
             log_thinking("admin2", admin2_out)
 
-            if admin2_out not in {"A", "B", "C", "U"}:
-                log_thinking("admin_fallback", f"Invalid admin2_out={admin2_out!r}, fallback to agent")
-                admin2_out = random.choice(["A", "B", "C"])
+            # Never hand the floor straight back to the agent that just held it.
+            # Falls back to the full set only when there is no alternative (e.g. a
+            # single-agent pool), so this can never deadlock or return an empty pick.
+            def eligible() -> List[str]:
+                pool = [k for k in agent_keys if k != last_speaker_key]
+                return pool or agent_keys
+
+            if admin2_out not in set(agent_keys) | {"U"}:
+                pick = random.choice(eligible())
+                log_thinking("admin_fallback", f"Invalid admin2_out={admin2_out!r}, fallback to {pick}")
+                admin2_out = pick
 
             if admin2_out == "U":
                 if random.random() < float(args.prefer_agents):
-                    pick = random.choice(["A", "B", "C"])
+                    pick = random.choice(eligible())
                     log_thinking("admin_bias", f"Override U -> {pick} (prefer_agents={args.prefer_agents})")
                     return pick
                 return "U"
 
+            # Admin picked a specific agent — honour it unless it is the agent that
+            # just spoke, in which case reroute to someone else rather than produce
+            # a back-to-back turn the novelty guard would only drop.
+            if admin2_out == last_speaker_key:
+                pick = random.choice(eligible())
+                if pick != admin2_out:
+                    log_thinking("admin_no_repeat",
+                                 f"Admin re-picked {admin2_out} (just spoke) -> rerouted to {pick}")
+                    return pick
+
             return admin2_out
 
-        # Start order
-        start_order = (args.start_order or "").upper()[:4]
+        # Start order: any agent key from info.jsonl plus U; unknown chars ignored
+        start_order = (args.start_order or "").upper()[: len(agent_keys) + 1]
         intro_done: Dict[str, bool] = {a.key: False for a in agents}
 
         for ch in start_order:
-            if ch in {"A", "B", "C"}:
+            if ch in key_to_agent:
                 agent_turn(key_to_agent[ch], force_intro=not intro_done[ch])
                 intro_done[ch] = True
             elif ch == "U":
@@ -1342,6 +2729,37 @@ def main():
                     return
 
         while True:
+            # User @-mentions take absolute priority over Admin-1/2 selection.
+            # DESIGN TRADE-OFF (intentional, not a bug): because this path never
+            # goes through admin_choose_next(), it also bypasses the
+            # consecutive_agent_turns >= MAX_CONSECUTIVE_AGENT_TURNS safety
+            # valve that normally forces the user back in. The user explicitly
+            # summoned these agents, so honoring the summons wins; the queue is
+            # capped at MAX_MENTIONS_PER_MESSAGE per user message anyway.
+            if mention_queue:
+                key = mention_queue.pop(0)
+                log_agent_event(key, "mention_dispatch",
+                                f"hard-routing {key} to speak (from user mention queue, "
+                                f"admin selection skipped)")
+                agent_turn(key_to_agent[key], force_intro=not intro_done[key],
+                           mention_trigger=True)
+                intro_done[key] = True
+                continue
+
+            # Concluded: the group has said everything it has. Do not spend an
+            # Admin-1/2 call deciding which agent gets to repeat the conclusion
+            # — hand the floor to the user unconditionally. user_turn() lifts
+            # the latch as soon as they say anything.
+            if moderator_state["state"] == CONCLUDED_STATE:
+                print("[SYSTEM] 讨论已收敛。补充信息或提出新问题可以继续，/exit 结束。"
+                      if args.lang == "zh" else
+                      "[SYSTEM] The group has converged. Add information or raise a new "
+                      "question to continue, or /exit to finish.")
+                ok = user_turn()
+                if not ok:
+                    break
+                continue
+
             nxt = admin_choose_next()
             if nxt == "U":
                 ok = user_turn()
@@ -1355,11 +2773,36 @@ def main():
     print(f"\nSaved chat log:      {chat_path}")
     print(f"Saved thinking log:  {thinking_path}")
     print(f"Saved moderator log: {moderator_path}")
+    print(f"Saved rationale log: {rationale_path}")
+    print(f"Saved memory log:    {memory_path}")
 
+    # Cross-session memory (write side): one extra LLM call over the full
+    # transcript, then APPEND a recap record to memory/{user_id}__{scenario_type}
+    # .jsonl (never overwrite). Only when a scenario_type keys the file and the
+    # session actually produced dialogue. Failures here never crash the shutdown.
+    if HAVE_SESSION_MEMORY and args.scenario_type:
+        transcript_text = "\n".join(transcript_lines).strip()
+        if transcript_text:
+            try:
+                result = summarize_session(transcript_text, args.lang, create_response, args.model)
+                rec = append_session_record(
+                    args.user_id, args.scenario_type, chat_room_id, now_local_iso(),
+                    result["summary"], result["open_threads"],
+                )
+                if rec is not None:
+                    print(f"Saved session memory: memory/{args.user_id}__{args.scenario_type}.jsonl "
+                          f"(+1 record, {len(result['open_threads'])} open thread(s))")
+            except Exception as e:  # noqa: BLE001 — shutdown must not fail on this
+                print(f"[SYSTEM] session-memory summary skipped: {e}", file=sys.stderr)
 
 # -------------------------------
 # Flask / library helpers (Agora web)
 # -------------------------------
+
+# Legacy aliases expected by app.py (Admin-1/2 are built dynamically in the turn loop).
+ADMIN1_SYSTEM, ADMIN2_SYSTEM = build_admin_prompts(["A", "B", "C"], 5)
+MODERATOR_INTERVAL = MODERATOR_USER_TURN_INTERVAL
+
 
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)

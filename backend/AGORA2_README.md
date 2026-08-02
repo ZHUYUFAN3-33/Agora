@@ -30,9 +30,14 @@ session_memory.py        跨会话记忆：读取/拼接/生成/追写 memory/{u
 agent_assembly.py        组装接口：拼接 decision + emotion（+ stance + hint 预加载知识）成一个固定 agent
 agora_context.py         对外唯一入口 prepare_session_context()，串联上面两个模块
 agora2_http.py           Flask 适配层：hint / memory / per-scenario profile / session_update
-agentwake_new.py         已 patch 的主脚本（含 session_memory_text / preloaded_knowledge 注入）
+agentwake_new.py         CLI `main()` + Flask `run_user_turn()` 共用调度核（mention / no-repeat / Concluded）
 README.md                本文件
 ```
+
+**HTTP 路径**：`app.py` 直接 `from agentwake_new import run_user_turn`（已删除 slim `agora2_loop.py`）。
+调度语义对齐 `agora2/backend-dev` CLI；`prefer_agents` 默认 0.85。
+场内 `maybe_distill_snippet` 已接入 HTTP（`{room}_memory.jsonl` + prompt 中 `YOUR MEMORY`），与跨会话 `session_memory` 并存。
+
 
 ## Hint + Stance Knowledge（HTTP / 产品路径）
 

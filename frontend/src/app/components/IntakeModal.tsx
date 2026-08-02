@@ -26,6 +26,16 @@ function pickLabel(q: TemplateField["question"] | FieldOption["label"], lang: Ui
   return (lang === "zh" ? q?.zh : q?.en) || q?.en || q?.zh || "";
 }
 
+/** Strip trailing Optional markers from template copy so UI can append a single suffix. */
+function stripOptionalMarker(label: string): string {
+  return label
+    .replace(/\s*\(\s*optional\s*\)\s*\.?$/i, "")
+    .replace(/\s*[,.]?\s*optional\.?\s*$/i, "")
+    .replace(/\s*（可选）\s*$/u, "")
+    .replace(/\s*（可跳过）\s*$/u, "")
+    .trim();
+}
+
 /** One list item per line. Commas stay inside an item (e.g. "Sony, Junior, 7000k, Tokyo"). */
 function parseList(raw: string): string[] {
   return raw
@@ -88,19 +98,39 @@ const PRIORITY_DEFAULTS = ["salary", "growth", "stability", "location", "culture
 const TEXT_COLLAPSE_MAX_PX = 72;
 const TEXT_EXPAND_HINT_CHARS = 96;
 
-/** Material-style open_in_full — Google Forms expand affordance. */
-function OpenInFullIcon({ size = 18 }: { size?: number }) {
+/** open_in_full — stroke weight matches select chevron (2 @ 24 viewBox). */
+function OpenInFullIcon({ size = 16 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-      <path d="M21 21h-6v-2h4v-4h2v6zM3 3h6v2H5v4H3V3zm0 18v-6h2v4h4v2H3zM21 3v6h-2V5h-4V3h6z" />
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M15 3h6v6M9 21H3v-6M21 15v6h-6M3 9V3h6" />
     </svg>
   );
 }
 
-function CloseFullscreenIcon({ size = 18 }: { size?: number }) {
+function CloseFullscreenIcon({ size = 16 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-      <path d="M22 3.41 16.71 8.7 20 12h-8V4l3.29 3.29L20.59 2 22 3.41zM3.41 22l5.29-5.29L12 20v-8H4l3.29 3.29L2 20.59 3.41 22z" />
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
     </svg>
   );
 }
@@ -128,7 +158,7 @@ function ExpandIconButton({
       }}
       className="absolute bottom-1 right-1 z-[1] w-8 h-8 flex items-center justify-center rounded-[8px] text-black/45 hover:bg-black/5 hover:text-black/70 transition-colors"
     >
-      <OpenInFullIcon size={18} />
+      <OpenInFullIcon size={14} />
     </button>
   );
 }
@@ -512,7 +542,7 @@ function FieldControls({
     <>
       {fields.map((field) => {
         const value = values[field.key] ?? "";
-        const label = pickLabel(field.question, lang);
+        const label = stripOptionalMarker(pickLabel(field.question, lang));
         const required = !field.optional;
         const id = fieldDomId(prefix, field.key);
         const invalid = showErrors && required && !value.trim() && !clearedErrors[id];
@@ -548,8 +578,14 @@ function FieldControls({
               value={value}
               onFocus={() => onFocusClear(field.key)}
               onChange={(e) => onChange(field.key, e.target.value)}
-              className={`w-full text-[12px] px-3 py-2 border rounded-[6px] outline-none transition-colors bg-white ${borderClass}`}
-              style={monoFont}
+              className={`w-full text-[12px] pl-3 pr-9 py-2 border rounded-[6px] outline-none transition-colors bg-white appearance-none bg-no-repeat ${borderClass}`}
+              style={{
+                ...monoFont,
+                backgroundImage:
+                  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23000000' stroke-opacity='0.45' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
+                backgroundPosition: "right 12px center",
+                backgroundSize: "12px 12px",
+              }}
             >
               <option value="">{lang === "zh" ? "请选择…" : "Select…"}</option>
               {field.options.map((o) => (

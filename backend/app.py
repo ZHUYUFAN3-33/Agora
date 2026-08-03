@@ -1085,6 +1085,28 @@ def send_message():
 
 
 
+def _phase_changes_for_room(room_id: str) -> List[dict]:
+    """Moderator phase boundaries for decision-navi (from `{room}_moderator.jsonl`)."""
+    try:
+        from transcript_summary import load_state_changes
+    except Exception:
+        return []
+    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    if not os.path.exists(chat_path) and not os.path.exists(
+        os.path.join(LOG_DIR, f"{room_id}_moderator.jsonl")
+    ):
+        return []
+    out = []
+    for c in load_state_changes(chat_path):
+        t = c.get("time")
+        out.append({
+            "from": c.get("from"),
+            "to": c.get("to"),
+            "time": t.isoformat() if hasattr(t, "isoformat") else (str(t) if t else None),
+        })
+    return out
+
+
 @app.route('/api/history/<room_id>', methods=['GET'])
 def get_history(room_id):
     """Get chat history for a session (memory or SQLite replay)."""
@@ -1110,6 +1132,7 @@ def get_history(room_id):
             "history": session["history"],
             "known_facts": list(session["known_user_facts"].values()),
             "phase": (session.get("moderator_state") or {}).get("state"),
+            "phase_changes": _phase_changes_for_room(room_id),
             "source": "memory",
         })
 
@@ -1139,6 +1162,7 @@ def get_history(room_id):
         "history": history,
         "known_facts": [],
         "phase": room.get("phase"),
+        "phase_changes": _phase_changes_for_room(room_id),
         "scenario_type": room.get("scenario_type"),
         "title": room.get("title"),
         "concluded": room.get("concluded"),

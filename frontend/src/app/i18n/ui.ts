@@ -266,10 +266,22 @@ const en: Dict = {
 
   // Phase
   "phase.Exploration": "Exploration",
+  "phase.Structuring": "Structuring",
+  "phase.Narrowing": "Narrowing",
   "phase.Convergence": "Convergence",
   "phase.Concluded": "Concluded",
   "phase.Integration": "Integration",
   "phase.Evaluation": "Evaluation",
+
+  // Decision navi
+  "navi.title": "Decision path",
+  "navi.subtitle": "Key turns in this discussion",
+  "navi.collapse": "Collapse decision path",
+  "navi.start": "Started",
+  "navi.topic": "Topic shift",
+  "navi.userCall": "Your call",
+  "navi.currentPhase": "Current phase",
+  "navi.phaseFrom": "from {from}",
 };
 
 const zh: Dict = {
@@ -462,10 +474,21 @@ const zh: Dict = {
   "decision.desc.Spontaneous": "快速行动：迅速选择 → 少做权衡",
 
   "phase.Exploration": "探索",
+  "phase.Structuring": "梳理",
+  "phase.Narrowing": "收窄",
   "phase.Convergence": "收敛",
   "phase.Concluded": "已结束",
   "phase.Integration": "整合",
   "phase.Evaluation": "评估",
+
+  "navi.title": "决策轨迹",
+  "navi.subtitle": "这场讨论的关键节点",
+  "navi.collapse": "收起决策轨迹",
+  "navi.start": "开始",
+  "navi.topic": "话题节点",
+  "navi.userCall": "你的表态",
+  "navi.currentPhase": "当前阶段",
+  "navi.phaseFrom": "从 {from}",
 };
 
 const TABLES: Record<UiLang, Dict> = { en, zh };

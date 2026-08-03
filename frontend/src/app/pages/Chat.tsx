@@ -6,6 +6,11 @@ import { AgoraLogo, AgoraLogoFull } from "../components/AgoraLogo";
 import { CustomDropdown } from "../components/ui/CustomDropdown";
 import { AppearanceModal } from "../components/AppearanceModal";
 import {
+  DecisionNavi,
+  buildDecisionNaviNodes,
+  type PhaseChangeMarker,
+} from "../components/DecisionNavi";
+import {
   IntakeModal,
   ProfileModal,
   MemoryHistoryPanel,
@@ -167,6 +172,27 @@ interface Message {
   content: string;
   timestamp: number;
   emotionTagSnapshot?: string | null;
+}
+
+function historyTimestamp(raw: string | undefined, index: number, total: number): number {
+  if (raw) {
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now() - (total - index) * 1000;
+}
+
+function phaseMarkersFromApi(
+  changes: Array<{ from?: string; to?: string; time?: string }> | undefined,
+): PhaseChangeMarker[] {
+  if (!Array.isArray(changes)) return [];
+  return changes
+    .filter((c) => !!(c?.to))
+    .map((c) => ({
+      from: c.from || "",
+      to: String(c.to),
+      time: c.time,
+    }));
 }
 
 interface ConvSettings {
@@ -805,6 +831,7 @@ const AgentMessage = React.memo(function AgentMessage({
   layerAnnotations,
   onChatAnnotationDraft,
   uiLang = "en",
+  highlighted = false,
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
@@ -822,6 +849,7 @@ const AgentMessage = React.memo(function AgentMessage({
   layerAnnotations?: ChatLayerAnnotation[];
   onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
   uiLang?: UiLang;
+  highlighted?: boolean;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [infoCardOpen, setInfoCardOpen] = useState(false);
@@ -926,10 +954,13 @@ const AgentMessage = React.memo(function AgentMessage({
   return (
     <motion.div
       layout
+      data-message-id={message.id}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }}
-      className="flex flex-col gap-1 mb-4"
+      className={`flex flex-col gap-1 mb-4 rounded-[10px] transition-[box-shadow,background-color] duration-500 ${
+        highlighted ? "bg-[#fff8e8] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]" : ""
+      }`}
     >
       <div className="flex items-center gap-2 mb-1">
         <span
@@ -1033,15 +1064,24 @@ const AgentMessage = React.memo(function AgentMessage({
   );
 });
 
-const SystemMessage = React.memo(function SystemMessage({ message }: { message: Message }) {
+const SystemMessage = React.memo(function SystemMessage({
+  message,
+  highlighted = false,
+}: {
+  message: Message;
+  highlighted?: boolean;
+}) {
   if (!(message.content || "").trim()) return null;
   return (
     <motion.div
       layout
+      data-message-id={message.id}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }}
-      className="flex flex-col items-center gap-1 mb-5"
+      className={`flex flex-col items-center gap-1 mb-5 rounded-[10px] transition-[box-shadow,background-color] duration-500 ${
+        highlighted ? "bg-[#fff8e8] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]" : ""
+      }`}
     >
       <span className="text-[10px] tracking-widest text-[var(--app-muted-text)] uppercase" style={monoFont}>
         System
@@ -1061,21 +1101,26 @@ const UserMessage = React.memo(function UserMessage({
   chatAnnotationMode = false,
   layerAnnotations,
   onChatAnnotationDraft,
+  highlighted = false,
 }: {
   message: Message;
   nickname: string;
   chatAnnotationMode?: boolean;
   layerAnnotations?: ChatLayerAnnotation[];
   onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
+  highlighted?: boolean;
 }) {
   const contentRef = useRef<HTMLParagraphElement>(null);
   return (
     <motion.div
       layout
+      data-message-id={message.id}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }}
-      className="flex flex-col items-end gap-1 mb-6"
+      className={`flex flex-col items-end gap-1 mb-6 rounded-[10px] transition-[box-shadow,background-color] duration-500 ${
+        highlighted ? "bg-[#fff8e8] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]" : ""
+      }`}
     >
       <div className="flex items-center gap-2 mb-1">
         <span className="text-[11px] text-[var(--app-muted-text)] tracking-wider" style={monoFont}>
@@ -2033,6 +2078,12 @@ export default function Chat() {
   const [maxUserGap, setMaxUserGap] = useState(12);
   const [currentPhase, setCurrentPhase] = useState<string | null>(null);
   const [showPhaseIndicator, setShowPhaseIndicator] = useState(false);
+  /** Phase boundaries for Decision Navi, keyed by room_id. */
+  const [phaseMarkersByRoom, setPhaseMarkersByRoom] = useState<Record<string, PhaseChangeMarker[]>>({});
+  const lastPhaseByRoomRef = useRef<Record<string, string | null>>({});
+  const [naviActiveMessageId, setNaviActiveMessageId] = useState<string | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
 
   const [agentNames, setAgentNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
   const [agentBackendNames, setAgentBackendNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
@@ -2271,7 +2322,78 @@ export default function Chat() {
     setChatAnnotationMode(false);
     setSummaryOpen(false);
     setSummaryError(null);
+    setNaviActiveMessageId(null);
+    setHighlightedMessageId(null);
   }, [currentConvId]);
+
+  const decisionNaviNodes = useMemo(() => {
+    if (!currentConv?.messages?.length) return [];
+    return buildDecisionNaviNodes(
+      currentConv.messages,
+      phaseMarkersByRoom[currentConv.roomId] || [],
+      currentPhase,
+      uiLang,
+    );
+  }, [currentConv?.messages, currentConv?.roomId, phaseMarkersByRoom, currentPhase, uiLang]);
+
+  const jumpToMessage = useCallback((messageId: string) => {
+    const root = messagesContainerRef.current;
+    if (!root) return;
+    const safeId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+      ? CSS.escape(messageId)
+      : messageId.replace(/["\\]/g, "\\$&");
+    const el = root.querySelector(`[data-message-id="${safeId}"]`) as HTMLElement | null;
+    if (!el) return;
+    stickToBottomRef.current = false;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setNaviActiveMessageId(messageId);
+    setHighlightedMessageId(messageId);
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedMessageId((prev) => (prev === messageId ? null : prev));
+      highlightTimerRef.current = null;
+    }, 1600);
+  }, []);
+
+  useEffect(() => {
+    const root = messagesContainerRef.current;
+    if (!root || decisionNaviNodes.length === 0) return;
+    const ids = new Set(decisionNaviNodes.map((n) => n.messageId));
+    const elements = [...root.querySelectorAll<HTMLElement>("[data-message-id]")].filter((el) =>
+      ids.has(el.dataset.messageId || ""),
+    );
+    if (elements.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        const top = visible[0]?.target as HTMLElement | undefined;
+        const mid = top?.dataset.messageId;
+        if (mid) setNaviActiveMessageId(mid);
+      },
+      { root, threshold: [0.35, 0.6], rootMargin: "-10% 0px -45% 0px" },
+    );
+    elements.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [decisionNaviNodes, currentConvId]);
+
+  const notePhaseChange = useCallback((roomId: string, nextPhase: string | null | undefined, messageId?: string) => {
+    if (!roomId || !nextPhase) return;
+    const prev = lastPhaseByRoomRef.current[roomId] ?? null;
+    lastPhaseByRoomRef.current[roomId] = nextPhase;
+    if (!prev || prev === nextPhase) return;
+    setPhaseMarkersByRoom((markers) => {
+      const list = markers[roomId] || [];
+      if (list.some((m) => m.to === nextPhase && (m.messageId === messageId || !messageId))) {
+        return markers;
+      }
+      return {
+        ...markers,
+        [roomId]: [...list, { from: prev, to: nextPhase, messageId }],
+      };
+    });
+  }, []);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -2760,7 +2882,9 @@ export default function Chat() {
       setConversations((prev) => [newConv, ...prev]);
       convId = newConv.id;
       setCurrentConvId(convId);
-      setCurrentPhase(null);
+      setCurrentPhase("Exploration");
+      lastPhaseByRoomRef.current[roomId] = "Exploration";
+      setPhaseMarkersByRoom((prev) => ({ ...prev, [roomId]: prev[roomId] || [] }));
     } else {
       setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, messages: [...c.messages, userMsg], timestamp: "just now" } : c));
     }
@@ -2871,6 +2995,7 @@ export default function Chat() {
         throw new Error((data as { error?: string })?.error || `HTTP ${res.status}`);
       }
       setCurrentPhase(data.phase || null);
+      notePhaseChange(roomId, data.phase || null, userMsg.id);
       const responses: Array<{
         agent_key: string;
         message: string;
@@ -2944,16 +3069,17 @@ export default function Chat() {
       }
       const hist = data.history || [];
       const messages: Message[] = hist.map((
-        h: { character: string; txt: string },
+        h: { character: string; txt: string; time?: string },
         i: number,
       ) => {
-        if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+        const ts = historyTimestamp(h.time, i, hist.length);
+        if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: ts };
         if (h.character === "system") {
           return {
             id: `h-${i}`,
             role: "system" as const,
             content: h.txt,
-            timestamp: Date.now() - (hist.length - i) * 1000,
+            timestamp: ts,
           };
         }
         const agentKey = runtimeMap[h.character] ?? BACKEND_NAME_TO_KEY[h.character] ?? "A";
@@ -2963,12 +3089,18 @@ export default function Chat() {
           role: "agent" as const,
           agentKey,
           content: h.txt,
-          timestamp: Date.now() - (hist.length - i) * 1000,
+          timestamp: ts,
           emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
         };
       });
       setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, messages } : c));
       if (data.phase) setCurrentPhase(data.phase);
+      const roomId = currentConv.roomId;
+      lastPhaseByRoomRef.current[roomId] = data.phase || lastPhaseByRoomRef.current[roomId] || "Exploration";
+      const markers = phaseMarkersFromApi(data.phase_changes);
+      if (markers.length > 0) {
+        setPhaseMarkersByRoom((prev) => ({ ...prev, [roomId]: markers }));
+      }
     } catch {}
   };
 
@@ -3116,6 +3248,9 @@ export default function Chat() {
     setTypingKeys([]);
     setMsgQueue([]);
     setSidebarOpen(false);
+    if (conv?.roomId && lastPhaseByRoomRef.current[conv.roomId] == null) {
+      lastPhaseByRoomRef.current[conv.roomId] = "Exploration";
+    }
     // Past rooms restored from DB often have empty messages — pull history
     if (conv?.roomId && (!conv.messages || conv.messages.length === 0)) {
       void (async () => {
@@ -3125,14 +3260,15 @@ export default function Chat() {
           const data = await res.json();
           const hist = data.history || [];
           const messages: Message[] = hist.map((
-            h: { character: string; txt: string },
+            h: { character: string; txt: string; time?: string },
             i: number,
           ) => {
+            const ts = historyTimestamp(h.time, i, hist.length);
             if (h.character === "user") {
-              return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+              return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: ts };
             }
             if (h.character === "system") {
-              return { id: `h-${i}`, role: "system" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+              return { id: `h-${i}`, role: "system" as const, content: h.txt, timestamp: ts };
             }
             const agentKey = (BACKEND_NAME_TO_KEY[h.character] ?? "A") as AgentKey;
             return {
@@ -3140,11 +3276,16 @@ export default function Chat() {
               role: "agent" as const,
               agentKey,
               content: h.txt,
-              timestamp: Date.now() - (hist.length - i) * 1000,
+              timestamp: ts,
                 };
           });
           setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, messages } : c)));
           if (data.phase) setCurrentPhase(data.phase);
+          lastPhaseByRoomRef.current[conv.roomId] = data.phase || lastPhaseByRoomRef.current[conv.roomId] || "Exploration";
+          const markers = phaseMarkersFromApi(data.phase_changes);
+          if (markers.length > 0) {
+            setPhaseMarkersByRoom((prev) => ({ ...prev, [conv.roomId]: markers }));
+          }
         } catch {
           /* ignore */
         }
@@ -3604,6 +3745,17 @@ export default function Chat() {
           )}
         </AnimatePresence>
 
+        {currentConv && decisionNaviNodes.length > 0 && (
+          <div className="absolute top-[72px] right-4 sm:right-8 z-30 pointer-events-none">
+            <DecisionNavi
+              nodes={decisionNaviNodes}
+              lang={uiLang}
+              activeMessageId={naviActiveMessageId}
+              onJump={jumpToMessage}
+            />
+          </div>
+        )}
+
         <header className="relative z-10 h-[56px] flex-shrink-0 flex items-center border-b border-black/8 bg-white px-4 gap-4">
           <button className="p-1.5 hover:bg-black/5 rounded-md transition-colors" onClick={() => setSidebarOpen(true)}>
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 4.5H16M2 9H16M2 13.5H16" stroke="black" strokeWidth="1.5" strokeLinecap="round"/></svg>
@@ -3904,6 +4056,7 @@ export default function Chat() {
                 const firstTurnAgentSeen: Partial<Record<AgentKey, boolean>> = {};
                 const emotionTagCounts: Record<string, number> = {};
                 return currentConv.messages.map((msg) => {
+                  const isHighlighted = highlightedMessageId === msg.id;
                   if (msg.role === "user") {
                     userTurnCount += 1;
                     return (
@@ -3914,11 +4067,12 @@ export default function Chat() {
                         chatAnnotationMode={chatAnnotationMode}
                         layerAnnotations={chatLayerAnnotations[msg.id]}
                         onChatAnnotationDraft={onChatAnnotationDraft}
+                        highlighted={isHighlighted}
                       />
                     );
                   }
                   if (msg.role === "system") {
-                    return <SystemMessage key={msg.id} message={msg} />;
+                    return <SystemMessage key={msg.id} message={msg} highlighted={isHighlighted} />;
                   }
                   const compactRepeatedIntro = !!(msg.agentKey && userTurnCount === 1 && firstTurnAgentSeen[msg.agentKey]);
                   if (msg.agentKey && userTurnCount === 1) {
@@ -3946,6 +4100,7 @@ export default function Chat() {
                       layerAnnotations={chatLayerAnnotations[msg.id]}
                       onChatAnnotationDraft={onChatAnnotationDraft}
                       uiLang={uiLang}
+                      highlighted={isHighlighted}
                     />
                   );
                 });

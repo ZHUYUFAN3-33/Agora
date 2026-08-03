@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 from openai import OpenAI, AuthenticationError, APIError
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 import sys
 import importlib.util
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from data_paths import BASE_DIR, LOG_DIR, DATA_DIR
 
 # ─── Load emotion module (optional) ───────────────────────────────────────────
 EMOTION_MODULE_LOADED = False
@@ -129,12 +129,15 @@ BOT2_FILE = os.path.join(BASE_DIR, "chatbot2.txt")
 BOT3_FILE = os.path.join(BASE_DIR, "chatbot3.txt")
 INFO_JSONL = os.path.join(BASE_DIR, "info.jsonl")
 INFO_EXAMPLE_JSONL = os.path.join(BASE_DIR, "info_example.jsonl")
-LOG_DIR = os.path.join(BASE_DIR, "logs")
 DECISION_BLOCK_DIR = os.path.join(SCENE_DIR, "decision block")
 EMOTION_BLOCK_DIR = os.path.join(SCENE_DIR, "emotion block")  # Newst: new/emotion block/
 EMOTION_PROMPTS_LEGACY = os.path.join(BASE_DIR, "emotion block", "prompts")  # fallback
 
 ensure_dir(LOG_DIR)
+
+# Built React SPA (Docker / Fly sets AGORA_STATIC_DIR=/app/frontend/dist)
+_static_env = (os.getenv("AGORA_STATIC_DIR") or "").strip()
+STATIC_DIR = _static_env or os.path.join(os.path.dirname(BASE_DIR), "frontend", "dist")
 
 # Load agent configs from info.jsonl (default decision/emotion per agent)
 _info_path = INFO_JSONL if os.path.exists(INFO_JSONL) else INFO_EXAMPLE_JSONL
@@ -598,7 +601,9 @@ def _sync_room_meta(session: dict, room_id: str, *, title: Optional[str] = None)
 
 @app.route('/')
 def index():
-    """API root — product UI is the React app on :5173"""
+    """Serve built SPA when present; otherwise API stub for local Vite-only setup."""
+    if STATIC_DIR and os.path.isdir(STATIC_DIR) and os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
+        return send_from_directory(STATIC_DIR, "index.html")
     return jsonify({
         "service": "agora-api",
         "health": "/api/health",
@@ -1647,31 +1652,47 @@ def admin_export_bundle():
     _, err = _require_admin()
     if err:
         return err
-    uid = (request.args.get("user_id") or "").strip()
-    if not uid:
+    # Accept one or many: ?user_id=a&user_id=b  or  ?user_ids=a,b
+    raw_ids: List[str] = []
+    for v in request.args.getlist("user_id"):
+        raw_ids.extend(part.strip() for part in (v or "").split(",") if part.strip())
+    for v in request.args.getlist("user_ids"):
+        raw_ids.extend(part.strip() for part in (v or "").split(",") if part.strip())
+    # de-dupe, preserve order
+    seen = set()
+    uids: List[str] = []
+    for uid in raw_ids:
+        if uid not in seen:
+            seen.add(uid)
+            uids.append(uid)
+    if not uids:
         return jsonify({"error": "user_id required"}), 400
     scenario_type = (request.args.get("scenario_type") or "").strip() or None
-    bundle = get_user_store().export_user_bundle(uid, scenario_type=scenario_type)
+    store = get_user_store()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            f"{uid}_export.json",
-            json.dumps(bundle, ensure_ascii=False, indent=2),
-        )
-        # Also flatten chat transcripts per room
-        for item in bundle.get("rooms") or []:
-            room = item.get("room") or {}
-            rid = room.get("room_id") or "room"
-            lines = []
-            for m in item.get("messages") or []:
-                lines.append(f"{m.get('character')}: {m.get('txt')}")
-            zf.writestr(f"transcripts/{rid}.txt", "\n".join(lines))
+        for uid in uids:
+            bundle = store.export_user_bundle(uid, scenario_type=scenario_type)
+            prefix = uid if len(uids) > 1 else ""
+            json_name = f"{uid}/{uid}_export.json" if prefix else f"{uid}_export.json"
+            zf.writestr(json_name, json.dumps(bundle, ensure_ascii=False, indent=2))
+            for item in bundle.get("rooms") or []:
+                room = item.get("room") or {}
+                rid = room.get("room_id") or "room"
+                lines = [f"{m.get('character')}: {m.get('txt')}" for m in (item.get("messages") or [])]
+                t_name = f"{uid}/transcripts/{rid}.txt" if prefix else f"transcripts/{rid}.txt"
+                zf.writestr(t_name, "\n".join(lines))
     buf.seek(0)
+    if len(uids) == 1:
+        download_name = f"agora_export_{uids[0]}.zip"
+    else:
+        stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
+        download_name = f"agora_export_{len(uids)}users_{stamp}.zip"
     return send_file(
         buf,
         mimetype="application/zip",
         as_attachment=True,
-        download_name=f"agora_export_{uid}.zip",
+        download_name=download_name,
     )
 
 
@@ -1856,6 +1877,38 @@ def get_agent_prompt(agent_key):
         return jsonify({"error": str(e)}), 500
 
 
+def _serve_spa(path: str):
+    """Serve built frontend assets; SPA fallback to index.html."""
+    if not STATIC_DIR or not os.path.isdir(STATIC_DIR):
+        return jsonify({
+            "error": "Frontend not built",
+            "hint": "Run npm run build in frontend/, or use Vite dev on :5173",
+        }), 404
+    # Never hijack API paths if a catch-all matched somehow
+    if path == "api" or path.startswith("api/"):
+        return jsonify({"error": "Not found"}), 404
+    candidate = os.path.join(STATIC_DIR, path)
+    if path and os.path.isfile(candidate):
+        return send_from_directory(STATIC_DIR, path)
+    index = os.path.join(STATIC_DIR, "index.html")
+    if os.path.isfile(index):
+        return send_from_directory(STATIC_DIR, "index.html")
+    return jsonify({"error": "index.html missing in static dir"}), 404
+
+
+@app.route("/<path:path>", methods=["GET"])
+def spa_path(path: str):
+    return _serve_spa(path)
+
+
+# WSGI (gunicorn) warmup: create DB + admin from env on first import
+if HAVE_USER_STORE:
+    try:
+        get_user_store()
+    except Exception as _store_boot_err:
+        print(f"⚠ User store init deferred: {_store_boot_err}")
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("🚀 多智能体聊天机器人系统启动中...")
@@ -1865,12 +1918,12 @@ if __name__ == '__main__':
     print(f"✓ Agent pool: {', '.join([AGENT_POOL[k]['name'] for k in POOL_KEYS])}")
     print(f"✓ Agora-2 adapter: {'on' if HAVE_AGORA2 else 'off'}"
           + (f" ({', '.join(agora2_http.SCENARIO_TYPES)})" if HAVE_AGORA2 else ""))
+    print(f"✓ Data dir: {DATA_DIR}")
+    print(f"✓ Static dir: {STATIC_DIR} ({'ok' if os.path.isdir(STATIC_DIR) else 'missing — use Vite :5173'})")
     if HAVE_USER_STORE:
-        get_user_store()  # init DB + bootstrap admin from env
         print("✓ User store: SQLite (register/login + profiles)")
     else:
         print("⚠ User store: off")
-    print("✓ Mode: API only (use React frontend on :5173)")
     print("\n" + "=" * 60)
     # Port: use PORT env var, or find first available in 5000-5009
     import socket
@@ -1891,9 +1944,16 @@ if __name__ == '__main__':
         if port == 0:
             port = 5000  # fallback
 
-    print(f"🔌 API listening: http://localhost:{port}")
-    print(f"💚 Health check:  http://localhost:{port}/api/health")
-    print("🖥️  Frontend:      http://localhost:5173  (npm run dev in frontend/)")
+    # Local: 127.0.0.1 + debug. Production: gunicorn (see Dockerfile).
+    debug = (os.getenv("FLASK_DEBUG") or "1").strip().lower() in ("1", "true", "yes", "on")
+    host = (os.getenv("FLASK_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+
+    print(f"🔌 API listening: http://{host}:{port}")
+    print(f"💚 Health check:  http://{host}:{port}/api/health")
+    if os.path.isdir(STATIC_DIR):
+        print(f"🖥️  Frontend:      http://{host}:{port}/  (built SPA)")
+    else:
+        print("🖥️  Frontend:      http://localhost:5173  (npm run dev in frontend/)")
     print("=" * 60)
     print("\n按 Ctrl+C 停止服务器 / Press Ctrl+C to stop the server\n")
-    app.run(debug=True, host='127.0.0.1', port=port, use_reloader=False)
+    app.run(debug=debug, host=host, port=port, use_reloader=False)

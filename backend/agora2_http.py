@@ -48,18 +48,19 @@ try:
 except ImportError:
     HAVE_STANCE_KNOWLEDGE = False
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from data_paths import BASE_DIR, PROFILES_DIR, MEMORY_DIR
 
 SCENARIO_TYPES = ("employment", "parent_child")
 
 TEMPLATES_DIR = os.path.join(BASE_DIR, "scenario_templates")
 BACKGROUND_DIR = os.path.join(BASE_DIR, "background_templates")
-PROFILES_DIR = os.path.join(BASE_DIR, "profiles")
 SCENES_DIR = os.path.join(BASE_DIR, "scenes")
 DECISION_DIR = os.path.join(BASE_DIR, "decision")
 EMOTION_DIR = os.path.join(BASE_DIR, "emotion")
 INTAKE_EXAMPLES_DIR = os.path.join(BASE_DIR, "intake_examples")
-MEMORY_DIR = os.path.join(BASE_DIR, "memory")
+# Ensure writable dirs exist (volume mount on Fly, local backend/ otherwise)
+os.makedirs(PROFILES_DIR, exist_ok=True)
+os.makedirs(MEMORY_DIR, exist_ok=True)
 
 # Cached knowledge dict (loaded once)
 _STANCE_KB: Optional[dict] = None

@@ -4,7 +4,7 @@ Multi-agent chat for co-creation and decision experiments (OpenAI API).
 多智能体协作对话系统。  
 マルチエージェント協働チャットシステム。
 
-Current focus: **English UI** + **Agora-2 scenarios** (Employment, Parent-Child) with profile/intake before chat. Flask is **API-only**; the React app is the UI.
+Current focus: **English UI** + **Agora-2 scenarios** (Employment, Parent-Child) with profile/intake before chat. Locally: Flask API + Vite React. Production (Fly.io): one container serves the built SPA and `/api`.
 
 ---
 
@@ -72,6 +72,44 @@ cloudflared tunnel --url http://localhost:5173
 Share the printed `https://….trycloudflare.com` URL.  
 **Limitations:** your machine must stay awake; restarting the tunnel changes the URL; this is not cloud hosting (no domain / Named Tunnel needed).
 
+### Deploy on Fly.io（生产收数 / production）
+
+Keeps SQLite, chat logs, profiles, and cross-session memory on a **persistent volume**. Same-origin `/api` (no `VITE_API_BASE` needed).
+
+1. Install CLI and log in: [fly.io/docs/hands-on/install-flyctl](https://fly.io/docs/hands-on/install-flyctl/) — `fly auth login`
+2. Edit [`fly.toml`](fly.toml): set `app = "your-unique-name"` (and `primary_region` if you prefer, e.g. `nrt` / `sjc`).
+3. From the **repo root**:
+
+```bash
+fly apps create your-unique-name          # once; must match fly.toml `app`
+fly volumes create agora_data --size 3 --region nrt
+fly secrets set \
+  OPENAI_API_KEY='sk-...' \
+  AGORA_ADMIN_USER_ID='admin' \
+  AGORA_ADMIN_PASSWORD='a-strong-password'
+fly deploy
+```
+
+4. Open `https://your-unique-name.fly.dev` — health: `/api/health`. Admin UI: `/admin` after login.
+
+**Collect / export data**
+
+- In-app: `/admin` export, or per-room log zip from Chat.
+- From the volume:
+
+```bash
+fly ssh console -C 'ls -la /data'
+# download DB + logs (example)
+fly ssh sftp get /data/agora.db ./agora-backup.db
+```
+
+**Notes**
+
+- `min_machines_running = 1` and `auto_stop_machines = off` so in-memory rooms are not wiped by scale-to-zero.
+- Gunicorn uses **1 worker** (sessions are process-local) and `--timeout 180` for long multi-agent turns.
+- Custom domain later: `fly certs add your.domain` (DNS to Fly). Avoid putting a Cloudflare orange-cloud proxy in front of `/api/message` on the free plan (~100s origin timeout → 524).
+- Cost is roughly a few USD/month for the machine + volume; OpenAI usage is separate.
+
 ### Optional: paper figure page
 
 ```bash
@@ -99,8 +137,11 @@ Also available experimentally: Full / Limited / Single modes, emotion & decision
 
 ```
 Agora/
-├── backend/                 # Flask API
-│   ├── app.py               # HTTP routes
+├── Dockerfile               # Multi-stage: frontend build + gunicorn
+├── fly.toml                 # Fly.io app + /data volume
+├── backend/                 # Flask API (+ serves SPA in production)
+│   ├── app.py               # HTTP routes + static SPA
+│   ├── data_paths.py        # AGORA_DATA_DIR / DB / logs / profiles / memory
 │   ├── agora2_http.py       # Agora-2 adapter (non-CLI)
 │   ├── agentwake_new.py     # Agent runtime
 │   ├── stance.py / profile_store.py / …
@@ -122,9 +163,14 @@ Agora/
 
 | Variable | Required | Notes |
 |----------|----------|--------|
-| `OPENAI_API_KEY` | Yes (for chat) | In `backend/.env` |
-| `PORT` | No | Use `5001` to match the Vite proxy |
+| `OPENAI_API_KEY` | Yes (for chat) | In `backend/.env` or `fly secrets` |
+| `PORT` | No | Local: `5001` for Vite proxy. Fly: `8080` |
 | `VITE_API_BASE` | No | Defaults to `/api` (same-origin). Override only if you point the UI at another API host. |
+| `AGORA_ADMIN_USER_ID` / `AGORA_ADMIN_PASSWORD` | Prod recommended | Bootstrap admin on first boot |
+| `AGORA_DATA_DIR` | Prod | Fly: `/data` (volume). Local: unset → `backend/` |
+| `AGORA_DB_PATH` | No | Fly: `/data/agora.db`. Local default: `backend/data/agora.db` |
+| `AGORA_STATIC_DIR` | Prod | Path to built `frontend/dist` inside the container |
+| `FLASK_DEBUG` / `FLASK_HOST` | No | Local `python app.py` only; production uses gunicorn |
 
 ---
 
@@ -173,6 +219,6 @@ Scheduler (Full/Limited): after each user turn, agents reply within `max_agent_t
 
 ## Tech stack
 
-- **Backend:** Python 3.9+, Flask, flask-cors, OpenAI SDK, python-dotenv  
+- **Backend:** Python 3.9+, Flask, gunicorn, flask-cors, OpenAI SDK, python-dotenv  
 - **Frontend:** React, Vite, Tailwind, MUI, Motion  
-- **Optional share:** Cloudflare Quick Tunnel (`cloudflared`)
+- **Production:** Fly.io (Docker + volume); optional local share via Cloudflare Quick Tunnel (`cloudflared`)

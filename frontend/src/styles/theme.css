@@ -136,6 +136,15 @@
 
   html {
     font-size: var(--font-size);
+    /* Reserve scrollbar space so layout does not jump when overflow appears */
+    scrollbar-gutter: stable;
+  }
+
+  .overflow-y-auto,
+  .overflow-auto,
+  .overflow-y-scroll,
+  .overflow-x-auto {
+    scrollbar-gutter: stable;
   }
 
   h1 {
@@ -179,4 +188,47 @@
     font-weight: var(--font-weight-normal);
     line-height: 1.5;
   }
+}
+
+/*
+ * Native scrollbars cannot animate opacity — hide them and use .agora-sb
+ * (see fadeScrollbars.ts). Keep gutter so layout does not jump.
+ */
+* {
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+.agora-sb {
+  position: absolute;
+  right: 0;
+  width: 8px;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.agora-sb-thumb {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  width: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.28);
+  border: none;
+  box-shadow: none;
+  opacity: 0;
+  will-change: opacity, transform;
+  /* fade-out: 300ms fast */
+  transition: opacity 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agora-sb.is-visible .agora-sb-thumb {
+  opacity: 1;
+  /* fade-in: 150ms instant */
+  transition: opacity 150ms cubic-bezier(0.22, 1, 0.36, 1);
 }

@@ -2043,6 +2043,8 @@ export default function Chat() {
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
   const [pendingIntakeScene, setPendingIntakeScene] = useState<Scene | null>(null);
   const [pendingProfileScene, setPendingProfileScene] = useState<Scene | null>(null);
+  /** Profile → intake handoff: keep one backdrop, skip profile exit flash */
+  const [profileHandoff, setProfileHandoff] = useState(false);
   const [agora2Intake, setAgora2Intake] = useState<Agora2IntakePayload | null>(null);
   const [userProfile, setUserProfile] = useState<Record<string, unknown> | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -2129,6 +2131,7 @@ export default function Chat() {
       /* first session */
     }
     setShowSceneSelector(false);
+    setProfileHandoff(false);
     setPendingProfileScene(s);
     setShowProfileModal(true);
   }, []);
@@ -2625,6 +2628,7 @@ export default function Chat() {
       if (isAgora2SceneId(selectedScene?.id) && (!userProfile || !agora2Intake)) {
         if (!userProfile) {
           setSessionCreateError(t(uiLang, "err.profile"));
+          setProfileHandoff(false);
           setShowProfileModal(true);
         } else {
           setSessionCreateError(t(uiLang, "err.intake"));
@@ -3333,57 +3337,51 @@ export default function Chat() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {showProfileModal && pendingProfileScene && (
+        {(showSceneSelector || !!pendingIntakeScene || (showProfileModal && !!pendingProfileScene)) && (
           <motion.div
-            key="profile-overlay"
+            key="scene-flow-overlay"
             className="fixed inset-0 bg-black/30 z-[60] flex items-center justify-center p-6"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             onClick={() => {
-              if (userProfile) {
-                setShowProfileModal(false);
-                setPendingProfileScene(null);
+              if (showProfileModal && pendingProfileScene) {
+                if (userProfile) {
+                  setShowProfileModal(false);
+                  setPendingProfileScene(null);
+                  setProfileHandoff(false);
+                }
+                return;
               }
-            }}
-          >
-            <ProfileModal
-              userId={webUserId}
-              scenarioType={pendingProfileScene.id}
-              lang={uiLang}
-              dismissible={!!userProfile}
-              onClose={userProfile ? () => {
-                setShowProfileModal(false);
-                setPendingProfileScene(null);
-              } : undefined}
-              onConfirm={(profile) => {
-                setUserProfile(profile);
-                setShowProfileModal(false);
-                setPendingIntakeScene(pendingProfileScene);
-                setPendingProfileScene(null);
-              }}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {(showSceneSelector || !!pendingIntakeScene) && (
-          <motion.div
-            key="scene-flow-overlay"
-            className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            onClick={() => {
               if (pendingIntakeScene) setPendingIntakeScene(null);
               else setShowSceneSelector(false);
             }}
           >
             <AnimatePresence mode="wait" initial={false}>
-              {pendingIntakeScene ? (
+              {showProfileModal && pendingProfileScene ? (
+                <ProfileModal
+                  key={`profile-${pendingProfileScene.id}`}
+                  userId={webUserId}
+                  scenarioType={pendingProfileScene.id}
+                  lang={uiLang}
+                  dismissible={!!userProfile}
+                  instantExit={profileHandoff}
+                  onClose={userProfile ? () => {
+                    setShowProfileModal(false);
+                    setPendingProfileScene(null);
+                    setProfileHandoff(false);
+                  } : undefined}
+                  onConfirm={(profile) => {
+                    const scene = pendingProfileScene;
+                    setUserProfile(profile);
+                    setProfileHandoff(true);
+                    setPendingIntakeScene(scene);
+                    setShowProfileModal(false);
+                    setPendingProfileScene(null);
+                  }}
+                />
+              ) : pendingIntakeScene ? (
                 <IntakeModal
                   key={`intake-${pendingIntakeScene.id}`}
                   scene={pendingIntakeScene}
@@ -3397,6 +3395,7 @@ export default function Chat() {
                     setSessionIndex(sessionCountBefore + 1);
                     setPendingIntakeScene(null);
                     setShowSceneSelector(false);
+                    setProfileHandoff(false);
                   }}
                 />
               ) : (
@@ -3525,6 +3524,7 @@ export default function Chat() {
                 onAccount={() => {
                   const s = selectedScene && isAgora2SceneId(selectedScene.id) ? selectedScene : null;
                   if (s) {
+                    setProfileHandoff(false);
                     setPendingProfileScene(s);
                     setShowProfileModal(true);
                   } else {

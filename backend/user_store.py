@@ -12,8 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB_PATH = os.path.join(BASE_DIR, "data", "agora.db")
+from data_paths import DEFAULT_DB_PATH
 
 USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 SESSION_DAYS = 30

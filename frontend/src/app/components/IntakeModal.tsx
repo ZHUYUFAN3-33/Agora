@@ -667,6 +667,7 @@ function FormShell({
   scrollRef,
   dismissible = true,
   lang,
+  instantExit = false,
 }: {
   title: string;
   subtitle: string;
@@ -681,12 +682,18 @@ function FormShell({
   scrollRef: React.RefObject<HTMLDivElement | null>;
   dismissible?: boolean;
   lang: UiLang;
+  /** Skip exit motion when handing off to the next step (avoids backdrop flash). */
+  instantExit?: boolean;
 }) {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.97, y: 16 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.97, y: 8 }}
+      exit={
+        instantExit
+          ? { opacity: 0, transition: { duration: 0 } }
+          : { opacity: 0, scale: 0.97, y: 8 }
+      }
       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
       className="w-full max-w-[720px] bg-white rounded-[16px] shadow-[0_8px_32px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-[90vh]"
       onClick={(e) => e.stopPropagation()}
@@ -764,6 +771,7 @@ export function ProfileModal({
   onConfirm,
   onClose,
   dismissible = false,
+  instantExit = false,
 }: {
   userId: string;
   scenarioType: string;
@@ -771,6 +779,7 @@ export function ProfileModal({
   onConfirm: (profile: Record<string, unknown>) => void;
   onClose?: () => void;
   dismissible?: boolean;
+  instantExit?: boolean;
 }) {
   const [template, setTemplate] = useState<FieldsTemplate | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -859,6 +868,7 @@ export function ProfileModal({
       scrollRef={scrollRef}
       dismissible={dismissible}
       lang={lang}
+      instantExit={instantExit}
     >
       {template && (
         <div className="border border-black/10 rounded-[12px] p-4 bg-black/[0.02]">

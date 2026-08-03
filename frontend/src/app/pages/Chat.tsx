@@ -832,6 +832,7 @@ const AgentMessage = React.memo(function AgentMessage({
   onChatAnnotationDraft,
   uiLang = "en",
   highlighted = false,
+  highlightToken = 0,
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
@@ -850,6 +851,7 @@ const AgentMessage = React.memo(function AgentMessage({
   onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
   uiLang?: UiLang;
   highlighted?: boolean;
+  highlightToken?: number;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [infoCardOpen, setInfoCardOpen] = useState(false);
@@ -958,9 +960,7 @@ const AgentMessage = React.memo(function AgentMessage({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }}
-      className={`flex flex-col gap-1 mb-4 rounded-[10px] transition-[box-shadow,background-color] duration-500 ${
-        highlighted ? "bg-[#fff8e8] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]" : ""
-      }`}
+      className="flex flex-col gap-1 mb-4 rounded-[10px]"
     >
       <div className="flex items-center gap-2 mb-1">
         <span
@@ -1052,7 +1052,8 @@ const AgentMessage = React.memo(function AgentMessage({
               y: sel.rect.top - 8,
             });
           }}
-          className={`text-[13px] text-black/80 leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""}`}
+          key={highlighted ? `flash-${highlightToken}` : "body"}
+          className={`text-[13px] text-black/80 leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""} ${highlighted ? "agora-msg-flash" : ""}`}
           style={{ ...monoFont, color: isError ? "#ef4444" : undefined }}
         >
           {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
@@ -1067,9 +1068,11 @@ const AgentMessage = React.memo(function AgentMessage({
 const SystemMessage = React.memo(function SystemMessage({
   message,
   highlighted = false,
+  highlightToken = 0,
 }: {
   message: Message;
   highlighted?: boolean;
+  highlightToken?: number;
 }) {
   if (!(message.content || "").trim()) return null;
   return (
@@ -1079,15 +1082,17 @@ const SystemMessage = React.memo(function SystemMessage({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }}
-      className={`flex flex-col items-center gap-1 mb-5 rounded-[10px] transition-[box-shadow,background-color] duration-500 ${
-        highlighted ? "bg-[#fff8e8] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]" : ""
-      }`}
+      className="flex flex-col items-center gap-1 mb-5 rounded-[10px]"
     >
       <span className="text-[10px] tracking-widest text-[var(--app-muted-text)] uppercase" style={monoFont}>
         System
       </span>
       <div className="px-3 py-2 max-w-[90%] text-center border border-black/10 bg-black/[0.03] rounded-[8px]">
-        <p className="text-[12px] text-black/70 leading-relaxed whitespace-pre-wrap" style={monoFont}>
+        <p
+          key={highlighted ? `flash-${highlightToken}` : "body"}
+          className={`text-[12px] text-black/70 leading-relaxed whitespace-pre-wrap ${highlighted ? "agora-msg-flash" : ""}`}
+          style={monoFont}
+        >
           {message.content}
         </p>
       </div>
@@ -1102,6 +1107,7 @@ const UserMessage = React.memo(function UserMessage({
   layerAnnotations,
   onChatAnnotationDraft,
   highlighted = false,
+  highlightToken = 0,
 }: {
   message: Message;
   nickname: string;
@@ -1109,6 +1115,7 @@ const UserMessage = React.memo(function UserMessage({
   layerAnnotations?: ChatLayerAnnotation[];
   onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
   highlighted?: boolean;
+  highlightToken?: number;
 }) {
   const contentRef = useRef<HTMLParagraphElement>(null);
   return (
@@ -1118,9 +1125,7 @@ const UserMessage = React.memo(function UserMessage({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }}
-      className={`flex flex-col items-end gap-1 mb-6 rounded-[10px] transition-[box-shadow,background-color] duration-500 ${
-        highlighted ? "bg-[#fff8e8] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]" : ""
-      }`}
+      className="flex flex-col items-end gap-1 mb-6 rounded-[10px]"
     >
       <div className="flex items-center gap-2 mb-1">
         <span className="text-[11px] text-[var(--app-muted-text)] tracking-wider" style={monoFont}>
@@ -1133,6 +1138,7 @@ const UserMessage = React.memo(function UserMessage({
       </div>
       <div className="px-4 py-3 bg-black rounded-[10px] rounded-tr-[2px] max-w-[85%]">
         <p
+          key={highlighted ? `flash-${highlightToken}` : "body"}
           ref={contentRef}
           onMouseUp={() => {
             if (!chatAnnotationMode || !contentRef.current || !onChatAnnotationDraft) return;
@@ -1146,7 +1152,7 @@ const UserMessage = React.memo(function UserMessage({
               y: sel.rect.top - 8,
             });
           }}
-          className={`text-[13px] text-white leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""}`}
+          className={`text-[13px] text-white leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""} ${highlighted ? "agora-msg-flash" : ""}`}
           style={monoFont}
         >
           {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
@@ -2064,6 +2070,9 @@ export default function Chat() {
   const [showFontColorInSettings, setShowFontColorInSettings] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const agentsBtnRef = useRef<HTMLButtonElement>(null);
+  const agentsPanelRef = useRef<HTMLDivElement>(null);
   const [backendOnline, setBackendOnline] = useState(false);
   const [sessionCreateError, setSessionCreateError] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -2083,7 +2092,11 @@ export default function Chat() {
   const lastPhaseByRoomRef = useRef<Record<string, string | null>>({});
   const [naviActiveMessageId, setNaviActiveMessageId] = useState<string | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [highlightToken, setHighlightToken] = useState(0);
   const highlightTimerRef = useRef<number | null>(null);
+  /** Ignore scroll-spy while smooth-scrolling from a Decision Navi click. */
+  const naviJumpLockRef = useRef(false);
+  const naviJumpUnlockTimerRef = useRef<number | null>(null);
 
   const [agentNames, setAgentNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
   const [agentBackendNames, setAgentBackendNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
@@ -2317,6 +2330,21 @@ export default function Chat() {
   }, [auth?.token, scenes, maxAgentTurns, maxUserGap, experimentMode]);
 
   useEffect(() => {
+    setAgentsOpen(false);
+  }, [currentConvId]);
+
+  useEffect(() => {
+    if (!agentsOpen) return;
+    const h = (e: MouseEvent) => {
+      const node = e.target as Node;
+      if (agentsPanelRef.current?.contains(node) || agentsBtnRef.current?.contains(node)) return;
+      setAgentsOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [agentsOpen]);
+
+  useEffect(() => {
     setChatLayerAnnotations({});
     setChatAnnotationDraft(null);
     setChatAnnotationMode(false);
@@ -2324,6 +2352,11 @@ export default function Chat() {
     setSummaryError(null);
     setNaviActiveMessageId(null);
     setHighlightedMessageId(null);
+    naviJumpLockRef.current = false;
+    if (naviJumpUnlockTimerRef.current) {
+      window.clearTimeout(naviJumpUnlockTimerRef.current);
+      naviJumpUnlockTimerRef.current = null;
+    }
   }, [currentConvId]);
 
   const decisionNaviNodes = useMemo(() => {
@@ -2345,14 +2378,34 @@ export default function Chat() {
     const el = root.querySelector(`[data-message-id="${safeId}"]`) as HTMLElement | null;
     if (!el) return;
     stickToBottomRef.current = false;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    // Lock scroll-spy so intermediate nodes don't flash as "active" during smooth scroll.
+    naviJumpLockRef.current = true;
+    if (naviJumpUnlockTimerRef.current) window.clearTimeout(naviJumpUnlockTimerRef.current);
+    const unlockSpy = () => {
+      naviJumpLockRef.current = false;
+      naviJumpUnlockTimerRef.current = null;
+      setNaviActiveMessageId(messageId);
+    };
+    const onScrollEnd = () => {
+      root.removeEventListener("scrollend", onScrollEnd);
+      unlockSpy();
+    };
+    root.addEventListener("scrollend", onScrollEnd);
+    naviJumpUnlockTimerRef.current = window.setTimeout(() => {
+      root.removeEventListener("scrollend", onScrollEnd);
+      unlockSpy();
+    }, 900);
+
     setNaviActiveMessageId(messageId);
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightToken((n) => n + 1);
     setHighlightedMessageId(messageId);
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => {
       setHighlightedMessageId((prev) => (prev === messageId ? null : prev));
       highlightTimerRef.current = null;
-    }, 1600);
+    }, 1000);
   }, []);
 
   useEffect(() => {
@@ -2365,6 +2418,7 @@ export default function Chat() {
     if (elements.length === 0) return;
     const observer = new IntersectionObserver(
       (entries) => {
+        if (naviJumpLockRef.current) return;
         const visible = entries
           .filter((e) => e.isIntersecting)
           .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
@@ -3745,17 +3799,6 @@ export default function Chat() {
           )}
         </AnimatePresence>
 
-        {currentConv && decisionNaviNodes.length > 0 && (
-          <div className="absolute top-[72px] right-4 sm:right-8 z-30 pointer-events-none">
-            <DecisionNavi
-              nodes={decisionNaviNodes}
-              lang={uiLang}
-              activeMessageId={naviActiveMessageId}
-              onJump={jumpToMessage}
-            />
-          </div>
-        )}
-
         <header className="relative z-10 h-[56px] flex-shrink-0 flex items-center border-b border-black/8 bg-white px-4 gap-4">
           <button className="p-1.5 hover:bg-black/5 rounded-md transition-colors" onClick={() => setSidebarOpen(true)}>
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 4.5H16M2 9H16M2 13.5H16" stroke="black" strokeWidth="1.5" strokeLinecap="round"/></svg>
@@ -3776,44 +3819,146 @@ export default function Chat() {
                 )}
               </div>
             )}
-            {((currentConv?.settings?.mode ?? experimentMode) === "single"
-              ? (["A"] as AgentKey[])
-              : activeAgentKeys
-            ).map((key) => {
+            {currentConv && decisionNaviNodes.length > 0 && (
+              <div className="pr-3 border-r border-black/10">
+                <DecisionNavi
+                  nodes={decisionNaviNodes}
+                  lang={uiLang}
+                  activeMessageId={naviActiveMessageId}
+                  onJump={jumpToMessage}
+                />
+              </div>
+            )}
+            {(() => {
               const headerMode = currentConv?.settings?.mode ?? experimentMode;
+              const rosterKeys: AgentKey[] =
+                headerMode === "single" ? (["A"] as AgentKey[]) : activeAgentKeys;
               const canEditRoster = !!currentConv && headerMode === "full";
               return (
-              <div key={key} className="relative group/chip flex items-center gap-1.5 pr-1" title={agentNames[key as AgentKey]}>
-                <div className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0" style={{ backgroundColor: agentSettings[key as AgentKey]?.accentColor || DEFAULT_AGENT_COLORS[key as AgentKey] }} />
-                <span className="hidden sm:block text-[10px] tracking-widest text-black" style={monoFont}>{agentNames[key as AgentKey]}</span>
-                {canEditRoster && activeAgentKeys.length > MIN_ROSTER_AGENTS && (
+                <div className="relative flex items-center">
                   <button
+                    ref={agentsBtnRef}
                     type="button"
-                    aria-label={t(uiLang, "chat.removeAgent", { name: agentNames[key] })}
-                    onClick={(e) => { e.stopPropagation(); removeAgent(key); }}
-                    className="ml-0.5 w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover/chip:opacity-100 hover:bg-black/8 text-black/40 hover:text-black/70 transition-opacity"
+                    onClick={() => setAgentsOpen((v) => !v)}
+                    className="flex items-center gap-1.5 h-4 hover:opacity-80 transition-opacity"
+                    aria-expanded={agentsOpen}
+                    title={t(uiLang, "chat.agents")}
                   >
-                    <svg width="8" height="8" viewBox="0 0 12 12" fill="none" aria-hidden>
-                      <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    <span className="flex items-center -space-x-0.5">
+                      {rosterKeys.slice(0, 3).map((key) => (
+                        <span
+                          key={key}
+                          className="w-[7px] h-[7px] rounded-[1.5px] ring-1 ring-white"
+                          style={{
+                            backgroundColor:
+                              agentSettings[key]?.accentColor || DEFAULT_AGENT_COLORS[key],
+                          }}
+                        />
+                      ))}
+                    </span>
+                    <span
+                      className={`text-[10px] tracking-widest text-black ${labelCaseClass(uiLang)}`}
+                      style={monoFont}
+                    >
+                      {t(uiLang, "chat.agents")}
+                    </span>
+                    <svg
+                      width="8"
+                      height="8"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      aria-hidden
+                      className={`opacity-40 transition-transform ${agentsOpen ? "rotate-180" : ""}`}
+                    >
+                      <path d="M2 4L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   </button>
-                )}
-              </div>
+                  <AnimatePresence>
+                    {agentsOpen && (
+                      <motion.div
+                        ref={agentsPanelRef}
+                        initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                        transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
+                        className="absolute top-[calc(100%+8px)] right-0 z-50 min-w-[180px] rounded-[10px] border border-black/10 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.1)] py-1.5 px-1.5"
+                      >
+                        <ul className="flex flex-col gap-0.5">
+                          {rosterKeys.map((key) => (
+                            <li
+                              key={key}
+                              className="group/chip flex items-center gap-2 px-2 py-1.5 rounded-[6px] hover:bg-black/[0.03]"
+                            >
+                              <span
+                                className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0"
+                                style={{
+                                  backgroundColor:
+                                    agentSettings[key]?.accentColor || DEFAULT_AGENT_COLORS[key],
+                                }}
+                              />
+                              <span
+                                className="flex-1 text-[11px] tracking-widest text-black truncate"
+                                style={monoFont}
+                                title={agentNames[key]}
+                              >
+                                {agentNames[key]}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label={t(uiLang, "settings.customizeAgent")}
+                                title={t(uiLang, "settings.customizeAgent")}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCustomizerInitialAgent(key);
+                                  setShowCustomizer(true);
+                                  setAgentsOpen(false);
+                                }}
+                                className="w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover/chip:opacity-100 hover:bg-black/8 text-black/40 hover:text-black/70 transition-opacity"
+                              >
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                                  <circle cx="12" cy="12" r="3" />
+                                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                                </svg>
+                              </button>
+                              {canEditRoster && activeAgentKeys.length > MIN_ROSTER_AGENTS && (
+                                <button
+                                  type="button"
+                                  aria-label={t(uiLang, "chat.removeAgent", { name: agentNames[key] })}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeAgent(key);
+                                  }}
+                                  className="w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover/chip:opacity-100 hover:bg-black/8 text-black/40 hover:text-black/70 transition-opacity"
+                                >
+                                  <svg width="8" height="8" viewBox="0 0 12 12" fill="none" aria-hidden>
+                                    <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                                  </svg>
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                        {canEditRoster && activeAgentKeys.length < MAX_ROSTER_AGENTS && (
+                          <button
+                            type="button"
+                            onClick={() => addAgent()}
+                            className="mt-1 w-full flex items-center gap-2 px-2 py-1.5 rounded-[6px] text-[11px] text-black/45 hover:text-black/70 hover:bg-black/[0.03] transition-colors border border-dashed border-black/15"
+                            style={monoFont}
+                          >
+                            <span className="w-4 h-4 flex items-center justify-center">
+                              <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden>
+                                <path d="M8 1V15M1 8H15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                              </svg>
+                            </span>
+                            {t(uiLang, "chat.addAgent")}
+                          </button>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               );
-            })}
-            {!!currentConv && (currentConv?.settings?.mode ?? experimentMode) === "full"
-              && activeAgentKeys.length < MAX_ROSTER_AGENTS && (
-              <button
-                type="button"
-                onClick={() => addAgent()}
-                title={t(uiLang, "chat.addAgent")}
-                className="w-6 h-6 border border-dashed border-black/20 rounded-[6px] flex items-center justify-center text-black/30 hover:text-black/60 hover:border-black/40 transition-colors"
-              >
-                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden>
-                  <path d="M8 1V15M1 8H15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                </svg>
-              </button>
-            )}
+            })()}
             <div className="flex items-center gap-1.5 ml-1 pl-3 border-l border-black/10" title={nickname || "You"}>
               <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500" />
               <span className="hidden sm:block text-[10px] tracking-widest text-black" style={monoFont}>{(nickname || "You").toUpperCase()}</span>
@@ -4068,11 +4213,19 @@ export default function Chat() {
                         layerAnnotations={chatLayerAnnotations[msg.id]}
                         onChatAnnotationDraft={onChatAnnotationDraft}
                         highlighted={isHighlighted}
+                        highlightToken={highlightToken}
                       />
                     );
                   }
                   if (msg.role === "system") {
-                    return <SystemMessage key={msg.id} message={msg} highlighted={isHighlighted} />;
+                    return (
+                      <SystemMessage
+                        key={msg.id}
+                        message={msg}
+                        highlighted={isHighlighted}
+                        highlightToken={highlightToken}
+                      />
+                    );
                   }
                   const compactRepeatedIntro = !!(msg.agentKey && userTurnCount === 1 && firstTurnAgentSeen[msg.agentKey]);
                   if (msg.agentKey && userTurnCount === 1) {
@@ -4101,6 +4254,7 @@ export default function Chat() {
                       onChatAnnotationDraft={onChatAnnotationDraft}
                       uiLang={uiLang}
                       highlighted={isHighlighted}
+                      highlightToken={highlightToken}
                     />
                   );
                 });

@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { getUiFont, phaseLabel, t, type UiLang } from "../i18n/ui";
+import { getUiFont, labelCaseClass, phaseLabel, t, type UiLang } from "../i18n/ui";
 
 export type DecisionNaviKind = "start" | "phase" | "topic" | "user_call";
 
@@ -195,10 +195,11 @@ export function buildDecisionNaviNodes(
 function kindDotClass(kind: DecisionNaviKind): string {
   if (kind === "start") return "bg-black";
   if (kind === "phase") return "bg-[#1560a8]";
-  if (kind === "user_call") return "bg-[#9f3f26]";
+  if (kind === "user_call") return "bg-red-500";
   return "bg-black/35";
 }
 
+/** Header dropdown: collapsed trigger + expandable path list. */
 export function DecisionNavi({
   nodes,
   lang = "en",
@@ -213,14 +214,20 @@ export function DecisionNavi({
   className?: string;
 }) {
   const font = getUiFont(lang);
-  const [expanded, setExpanded] = useState(true);
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Collapse by default on narrow viewports after first paint
-    if (typeof window !== "undefined" && window.innerWidth < 640) {
-      setExpanded(false);
-    }
-  }, []);
+    if (!open) return;
+    const h = (e: MouseEvent) => {
+      const node = e.target as Node;
+      if (panelRef.current?.contains(node) || btnRef.current?.contains(node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
 
   const activeId = useMemo(() => {
     if (!nodes.length) return null;
@@ -233,54 +240,54 @@ export function DecisionNavi({
   if (nodes.length === 0) return null;
 
   return (
-    <div className={`pointer-events-auto ${className}`}>
-      <AnimatePresence initial={false} mode="wait">
-        {!expanded ? (
-          <motion.button
-            key="collapsed"
-            type="button"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            onClick={() => setExpanded(true)}
-            className="flex items-center gap-2 px-3 py-2 rounded-[10px] border border-black/10 bg-white/95 shadow-[0_2px_12px_rgba(0,0,0,0.06)] hover:border-black/20 transition-colors"
-            style={font}
-            title={t(lang, "navi.title")}
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-black" />
-            <span className="text-[11px] text-black/80">{t(lang, "navi.title")}</span>
-            <span className="text-[10px] text-[var(--app-muted-text)]">{nodes.length}</span>
-          </motion.button>
-        ) : (
+    <div className={`relative flex items-center ${className}`}>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 h-4 hover:opacity-80 transition-opacity"
+        aria-expanded={open}
+        title={t(lang, "navi.title")}
+      >
+        <span className="w-[7px] h-[7px] rounded-full bg-black flex-shrink-0" />
+        <span
+          className={`text-[10px] tracking-widest text-black ${labelCaseClass(lang)}`}
+          style={font}
+        >
+          {t(lang, "navi.title")}
+        </span>
+        <span className="text-[10px] text-[var(--app-muted-text)]" style={font}>
+          {nodes.length}
+        </span>
+        <svg
+          width="8"
+          height="8"
+          viewBox="0 0 12 12"
+          fill="none"
+          aria-hidden
+          className={`opacity-40 transition-transform ${open ? "rotate-180" : ""}`}
+        >
+          <path d="M2 4L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      <AnimatePresence>
+        {open && (
           <motion.div
-            key="expanded"
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            className="w-[220px] sm:w-[240px] rounded-[12px] border border-black/10 bg-white/95 shadow-[0_2px_16px_rgba(0,0,0,0.07)] overflow-hidden"
+            ref={panelRef}
+            initial={{ opacity: 0, y: -4, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.98 }}
+            transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
+            className="absolute top-[calc(100%+8px)] right-0 z-50 w-[240px] rounded-[10px] border border-black/10 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.1)] overflow-hidden"
           >
-            <div className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-black/6">
-              <div className="min-w-0">
-                <p className="text-[11px] text-black truncate" style={font}>
-                  {t(lang, "navi.title")}
-                </p>
-                <p className="text-[10px] text-[var(--app-muted-text)] truncate" style={font}>
-                  {t(lang, "navi.subtitle")}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setExpanded(false)}
-                className="p-1 rounded-[6px] text-black/40 hover:text-black/70 hover:bg-black/5 transition-colors"
-                aria-label={t(lang, "navi.collapse")}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M18 6L6 18M6 6l12 12" />
-                </svg>
-              </button>
+            <div className="px-3 py-2 border-b border-black/6">
+              <p className="text-[10px] text-[var(--app-muted-text)] truncate" style={font}>
+                {t(lang, "navi.subtitle")}
+              </p>
             </div>
-            <ol className="relative max-h-[min(52vh,420px)] overflow-y-auto py-2 px-2">
-              <div className="absolute left-[18px] top-3 bottom-3 w-px bg-black/10" aria-hidden />
+            <ol className="relative max-h-[min(52vh,420px)] overflow-y-auto py-1.5 px-1.5">
+              <div className="absolute left-[17px] top-3 bottom-3 w-px bg-black/10" aria-hidden />
               {nodes.map((node, index) => {
                 const isActive = node.messageId === activeId;
                 return (

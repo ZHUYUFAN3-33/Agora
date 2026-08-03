@@ -232,3 +232,15 @@
   /* fade-in: 150ms instant */
   transition: opacity 150ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+
+/* Decision-navi jump: pulse message text (dim → bright), no outer border */
+@keyframes agora-msg-flash {
+  0% { opacity: 1; }
+  30% { opacity: 0.28; }
+  70% { opacity: 1; }
+  100% { opacity: 1; }
+}
+
+.agora-msg-flash {
+  animation: agora-msg-flash 0.85s cubic-bezier(0.22, 1, 0.36, 1);
+}

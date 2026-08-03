@@ -56,7 +56,7 @@ everything needed to construct a fixed agent in a single call:
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional, TypedDict
+from typing import Dict, List, Optional, TypedDict
 
 DECISION_DIR_DEFAULT = "decision"
 EMOTION_DIR_DEFAULT = "emotion"
@@ -156,7 +156,9 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
                       decision_dir: str = DECISION_DIR_DEFAULT,
                       emotion_dir: str = EMOTION_DIR_DEFAULT,
                       hint: Optional[str] = None,
-                      stance_knowledge: Optional[dict] = None) -> AgentSpec:
+                      stance_knowledge: Optional[dict] = None,
+                      slot_keys: Optional[List[str]] = None,
+                      stance_override: Optional[str] = None) -> AgentSpec:
     """
     The single entry point: hands back everything needed to build one
     fixed agent — role_text (Decision+Emotion) plus stance/stance_text
@@ -172,13 +174,21 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
 
     stance_knowledge: pass the pre-loaded dict to avoid re-reading the file;
     loaded on demand when None.
+
+    slot_keys: optional roster order so extra keys (D/E/F…) cycle stances.
+
+    stance_override: when set, use this stance instead of assign_stance().
     """
     role_text = assemble_role_text(decision_name, emotion_name, decision_dir, emotion_dir)
 
     stance = None
     stance_text = ""
     if HAVE_STANCE and scenario_type and stance_enabled(scenario_type):
-        stance = assign_stance(scenario_type, agent_key)
+        override = (stance_override or "").strip() or None
+        if override:
+            stance = override
+        else:
+            stance = assign_stance(scenario_type, agent_key, slot_keys=slot_keys)
         stance_text = get_stance_text(scenario_type, stance, lang)
 
     preloaded_knowledge = ""
@@ -220,6 +230,7 @@ def build_all_agent_specs(agent_configs: Dict[str, dict],
     """
     if stance_knowledge is None and HAVE_STANCE_KNOWLEDGE:
         stance_knowledge = load_stance_knowledge()
+    slot_keys = list(agent_configs.keys())
     return {
         key: build_agent_spec(
             agent_key=key,
@@ -231,6 +242,8 @@ def build_all_agent_specs(agent_configs: Dict[str, dict],
             emotion_dir=emotion_dir,
             hint=cfg.get("hint"),
             stance_knowledge=stance_knowledge,
+            slot_keys=slot_keys,
+            stance_override=cfg.get("stance") or None,
         )
         for key, cfg in agent_configs.items()
     }

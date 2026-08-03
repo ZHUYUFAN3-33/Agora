@@ -1,9 +1,25 @@
 import type { AgentKey, AgentPoolKey } from "../data/agents";
+import { getCondensedFont, getTutorialSteps, getUiFont, type UiLang } from "../i18n/ui";
 
+/** @deprecated Prefer getUiFont(lang) — kept for EN-default call sites during migration. */
 export const monoFont = { fontFamily: "'Share Tech Mono', monospace" as const };
 export const condensedFont = { fontFamily: "'Barlow Condensed', sans-serif" as const };
 
-export const FULL_AGENT_NAMES: Record<AgentKey, string> = { A: "ChatbotA", B: "ChatbotB", C: "ChatbotC" };
+export function uiFont(lang: UiLang = "en") {
+  return getUiFont(lang);
+}
+export function uiCondensedFont(lang: UiLang = "en") {
+  return getCondensedFont(lang);
+}
+
+export const FULL_AGENT_NAMES: Record<AgentKey, string> = {
+  A: "ChatbotA",
+  B: "ChatbotB",
+  C: "ChatbotC",
+  D: "ChatbotD",
+  E: "ChatbotE",
+  F: "ChatbotF",
+};
 
 export type GuideGradientPalette = {
   edge: string;
@@ -73,12 +89,5 @@ export const EMOTION_EMOJI_VARIANTS: Record<string, EmotionEmojiPalette> = {
 
 export const EMOJI_REGEX = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu;
 
-export const WELCOME_TUTORIAL_STEPS = [
-  { title: "Scene", body: "The scene changes the decision context and swaps the suggested prompts to match that situation." },
-  { title: "Agents", body: "These cards define who joins the discussion. Open one agent card first, then I will walk through each setup page before we move on." },
-  { title: "Basic", body: "This page sets the display name and accent color. It controls how that agent appears in the workspace and chat header." },
-  { title: "Emotion", body: "This page shapes tone. Use the sliders to set valence, arousal, and control, or describe a tone in text to infer an emotion tag." },
-  { title: "Behavior", body: "This page controls how the agent reasons. Decision style changes response structure, and additional prompt adds extra instructions." },
-  { title: "Suggested Prompts", body: "Use one of these to start quickly, or ignore them and write your own question." },
-  { title: "Input", body: "Type here to start. Enter sends, Shift+Enter adds a new line, and the settings button opens advanced controls." },
-] as const;
+/** English fallback; prefer getTutorialSteps(lang) from i18n/ui. */
+export const WELCOME_TUTORIAL_STEPS = getTutorialSteps("en");

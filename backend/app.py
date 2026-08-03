@@ -12,7 +12,7 @@ import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from flask import Flask, request, jsonify, send_file
@@ -183,8 +183,11 @@ scene = read_text(SCENE_FILE) if os.path.exists(SCENE_FILE) else ""
 bot1 = _sanitize_runtime_controlled_role_text("ChatbotA", read_text(BOT1_FILE) if os.path.exists(BOT1_FILE) else "")
 bot2 = _sanitize_runtime_controlled_role_text("ChatbotB", read_text(BOT2_FILE) if os.path.exists(BOT2_FILE) else "")
 bot3 = _sanitize_runtime_controlled_role_text("ChatbotC", read_text(BOT3_FILE) if os.path.exists(BOT3_FILE) else "")
-SLOT_KEYS: List[str] = ["A", "B", "C"]
+SLOT_KEYS: List[str] = ["A", "B", "C"]  # default roster; sessions use session["slot_keys"]
 POOL_KEYS: List[str] = ["A", "B", "C", "D", "E", "F"]
+VALID_SLOT_KEYS: List[str] = list(POOL_KEYS)
+MIN_ROSTER_AGENTS = 2
+MAX_ROSTER_AGENTS = 6
 PROFILE_FIXED_CONFIG: Dict[str, dict] = {
     "A": {"decision": "Spontaneous", "emotion": "joy"},
     "B": {"decision": "Rational", "emotion": "fear"},
@@ -193,6 +196,180 @@ PROFILE_FIXED_CONFIG: Dict[str, dict] = {
     "E": {"decision": "Intuitive", "emotion": "anger"},
     "F": {"decision": "Rational", "emotion": "sadness"},
 }
+
+
+def _session_slot_keys(session: dict) -> List[str]:
+    keys = session.get("slot_keys") or SLOT_KEYS
+    out: List[str] = []
+    for k in keys:
+        ku = str(k).upper()
+        if ku in VALID_SLOT_KEYS and ku not in out:
+            out.append(ku)
+    return out or list(SLOT_KEYS)
+
+
+def _normalize_emotion_label(emotion: str) -> str:
+    e = (emotion or "Joy").strip()
+    if not e:
+        return "Joy"
+    return e[:1].upper() + e[1:].lower()
+
+
+def _normalize_decision_label(decision: str) -> str:
+    d = (decision or "Rational").strip()
+    return d or "Rational"
+
+
+def _valid_stances_for_scenario(scenario_type: Optional[str]) -> List[str]:
+    if not scenario_type:
+        return []
+    try:
+        from stance import STANCE_CYCLE_ORDER
+        return list(STANCE_CYCLE_ORDER.get(scenario_type) or [])
+    except Exception:
+        return []
+
+
+def _parse_agent_entry(item: dict, *, require_behavior: bool = True) -> Tuple[str, str, dict]:
+    """Returns (key, display_name, runtime_conf)."""
+    if not isinstance(item, dict):
+        raise ValueError("each agents[] entry must be an object")
+    key = str(item.get("key") or "").upper()
+    if key not in VALID_SLOT_KEYS:
+        raise ValueError(f"invalid agent key '{key}' (allowed: {VALID_SLOT_KEYS})")
+    decision_raw = item.get("decision")
+    emotion_raw = item.get("emotion")
+    if require_behavior and (not decision_raw or not emotion_raw):
+        raise ValueError(f"agent {key} requires decision and emotion")
+    name = (item.get("name") or f"Chatbot{key}").strip() or f"Chatbot{key}"
+    conf: Dict[str, Any] = {
+        "decision": _normalize_decision_label(str(decision_raw or "Rational")),
+        "emotion": _normalize_emotion_label(str(emotion_raw or "Joy")),
+    }
+    hint = (item.get("hint") or "").strip() if isinstance(item.get("hint"), str) else ""
+    if hint:
+        conf["hint"] = hint
+    stance = (item.get("stance") or "").strip() if isinstance(item.get("stance"), str) else ""
+    if stance:
+        conf["stance"] = stance
+    return key, name, conf
+
+
+def _parse_start_agents_payload(data: dict, mode: str, scenario_type: Optional[str] = None):
+    """
+    Parse optional agents[] from /api/start or /api/roster.
+    Returns (slot_keys, display_names, runtime_config) or (None, None, None) to use defaults.
+    Raises ValueError with a user-facing message on invalid input.
+    """
+    raw = data.get("agents")
+    if raw is None:
+        return None, None, None
+    if not isinstance(raw, list):
+        raise ValueError("agents must be a list")
+
+    allowed_stances = set(_valid_stances_for_scenario(scenario_type))
+
+    def _check_stance(key: str, conf: dict) -> None:
+        stance = conf.get("stance")
+        if stance and allowed_stances and stance not in allowed_stances:
+            raise ValueError(
+                f"agent {key}: invalid stance '{stance}' (allowed: {sorted(allowed_stances)})"
+            )
+
+    if mode == "single":
+        if len(raw) == 0:
+            return ["A"], {"A": "ChatbotA"}, {
+                "A": {"decision": "Rational", "emotion": "Joy"}
+            }
+        entry = raw[0] if isinstance(raw[0], dict) else {}
+        key, name, conf = _parse_agent_entry(entry, require_behavior=False)
+        key = "A"
+        _check_stance(key, conf)
+        return [key], {key: name if name else "ChatbotA"}, {key: conf}
+
+    if mode == "limited":
+        # Limited keeps fixed 3 slots from pool selection; ignore custom agents length.
+        return None, None, None
+
+    if len(raw) < MIN_ROSTER_AGENTS or len(raw) > MAX_ROSTER_AGENTS:
+        raise ValueError(
+            f"agents length must be {MIN_ROSTER_AGENTS}–{MAX_ROSTER_AGENTS} (got {len(raw)})"
+        )
+
+    slot_keys: List[str] = []
+    display_names: Dict[str, str] = {}
+    runtime: Dict[str, dict] = {}
+    for item in raw:
+        key, name, conf = _parse_agent_entry(item, require_behavior=True)
+        if key in slot_keys:
+            raise ValueError(f"duplicate agent key '{key}'")
+        _check_stance(key, conf)
+        slot_keys.append(key)
+        display_names[key] = name
+        runtime[key] = conf
+    return slot_keys, display_names, runtime
+
+
+def _apply_slot_keys_to_session(session: dict, slot_keys: List[str]) -> None:
+    session["slot_keys"] = list(slot_keys)
+    session["has_spoken"] = {k: False for k in slot_keys}
+    session["memory_snippets"] = {k: [] for k in slot_keys}
+    session["turns_since_distill"] = {k: 0 for k in slot_keys}
+    session["latest_rationale"] = {k: "" for k in slot_keys}
+    session["latest_snippet_id"] = {k: None for k in slot_keys}
+    session["snippet_counters"] = {k: 0 for k in slot_keys}
+
+
+def _merge_slot_keys_to_session(session: dict, slot_keys: List[str]) -> None:
+    """Update roster while preserving per-agent memory for keys that remain."""
+    prev_spoken = session.get("has_spoken") or {}
+    prev_snippets = session.get("memory_snippets") or {}
+    prev_turns = session.get("turns_since_distill") or {}
+    prev_rationale = session.get("latest_rationale") or {}
+    prev_snippet_id = session.get("latest_snippet_id") or {}
+    prev_counters = session.get("snippet_counters") or {}
+    session["slot_keys"] = list(slot_keys)
+    session["has_spoken"] = {k: bool(prev_spoken.get(k, False)) for k in slot_keys}
+    session["memory_snippets"] = {k: list(prev_snippets.get(k) or []) for k in slot_keys}
+    session["turns_since_distill"] = {k: int(prev_turns.get(k) or 0) for k in slot_keys}
+    session["latest_rationale"] = {k: str(prev_rationale.get(k) or "") for k in slot_keys}
+    session["latest_snippet_id"] = {k: prev_snippet_id.get(k) for k in slot_keys}
+    session["snippet_counters"] = {k: int(prev_counters.get(k) or 0) for k in slot_keys}
+
+
+def _assemble_cfg_from_runtime(session: dict) -> Dict[str, dict]:
+    assemble_cfg: Dict[str, dict] = {}
+    for slot in _session_slot_keys(session):
+        conf = session.get("agent_runtime_config", {}).get(slot, {}) or {}
+        entry: Dict[str, Any] = {
+            "decision": conf.get("decision", "Rational"),
+            "emotion": _normalize_emotion_label(str(conf.get("emotion", "Joy"))),
+        }
+        hint = (conf.get("hint") or "").strip()
+        if hint:
+            entry["hint"] = hint
+        stance = (conf.get("stance") or "").strip()
+        if stance:
+            entry["stance"] = stance
+        assemble_cfg[slot] = entry
+    return assemble_cfg
+
+
+def _agents_payload_for_session(session: dict, session_agents: Dict[str, ChatAgent]) -> List[dict]:
+    agents_payload = []
+    for slot in _session_slot_keys(session):
+        runtime = session.get("agent_runtime_config", {}).get(slot, {}) or {}
+        agents_payload.append({
+            "key": slot,
+            "pool_key": (session.get("slot_to_profile") or {}).get(slot, slot),
+            "name": session_agents[slot].name,
+            "role": session_agents[slot].role_text.splitlines()[0] if session_agents[slot].role_text else "",
+            "decision": runtime.get("decision", "Rational"),
+            "emotion": runtime.get("emotion", "Joy"),
+            "stance": runtime.get("stance"),
+            "hint": runtime.get("hint") or "",
+        })
+    return agents_payload
 
 AGENT_POOL: Dict[str, dict] = {
     "A": {"name": "ChatbotA", "role_text": bot1},
@@ -246,21 +423,29 @@ def _normalize_limited_keys(keys: List[str]) -> List[str]:
 def _make_session_agents(session: dict) -> Tuple[Dict[str, ChatAgent], List[ChatAgent], List[str]]:
     agents_map: Dict[str, ChatAgent] = {}
     specs = session.get("agora2_specs") or {}
-    for slot in SLOT_KEYS:
-        profile_key = session["slot_to_profile"].get(slot, slot)
-        prof = AGENT_POOL.get(profile_key, AGENT_POOL[slot])
-        role_text = prof["role_text"]
+    slot_keys = _session_slot_keys(session)
+    display_names = session.get("agent_display_names") or {}
+    slot_to_profile = session.get("slot_to_profile") or {}
+    for slot in slot_keys:
+        profile_key = slot_to_profile.get(slot, slot)
+        prof = AGENT_POOL.get(profile_key) or AGENT_POOL.get(slot) or {
+            "name": f"Chatbot{slot}",
+            "role_text": "",
+        }
+        role_text = prof.get("role_text") or ""
         if slot in specs and specs[slot].get("role_text"):
             role_text = specs[slot]["role_text"]
-        agents_map[slot] = ChatAgent(slot, prof["name"], role_text)
-    agent_list = [agents_map[s] for s in SLOT_KEYS]
+        name = display_names.get(slot) or prof.get("name") or f"Chatbot{slot}"
+        agents_map[slot] = ChatAgent(slot, name, role_text)
+    agent_list = [agents_map[s] for s in slot_keys]
     all_names = [a.name for a in agent_list]
     return agents_map, agent_list, all_names
 
 
-def _runtime_config_from_slot_profiles(slot_to_profile: Dict[str, str]) -> Dict[str, dict]:
+def _runtime_config_from_slot_profiles(slot_to_profile: Dict[str, str], slot_keys: Optional[List[str]] = None) -> Dict[str, dict]:
+    keys = slot_keys or SLOT_KEYS
     conf: Dict[str, dict] = {}
-    for slot in SLOT_KEYS:
+    for slot in keys:
         profile_key = slot_to_profile.get(slot, slot)
         fixed = PROFILE_FIXED_CONFIG.get(profile_key, PROFILE_FIXED_CONFIG.get(slot, {"decision": "Rational", "emotion": "joy"}))
         conf[slot] = {"decision": fixed["decision"], "emotion": fixed["emotion"]}
@@ -281,15 +466,20 @@ def init_session(room_id: str) -> dict:
     rationale_fp = open(rationale_log_path, "a", encoding="utf-8")
     memory_fp = open(memory_log_path, "a", encoding="utf-8")
 
+    default_slots = list(SLOT_KEYS)
     session = {
         "room_id": room_id,
         "scene_id": "scene1",
         "mode": "full",
-        "slot_to_profile": {"A": "A", "B": "B", "C": "C"},
+        "slot_keys": default_slots,
+        "agent_display_names": {k: f"Chatbot{k}" for k in default_slots},
+        "slot_to_profile": {k: k for k in default_slots},
         "agent_runtime_config": {
-            "A": {"decision": AGENT_CONFIGS.get("A", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("A", {}).get("emotion", "Joy")},
-            "B": {"decision": AGENT_CONFIGS.get("B", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("B", {}).get("emotion", "Joy")},
-            "C": {"decision": AGENT_CONFIGS.get("C", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("C", {}).get("emotion", "Joy")},
+            k: {
+                "decision": AGENT_CONFIGS.get(k, {}).get("decision", "Rational"),
+                "emotion": AGENT_CONFIGS.get(k, {}).get("emotion", "Joy"),
+            }
+            for k in default_slots
         },
         "history": [],
         "known_user_facts": {},
@@ -300,7 +490,7 @@ def init_session(room_id: str) -> dict:
         "last_speaker_key": None,
         "mention_queue": [],
         "consecutive_count": 0,
-        "has_spoken": {"A": False, "B": False, "C": False},
+        "has_spoken": {k: False for k in default_slots},
         "chat_log_path": chat_log_path,
         "thinking_log_path": thinking_log_path,
         "moderator_log_path": moderator_log_path,
@@ -312,11 +502,11 @@ def init_session(room_id: str) -> dict:
         "rationale_fp": rationale_fp,
         "memory_fp": memory_fp,
         # In-session per-agent position snapshots (CLI maybe_distill_snippet)
-        "memory_snippets": {"A": [], "B": [], "C": []},
-        "turns_since_distill": {"A": 0, "B": 0, "C": 0},
-        "latest_rationale": {"A": "", "B": "", "C": ""},
-        "latest_snippet_id": {"A": None, "B": None, "C": None},
-        "snippet_counters": {"A": 0, "B": 0, "C": 0},
+        "memory_snippets": {k: [] for k in default_slots},
+        "turns_since_distill": {k: 0 for k in default_slots},
+        "latest_rationale": {k: "" for k in default_slots},
+        "latest_snippet_id": {k: None for k in default_slots},
+        "snippet_counters": {k: 0 for k in default_slots},
         # Phase-based moderator state (CLI-faithful)
         "moderator_state": {"mode": None, "state": "Exploration", "stall": False, "goal": ""},
         "user_turn_count": 0,
@@ -451,24 +641,59 @@ def start_chat():
     session["mode"] = mode
     session["pipeline"] = "agora2" if use_agora2 else "legacy"
 
+    try:
+        parsed_keys, parsed_names, parsed_runtime = _parse_start_agents_payload(
+            data, mode, scenario_type=scenario_type or None
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
     if mode == "limited":
         chosen_profiles = _normalize_limited_keys([str(k).upper() for k in requested_limited_keys if isinstance(k, str)])
-        session["slot_to_profile"] = {slot: chosen_profiles[i] for i, slot in enumerate(SLOT_KEYS)}
-        session["agent_runtime_config"] = _runtime_config_from_slot_profiles(session["slot_to_profile"])
-    else:
-        session["slot_to_profile"] = {"A": "A", "B": "B", "C": "C"}
-        session["agent_runtime_config"] = {
-            "A": {"decision": AGENT_CONFIGS.get("A", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("A", {}).get("emotion", "Joy")},
-            "B": {"decision": AGENT_CONFIGS.get("B", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("B", {}).get("emotion", "Joy")},
-            "C": {"decision": AGENT_CONFIGS.get("C", {}).get("decision", "Rational"), "emotion": AGENT_CONFIGS.get("C", {}).get("emotion", "Joy")},
+        slot_keys = list(SLOT_KEYS)
+        _apply_slot_keys_to_session(session, slot_keys)
+        session["slot_to_profile"] = {slot: chosen_profiles[i] for i, slot in enumerate(slot_keys)}
+        session["agent_runtime_config"] = _runtime_config_from_slot_profiles(session["slot_to_profile"], slot_keys)
+        session["agent_display_names"] = {
+            slot: AGENT_POOL.get(chosen_profiles[i], {}).get("name", f"Chatbot{slot}")
+            for i, slot in enumerate(slot_keys)
         }
+    elif mode == "single":
+        slot_keys = parsed_keys or ["A"]
+        _apply_slot_keys_to_session(session, slot_keys)
+        session["slot_to_profile"] = {k: k for k in slot_keys}
+        if parsed_runtime:
+            session["agent_runtime_config"] = parsed_runtime
+        else:
+            session["agent_runtime_config"] = {
+                "A": {
+                    "decision": AGENT_CONFIGS.get("A", {}).get("decision", "Rational"),
+                    "emotion": AGENT_CONFIGS.get("A", {}).get("emotion", "Joy"),
+                }
+            }
+        session["agent_display_names"] = parsed_names or {"A": "ChatbotA"}
+    else:
+        slot_keys = parsed_keys or list(SLOT_KEYS)
+        _apply_slot_keys_to_session(session, slot_keys)
+        session["slot_to_profile"] = {k: k for k in slot_keys}
+        if parsed_runtime:
+            session["agent_runtime_config"] = parsed_runtime
+            session["agent_display_names"] = parsed_names or {k: f"Chatbot{k}" for k in slot_keys}
+        else:
+            session["agent_runtime_config"] = {
+                k: {
+                    "decision": AGENT_CONFIGS.get(k, {}).get("decision", "Rational"),
+                    "emotion": AGENT_CONFIGS.get(k, {}).get("emotion", "Joy"),
+                }
+                for k in slot_keys
+            }
+            session["agent_display_names"] = {k: f"Chatbot{k}" for k in slot_keys}
 
     if use_agora2:
         lang = (data.get("lang") or "en").strip() or "en"
         profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
         intake = data.get("intake") if isinstance(data.get("intake"), dict) else {}
         session_update = (data.get("session_update") or "").strip()
-        hint = (data.get("hint") or "").strip()
         # Prefer authenticated user when Bearer present
         user_id = (data.get("user_id") or f"web_{room_id}").strip()
         if HAVE_USER_STORE:
@@ -495,9 +720,8 @@ def start_chat():
                     profile = raw.get("profile", raw) if isinstance(raw, dict) else {}
                     break
 
-        # Surface setup hint inside known_context via intake.hint
-        if hint and isinstance(intake, dict):
-            intake = {**intake, "hint": hint}
+        # Legacy session-level hint is no longer used for knowledge preload;
+        # per-agent hints live on agent_runtime_config.
 
         ctx = agora2_http.prepare_http_context(
             scenario_type=scenario_type,
@@ -513,33 +737,34 @@ def start_chat():
         session["scenario_type"] = scenario_type
         session["lang"] = ctx["lang"]
         session["user_id"] = user_id
-        session["hint"] = hint
+        session["hint"] = ""  # deprecated: use per-agent hint on runtime config
         session["memory_saved"] = False
 
-        # Prefer Capitalized emotion names for preset files (Joy.txt)
-        assemble_cfg = {}
-        for slot in SLOT_KEYS:
-            conf = session["agent_runtime_config"].get(slot, {})
-            emotion = conf.get("emotion", "Joy")
-            if isinstance(emotion, str) and emotion:
-                emotion = emotion[:1].upper() + emotion[1:].lower()
-            assemble_cfg[slot] = {
-                "decision": conf.get("decision", "Rational"),
-                "emotion": emotion,
-            }
+        assemble_cfg = _assemble_cfg_from_runtime(session)
         session["agora2_specs"] = agora2_http.assemble_session_agents(
             assemble_cfg,
             scenario_type=scenario_type,
             lang=ctx["lang"],
-            hint=hint,
+            hint="",
         )
-        # Sync runtime emotion/decision from assembled specs
+        # Sync runtime emotion/decision/stance from assembled specs; keep hint
         for slot, spec in session["agora2_specs"].items():
+            prev = session["agent_runtime_config"].get(slot) or {"decision": "Rational", "emotion": "Joy"}
             session["agent_runtime_config"][slot] = {
-                "decision": spec.get("decision") or session["agent_runtime_config"][slot]["decision"],
-                "emotion": spec.get("emotion") or session["agent_runtime_config"][slot]["emotion"],
-                "stance": spec.get("stance"),
+                "decision": spec.get("decision") or prev["decision"],
+                "emotion": spec.get("emotion") or prev["emotion"],
+                "stance": spec.get("stance") or prev.get("stance"),
+                "hint": prev.get("hint") or "",
             }
+    else:
+        # Legacy: assemble role_text from decision/emotion presets when available
+        try:
+            from agent_assembly import build_all_agent_specs
+            session["agora2_specs"] = build_all_agent_specs(
+                _assemble_cfg_from_runtime(session), scenario_type=None, lang="en"
+            )
+        except Exception as assemble_err:
+            print(f"⚠ legacy assemble: {assemble_err}")
 
     session_agents, _, _ = _make_session_agents(session)
     chat_sessions[room_id] = session
@@ -572,18 +797,7 @@ def start_chat():
         except Exception as room_err:
             print(f"⚠ chat_rooms create: {room_err}")
 
-    agents_payload = []
-    for slot in SLOT_KEYS:
-        runtime = session["agent_runtime_config"].get(slot, {})
-        agents_payload.append({
-            "key": slot,
-            "pool_key": session["slot_to_profile"].get(slot, slot),
-            "name": session_agents[slot].name,
-            "role": session_agents[slot].role_text.splitlines()[0] if session_agents[slot].role_text else "",
-            "decision": runtime.get("decision", "Rational"),
-            "emotion": runtime.get("emotion", "Joy"),
-            "stance": runtime.get("stance"),
-        })
+    agents_payload = _agents_payload_for_session(session, session_agents)
 
     payload = {
         "room_id": room_id,
@@ -606,6 +820,96 @@ def start_chat():
 def normalize_lang_safe(lang: str) -> str:
     lang = (lang or "zh").lower()
     return "zh" if lang.startswith("zh") else "en"
+
+
+@app.route('/api/roster', methods=['POST'])
+def update_roster():
+    """Update active agent roster mid-session (full mode: 2–6; single: A only)."""
+    data = request.json or {}
+    room_id = (data.get("room_id") or "").strip()
+    if not room_id or room_id not in chat_sessions:
+        return jsonify({"error": "Invalid room_id"}), 400
+
+    session = chat_sessions[room_id]
+    mode = (session.get("mode") or data.get("mode") or "full").strip().lower()
+    if mode == "limited":
+        return jsonify({"error": "Roster updates are not supported in limited mode"}), 400
+
+    scenario_type = session.get("scenario_type") or ""
+    try:
+        slot_keys, display_names, runtime = _parse_start_agents_payload(
+            data, mode, scenario_type=scenario_type or None
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if not slot_keys or not runtime:
+        return jsonify({"error": "agents[] is required"}), 400
+
+    _merge_slot_keys_to_session(session, slot_keys)
+    session["slot_to_profile"] = {k: k for k in slot_keys}
+    session["agent_display_names"] = display_names or {k: f"Chatbot{k}" for k in slot_keys}
+    session["agent_runtime_config"] = runtime
+
+    if session.get("pipeline") == "agora2" and scenario_type and HAVE_AGORA2:
+        lang = session.get("lang") or "en"
+        assemble_cfg = _assemble_cfg_from_runtime(session)
+        session["agora2_specs"] = agora2_http.assemble_session_agents(
+            assemble_cfg,
+            scenario_type=scenario_type,
+            lang=lang,
+            hint="",
+        )
+        for slot, spec in (session.get("agora2_specs") or {}).items():
+            prev = session["agent_runtime_config"].get(slot) or {}
+            session["agent_runtime_config"][slot] = {
+                "decision": spec.get("decision") or prev.get("decision", "Rational"),
+                "emotion": spec.get("emotion") or prev.get("emotion", "Joy"),
+                "stance": spec.get("stance") or prev.get("stance"),
+                "hint": prev.get("hint") or "",
+            }
+    else:
+        try:
+            from agent_assembly import build_all_agent_specs
+            session["agora2_specs"] = build_all_agent_specs(
+                _assemble_cfg_from_runtime(session),
+                scenario_type=scenario_type or None,
+                lang=session.get("lang") or "en",
+            )
+            for slot, spec in (session.get("agora2_specs") or {}).items():
+                prev = session["agent_runtime_config"].get(slot) or {}
+                if spec.get("stance"):
+                    session["agent_runtime_config"][slot] = {
+                        **prev,
+                        "stance": spec.get("stance"),
+                    }
+        except Exception as assemble_err:
+            print(f"⚠ roster assemble: {assemble_err}")
+
+    session_agents, _, _ = _make_session_agents(session)
+    return jsonify({
+        "room_id": room_id,
+        "mode": mode,
+        "agents": _agents_payload_for_session(session, session_agents),
+    })
+
+
+@app.route('/api/knowledge-preview', methods=['POST'])
+def knowledge_preview():
+    """Preview topic-card tags matched by per-agent hint + stance."""
+    data = request.json or {}
+    scenario_type = (data.get("scenario_type") or "").strip()
+    stance = (data.get("stance") or "").strip()
+    hint = (data.get("hint") or "").strip()
+    lang = normalize_lang_safe(data.get("lang") or "en")
+    if not scenario_type or not stance:
+        return jsonify({"matched": False, "fallback": False, "tags": [], "card": None})
+    try:
+        from stance_knowledge import preview_matched_card
+        result = preview_matched_card(scenario_type, stance, hint, lang=lang)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e), "matched": False, "tags": []}), 500
 
 
 @app.route('/api/message', methods=['POST'])
@@ -699,7 +1003,7 @@ def send_message():
     preloaded_knowledge_text = agora2.get("preloaded_knowledge_text") or ""
     if not preloaded_knowledge_text:
         specs = session.get("agora2_specs") or {}
-        for slot in SLOT_KEYS:
+        for slot in _session_slot_keys(session):
             pk = (specs.get(slot) or {}).get("preloaded_knowledge") or ""
             if pk:
                 preloaded_knowledge_text = pk
@@ -712,7 +1016,7 @@ def send_message():
     agent_emotion_overrides = data.get("agent_emotion_overrides") or {}
     agent_decision_block = data.get("agent_decision_block") or {}
     additional_rules = data.get("additional_rules") or {}
-    for slot in SLOT_KEYS:
+    for slot in _session_slot_keys(session):
         conf = session.setdefault("agent_runtime_config", {}).setdefault(slot, {})
         if slot in agent_decision_block and agent_decision_block[slot]:
             conf["decision"] = agent_decision_block[slot]
@@ -796,7 +1100,7 @@ def get_history(room_id):
             "mode": session.get("mode", "full"),
             "active_agents": [
                 {"key": slot, "pool_key": session.get("slot_to_profile", {}).get(slot, slot), "name": session_agents[slot].name}
-                for slot in SLOT_KEYS
+                for slot in _session_slot_keys(session)
             ],
             "history": session["history"],
             "known_facts": list(session["known_user_facts"].values()),

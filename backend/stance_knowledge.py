@@ -40,11 +40,60 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional
+import re
+from typing import List, Optional
 
 from lang_utils import normalize_lang, pick, header
 
 STANCE_KNOWLEDGE_DIR_DEFAULT = os.path.join("background_templates", "stance_knowledge")
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_STANCE_ID_PREFIXES = (
+    "growth_",
+    "stability_",
+    "life_",
+    "child_",
+    "parent_",
+    "relationship_",
+)
+
+
+def _has_cjk(text: str) -> bool:
+    return bool(_CJK_RE.search(text or ""))
+
+
+def _keyword_for_lang(kw: str, lang: str) -> bool:
+    """Split bilingual keyword lists for UI: en → Latin-ish, zh → CJK-containing."""
+    kw = (kw or "").strip()
+    if not kw:
+        return False
+    cjk = _has_cjk(kw)
+    if normalize_lang(lang) == "zh":
+        return cjk
+    return not cjk
+
+
+def _soft_keyword_hit(msg_lower: str, kw_lower: str) -> bool:
+    """Allow a short hint to match a longer keyword phrase.
+
+    Hard match remains `kw in msg`. Soft match is the reverse (`msg in kw`) with
+    guardrails so single English tokens like "job" / "change" do not fire.
+    """
+    if not msg_lower or not kw_lower or msg_lower not in kw_lower:
+        return False
+    if _has_cjk(msg_lower):
+        return len(msg_lower) >= 2
+    tokens = [t for t in re.split(r"\s+", msg_lower) if t]
+    return len(tokens) >= 2 and len(msg_lower) >= 5
+
+
+def _humanize_card_id(card_id: str) -> str:
+    title = card_id or ""
+    for prefix in _STANCE_ID_PREFIXES:
+        if title.startswith(prefix):
+            title = title[len(prefix) :]
+            break
+    return title.replace("_", " ").strip()
 
 
 def load_stance_knowledge(dir_path: str = STANCE_KNOWLEDGE_DIR_DEFAULT) -> dict:
@@ -73,12 +122,76 @@ def load_stance_knowledge(dir_path: str = STANCE_KNOWLEDGE_DIR_DEFAULT) -> dict:
 def _match_topic_card(user_message: str, topic_cards: list, lang: str) -> Optional[dict]:
     if not user_message:
         return None
-    msg_lower = user_message.lower()
+    msg_lower = user_message.lower().strip()
+    # Pass 1: classic "keyword appears in the message".
     for card in topic_cards:
         for kw in card.get("keywords", []):
             if kw.lower() in msg_lower:
                 return card
+    # Pass 2: soft — short setup hints / partial phrases against longer keywords.
+    for card in topic_cards:
+        for kw in card.get("keywords", []):
+            if _soft_keyword_hit(msg_lower, kw.lower()):
+                return card
     return None
+
+
+def preview_matched_card(
+    scenario_type: str,
+    stance: Optional[str],
+    hint: str,
+    lang: str = "en",
+    knowledge: Optional[dict] = None,
+    knowledge_dir: str = STANCE_KNOWLEDGE_DIR_DEFAULT,
+) -> dict:
+    """
+    Preview which topic card a setup hint would bind for UI tags.
+    Does NOT use generic_fallback (matches assemble preload: miss → empty).
+
+    Tags are language-filtered (en UI → English keywords only; zh → Chinese).
+    The first tag is a human topic label — NOT the internal card id slug.
+    """
+    hint = (hint or "").strip()
+    lang = normalize_lang(lang)
+    if not scenario_type or not stance or not hint:
+        return {"matched": False, "fallback": False, "tags": [], "card": None}
+
+    if knowledge is None:
+        knowledge = load_stance_knowledge(knowledge_dir)
+    scenario_cfg = (knowledge or {}).get(scenario_type, {}) or {}
+    stance_cfg = scenario_cfg.get(stance) if isinstance(scenario_cfg, dict) else None
+    if not isinstance(stance_cfg, dict):
+        return {"matched": False, "fallback": False, "tags": [], "card": None}
+
+    card = _match_topic_card(hint, stance_cfg.get("topic_cards", []) or [], lang)
+    if not card:
+        return {"matched": False, "fallback": False, "tags": [], "card": None}
+
+    keywords = list(card.get("keywords") or [])
+    lang_keywords = [kw for kw in keywords if _keyword_for_lang(kw, lang)]
+    display_keywords = lang_keywords or keywords
+
+    topic_label = display_keywords[0] if display_keywords else _humanize_card_id(str(card.get("id") or ""))
+    tags: List[dict] = [{"id": f"topic:{card.get('id')}", "label": topic_label}]
+    for kw in display_keywords:
+        if kw == topic_label:
+            continue
+        tags.append({"id": kw, "label": kw})
+        if len(tags) >= 4:
+            break
+
+    return {
+        "matched": True,
+        "fallback": False,
+        "tags": tags,
+        "card": {
+            "id": card.get("id"),
+            "title": topic_label,
+            "keywords": display_keywords,
+            "keywords_all": keywords,
+            "source_type": card.get("source_type"),
+        },
+    }
 
 
 def _find_card_by_id(scenario_cfg: dict, card_id: str) -> Optional[dict]:
@@ -89,6 +202,33 @@ def _find_card_by_id(scenario_cfg: dict, card_id: str) -> Optional[dict]:
             if c.get("id") == card_id:
                 return c
     return None
+
+
+def peek_matched_card_id(
+    scenario_type: str,
+    stance: Optional[str],
+    user_message: str,
+    lang: str = "zh",
+    knowledge: Optional[dict] = None,
+    knowledge_dir: str = STANCE_KNOWLEDGE_DIR_DEFAULT,
+) -> Optional[str]:
+    """Lightweight probe: return the id of the topic card `user_message` WOULD
+    hit for this scenario/stance, or None (no keyword match, or no
+    scenario/stance/knowledge base). Builds no text and never falls back to the
+    generic card — it uses the exact same matcher as get_stance_knowledge_block,
+    so callers can cheaply decide *whether* to expand related cards (and track
+    repeat hits) before paying to assemble the full block.
+    """
+    if not stance or not user_message:
+        return None
+    lang = normalize_lang(lang)
+    if knowledge is None:
+        knowledge = load_stance_knowledge(knowledge_dir)
+    stance_cfg = knowledge.get(scenario_type, {}).get(stance)
+    if not stance_cfg:
+        return None
+    card = _match_topic_card(user_message, stance_cfg.get("topic_cards", []), lang)
+    return card.get("id") if card else None
 
 
 def get_stance_knowledge_block(

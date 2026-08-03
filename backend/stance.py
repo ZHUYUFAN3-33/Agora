@@ -42,12 +42,51 @@ STANCE_ASSIGNMENTS: Dict[str, Dict[str, str]] = {
 }
 
 
-def assign_stance(scenario_type: Optional[str], agent_key: str) -> Optional[str]:
+# Canonical order of stances for cycling when roster has >3 agents (D/E/F…).
+STANCE_CYCLE_ORDER: Dict[str, List[str]] = {
+    "parent_child": [
+        "child_centered",
+        "parent_centered",
+        "relationship_centered",
+    ],
+    "employment": [
+        "growth_centered",
+        "stability_centered",
+        "life_centered",
+    ],
+}
+
+
+def assign_stance(
+    scenario_type: Optional[str],
+    agent_key: str,
+    slot_keys: Optional[List[str]] = None,
+) -> Optional[str]:
     """Returns the forced stance for this agent in this scenario, or None if
-    the scenario doesn't use the stance dimension at all."""
+    the scenario doesn't use the stance dimension at all.
+
+    For keys A/B/C, use the fixed table. Extra keys (D/E/F or any roster
+    beyond the table) cycle the scenario's stance list by roster index
+    when slot_keys is provided; otherwise cycle by A–F letter index.
+    """
     if not scenario_type:
         return None
-    return STANCE_ASSIGNMENTS.get(scenario_type, {}).get(agent_key)
+    table = STANCE_ASSIGNMENTS.get(scenario_type)
+    if not table:
+        return None
+    if agent_key in table:
+        return table[agent_key]
+    cycle = STANCE_CYCLE_ORDER.get(scenario_type) or list(table.values())
+    if not cycle:
+        return None
+    if slot_keys:
+        try:
+            idx = list(slot_keys).index(agent_key)
+        except ValueError:
+            idx = ord(agent_key.upper()) - ord("A")
+    else:
+        idx = ord(agent_key.upper()) - ord("A") if agent_key and agent_key.isalpha() else 0
+    return cycle[idx % len(cycle)]
 
 
 def stance_enabled(scenario_type: Optional[str]) -> bool:

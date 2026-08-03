@@ -1,11 +1,28 @@
-export type AgentKey = "A" | "B" | "C";
-export type AgentPoolKey = "A" | "B" | "C" | "D" | "E" | "F";
+export type AgentKey = "A" | "B" | "C" | "D" | "E" | "F";
+export type AgentPoolKey = AgentKey;
 
 /** Experiment mode: full = all options, limited = color/name only, single = Agent A only, neutral */
 export type ExperimentMode = "full" | "limited" | "single";
 
+/** All possible roster slots (max 6). */
+export const ALL_AGENT_KEYS: AgentKey[] = ["A", "B", "C", "D", "E", "F"];
+/** Default welcome roster (3 agents). Prefer activeAgentKeys in UI. */
 export const AGENT_KEYS: AgentKey[] = ["A", "B", "C"];
+export const DEFAULT_ACTIVE_AGENT_KEYS: AgentKey[] = ["A", "B", "C"];
+export const MIN_ROSTER_AGENTS = 2;
+export const MAX_ROSTER_AGENTS = 6;
 export const LIMITED_DEFAULT_SELECTED: AgentPoolKey[] = ["A", "D", "E"];
+
+export function nextFreeAgentKey(active: AgentKey[]): AgentKey | null {
+  for (const k of ALL_AGENT_KEYS) {
+    if (!active.includes(k)) return k;
+  }
+  return null;
+}
+
+export function backendLabelForKey(key: AgentKey): string {
+  return `Chatbot${key}`;
+}
 
 export interface LimitedAgentProfile {
   key: AgentPoolKey;
@@ -57,18 +74,27 @@ export const DEFAULT_AGENT_NAMES: Record<AgentKey, string> = {
   A: "ChatbotA",
   B: "ChatbotB",
   C: "ChatbotC",
+  D: "ChatbotD",
+  E: "ChatbotE",
+  F: "ChatbotF",
 };
 
 export const DEFAULT_AGENT_ROLES: Record<AgentKey, string> = {
   A: "+ + + + +",
   B: "+ + + + +",
   C: "+ + + + +",
+  D: "+ + + + +",
+  E: "+ + + + +",
+  F: "+ + + + +",
 };
 
 export const DEFAULT_AGENT_COLORS: Record<AgentKey, string> = {
   A: "#000000",
   B: "#000000",
   C: "#000000",
+  D: "#000000",
+  E: "#000000",
+  F: "#000000",
 };
 
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") || "/api";
@@ -77,6 +103,9 @@ export const BACKEND_NAME_TO_KEY: Record<string, AgentKey> = {
   ChatbotA: "A",
   ChatbotB: "B",
   ChatbotC: "C",
+  ChatbotD: "D",
+  ChatbotE: "E",
+  ChatbotF: "F",
 };
 
 export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
@@ -148,7 +177,31 @@ export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
   ],
 };
 
-export const SUGGESTED_PROMPTS = SCENE_SUGGESTED_PROMPTS.scene1;
+export const SUGGESTED_PROMPTS = SCENE_SUGGESTED_PROMPTS.employment;
+
+/** Chinese suggested prompts (semantic alignment, not literal machine translation). */
+export const SCENE_SUGGESTED_PROMPTS_ZH: Record<string, string[]> = {
+  employment: [
+    "我在两个 offer 之间犹豫，能帮我从成长、稳定和生活平衡比较一下吗？",
+    "如果两周内跳槽，我可能低估了哪些风险？",
+    "这次决策里，薪水、成长和地点该怎么排序？",
+    "决定前，我该向每家公司问清哪些问题？",
+  ],
+  parent_child: [
+    "孩子的手机使用规则该怎么定？如何在自主和安全之间平衡？",
+    "孩子的意愿和现实约束该如何权衡？",
+    "对这个养育决定来说，怎样的协商过程更尊重彼此？",
+    "怎样把孩子明确表达的偏好，和「这个年龄常见」的假设分开看？",
+  ],
+};
+
+export function getSuggestedPrompts(sceneId: string | null | undefined, lang: "en" | "zh" = "en"): string[] {
+  const id = sceneId || "employment";
+  if (lang === "zh") {
+    return SCENE_SUGGESTED_PROMPTS_ZH[id] || SCENE_SUGGESTED_PROMPTS[id] || SUGGESTED_PROMPTS;
+  }
+  return SCENE_SUGGESTED_PROMPTS[id] || SUGGESTED_PROMPTS;
+}
 
 export const EMOTION_EMOJI: Record<string, string> = {
   joy: "😄", anger: "😠", fear: "😨", sadness: "😢", surprise: "😲", disgust: "🤢", neutral: "😐",
@@ -232,11 +285,68 @@ export const EMOTION_DECISION_SUMMARIES: Record<string, Record<DecisionBlock, st
   },
 };
 
-export function getEmotionDecisionSummary(emotionTag: string | null, decisionBlock: DecisionBlock): string {
+/** Chinese one-liners for full-mode agent cards (semantic, not literal MT). */
+export const EMOTION_DECISION_SUMMARIES_ZH: Record<string, Record<DecisionBlock, string>> = {
+  joy: {
+    Rational: "积极且条理清晰；清楚权衡利弊后给出方向。",
+    Intuitive: "开朗、凭直觉；很快选中感觉对的选项。",
+    Dependent: "温暖支持；细心帮你收窄选项。",
+    Avoidant: "轻松正向；尽量简单，最多两个选择。",
+    Spontaneous: "积极果断；行动快，少做冗长权衡。",
+  },
+  anger: {
+    Rational: "尖锐直接；用结构化逻辑砍掉干扰。",
+    Intuitive: "急躁且凭本能；相信直觉，不做二次猜测。",
+    Dependent: "强硬但带引导；推动澄清，选项从简。",
+    Avoidant: "直白精简；限制选项，尽快推进。",
+    Spontaneous: "紧迫果断；立刻行动，毫不犹豫。",
+  },
+  fear: {
+    Rational: "谨慎分析；先评估风险再决定。",
+    Intuitive: "焦虑但仍信直觉；在不确定中仍做选择。",
+    Dependent: "不确定；需要确认与引导。",
+    Avoidant: "警惕且精简；选项少、可逆。",
+    Spontaneous: "紧张但迅速；快决定以降低焦虑。",
+  },
+  sadness: {
+    Rational: "偏沉稳但仍周全；仔细权衡选项。",
+    Intuitive: "温和凭感觉；选不那么沉重的方向。",
+    Dependent: "柔软支持；寻求共同方向。",
+    Avoidant: "安静低负担；保持简单，只有两条路。",
+    Spontaneous: "语气克制但行动快；快决定以减轻负担。",
+  },
+  surprise: {
+    Rational: "好奇且有条理；系统探索新角度。",
+    Intuitive: "开放凭直觉；抓住意外却契合的选项。",
+    Dependent: "兴致高且协作；在新事物上寻求引导。",
+    Avoidant: "吃惊但克制；选项少、可逆。",
+    Spontaneous: "兴奋且干脆；对转折快速拍板。",
+  },
+  disgust: {
+    Rational: "冷静分析；剔除令人不适的选项。",
+    Intuitive: "排斥且凭直觉；拒绝感觉不对的方向。",
+    Dependent: "坚定引导；带你远离糟糕选项。",
+    Avoidant: "拒绝且精简；选项少而干净。",
+    Spontaneous: "干脆果断；快速否决，不纠缠。",
+  },
+  neutral: {
+    Rational: "平衡且有条理；客观权衡选项。",
+    Intuitive: "平静凭直觉；选择契合情境的方向。",
+    Dependent: "平和支持；在引导下收窄选项。",
+    Avoidant: "中性精简；保持简单、可逆。",
+    Spontaneous: "平静快速；无偏好地迅速决定。",
+  },
+};
+
+export function getEmotionDecisionSummary(
+  emotionTag: string | null,
+  decisionBlock: DecisionBlock,
+  lang: "en" | "zh" = "en",
+): string {
   const key = (emotionTag || "neutral").toLowerCase();
-  const row = EMOTION_DECISION_SUMMARIES[key];
-  if (!row) return EMOTION_DECISION_SUMMARIES.neutral[decisionBlock];
-  return row[decisionBlock] ?? EMOTION_DECISION_SUMMARIES.neutral[decisionBlock];
+  const table = lang === "zh" ? EMOTION_DECISION_SUMMARIES_ZH : EMOTION_DECISION_SUMMARIES;
+  const row = table[key] || table.neutral;
+  return row[decisionBlock] ?? table.neutral[decisionBlock];
 }
 
 /** Short role labels for each emotion × decision, used in test-mode agent cards. */
@@ -292,11 +402,67 @@ export const EMOTION_DECISION_ROLES: Record<string, Record<DecisionBlock, string
   },
 };
 
-export function getEmotionDecisionRole(emotionTag: string | null, decisionBlock: DecisionBlock): string {
+export const EMOTION_DECISION_ROLES_ZH: Record<string, Record<DecisionBlock, string>> = {
+  joy: {
+    Rational: "机会发现者",
+    Intuitive: "势头追寻者",
+    Dependent: "鼓励支持者",
+    Avoidant: "轻量简化者",
+    Spontaneous: "能量推动者",
+  },
+  anger: {
+    Rational: "低效切除者",
+    Intuitive: "直觉执行者",
+    Dependent: "压力驱动者",
+    Avoidant: "噪音削减者",
+    Spontaneous: "行动逼迫者",
+  },
+  fear: {
+    Rational: "风险评估者",
+    Intuitive: "谨慎核查者",
+    Dependent: "安心寻求者",
+    Avoidant: "安全守护者",
+    Spontaneous: "张力释放者",
+  },
+  sadness: {
+    Rational: "负担权衡者",
+    Intuitive: "温和引导者",
+    Dependent: "支持托举者",
+    Avoidant: "负荷最小化者",
+    Spontaneous: "解脱寻求者",
+  },
+  surprise: {
+    Rational: "角度探索者",
+    Intuitive: "新意发现者",
+    Dependent: "发现协作者",
+    Avoidant: "范围守门者",
+    Spontaneous: "转折追逐者",
+  },
+  disgust: {
+    Rational: "质量过滤器",
+    Intuitive: "红旗喊停者",
+    Dependent: "边界设定者",
+    Avoidant: "清晰守护者",
+    Spontaneous: "快速否决者",
+  },
+  neutral: {
+    Rational: "证据平衡者",
+    Intuitive: "契合匹配者",
+    Dependent: "稳健支持者",
+    Avoidant: "选项精简者",
+    Spontaneous: "冷静决策者",
+  },
+};
+
+export function getEmotionDecisionRole(
+  emotionTag: string | null,
+  decisionBlock: DecisionBlock,
+  lang: "en" | "zh" = "en",
+): string {
   const key = (emotionTag || "neutral").toLowerCase();
-  const row = EMOTION_DECISION_ROLES[key];
-  if (!row) return EMOTION_DECISION_ROLES.neutral[decisionBlock];
-  return row[decisionBlock] ?? EMOTION_DECISION_ROLES.neutral[decisionBlock];
+  const table = lang === "zh" ? EMOTION_DECISION_ROLES_ZH : EMOTION_DECISION_ROLES;
+  const row = table[key] || table.neutral;
+  return row[decisionBlock] ?? table.neutral[decisionBlock];
 }
 
 export const DECISION_BLOCK_EXAMPLES: Record<DecisionBlock, string[]> = {
@@ -307,6 +473,19 @@ export const DECISION_BLOCK_EXAMPLES: Record<DecisionBlock, string[]> = {
   Spontaneous: ["Just pick one.", "Go for it.", "Don't overthink—decide.", "Quick call: take it.", "Act now."],
 };
 
+export const DECISION_BLOCK_EXAMPLES_ZH: Record<DecisionBlock, string[]> = {
+  Rational: ["我们先权衡利弊。", "先看这几条主要标准。", "基于这些取舍，我建议…", "需要系统地比较选项。", "目标清楚了——现在来评估。"],
+  Intuitive: ["这个就是感觉对。", "我会选那个——更契合。", "这件事可以相信直觉。", "这个选项让人有点击感。", "它和你真正需要的对齐。"],
+  Dependent: ["对你来说什么最重要？", "我帮你把选项收窄一点。", "我可以给出几条稳妥路径。", "我们聚焦你更安心的选择。", "我建议 A 或 B。"],
+  Avoidant: ["保持简单——最多两个选择。", "以后随时可以改。", "别把事情搞复杂。", "怎么选都行——都可以回头。", "抓住基本面就好。"],
+  Spontaneous: ["就选一个。", "冲。", "别想太多——决定。", "快速判断：就它了。", "现在行动。"],
+};
+
+export function getDecisionExamples(block: DecisionBlock, lang: "en" | "zh" = "en"): string[] {
+  if (lang === "zh") return DECISION_BLOCK_EXAMPLES_ZH[block] || DECISION_BLOCK_EXAMPLES[block] || [];
+  return DECISION_BLOCK_EXAMPLES[block] || [];
+}
+
 export const EMOTION_EXAMPLES: Record<string, string[]> = {
   joy: ["Nice! I love that direction.", "This could turn out really well.", "Awesome—let's build on that.", "That sounds exciting!", "Yes! That's the energy."],
   anger: ["No. That's not the right move.", "Stop hesitating and act.", "This is inefficient—fix it now.", "You already know what needs to happen.", "Act. Don't overthink it."],
@@ -315,6 +494,21 @@ export const EMOTION_EXAMPLES: Record<string, string[]> = {
   surprise: ["Wait—really?", "That wasn't expected.", "Wow, that changes things.", "Interesting twist.", "Okay, that's new."],
   disgust: ["That doesn't feel right.", "I wouldn't go near that.", "This feels off.", "Let's not entertain that.", "No. Drop it."],
 };
+
+export const EMOTION_EXAMPLES_ZH: Record<string, string[]> = {
+  joy: ["太好了，我喜欢这个方向。", "这很可能会顺利展开。", "棒——我们顺着这个往下走。", "听起来很令人振奋！", "对，就是这股劲。"],
+  anger: ["不行，这不是正确做法。", "别再犹豫，行动起来。", "这样太低效——现在就改。", "你其实已经知道该做什么。", "做决定，别想太多。"],
+  fear: ["我对这个还不太放心。", "万一出问题怎么办？", "也许我们该先再核对一遍。", "这里还有不确定性。", "能不能先把风险降下来？"],
+  sadness: ["这感觉有点沉重…", "我们慢一点。", "不必着急。", "一步一步来就好。", "慢慢推进也没关系。"],
+  surprise: ["等等——真的吗？", "这有点出乎意料。", "哇，这改变了一些事。", "有意思的转折。", "好吧，这是新情况。"],
+  disgust: ["这感觉不对。", "我不会碰那个选项。", "这有点不对劲。", "我们别沿着那条线想。", "不行，放弃它。"],
+};
+
+export function getEmotionExamples(tag: string | null | undefined, lang: "en" | "zh" = "en"): string[] {
+  const key = (tag || "joy").toLowerCase();
+  if (lang === "zh") return EMOTION_EXAMPLES_ZH[key] || EMOTION_EXAMPLES[key] || [];
+  return EMOTION_EXAMPLES[key] || [];
+}
 
 export interface AgentCustomSetting {
   emotionOn: boolean;
@@ -327,19 +521,45 @@ export interface AgentCustomSetting {
   decisionBlock: DecisionBlock;
   roleDescription: string;
   accentColor: string;
+  /** Agora-2 scenario stance override (e.g. growth_centered). */
+  stance: string | null;
+  /** Per-agent knowledge-base hint (keyword match). */
+  hint: string;
+}
+
+export const SCENARIO_STANCES: Record<string, { value: string; label: string }[]> = {
+  employment: [
+    { value: "growth_centered", label: "Growth" },
+    { value: "stability_centered", label: "Stability" },
+    { value: "life_centered", label: "Work–life" },
+  ],
+  parent_child: [
+    { value: "child_centered", label: "Child" },
+    { value: "parent_centered", label: "Parent" },
+    { value: "relationship_centered", label: "Relationship" },
+  ],
+};
+
+export function defaultStanceForKey(scenarioId: string | null | undefined, key: AgentKey, roster: AgentKey[]): string | null {
+  const options = scenarioId ? SCENARIO_STANCES[scenarioId] : undefined;
+  if (!options?.length) return null;
+  const idx = Math.max(0, roster.indexOf(key));
+  return options[idx % options.length]?.value ?? options[0].value;
 }
 
 export const defaultSetting = (key?: AgentKey): AgentCustomSetting => ({
   emotionOn: true,
   emotionTag: "joy",
-  valence: 0.5,
-  arousal: 0.5,
-  control: 0.5,
+  valence: 0.85,
+  arousal: 0.65,
+  control: 0.6,
   emotionText: "",
   additionalPrompt: "",
   decisionBlock: "Rational",
   roleDescription: key ? DEFAULT_AGENT_ROLES[key] : "",
   accentColor: key ? DEFAULT_AGENT_COLORS[key] : "#000000",
+  stance: null,
+  hint: "",
 });
 
 export interface Scene {

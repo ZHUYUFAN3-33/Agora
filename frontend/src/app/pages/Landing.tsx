@@ -3,13 +3,20 @@ import { useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { LandingLogoSection, DEFAULT_LOGO_GAP, DEFAULT_TEXT_LOGO_OFFSET_X } from "../components/AgoraLogo";
 import { getAuth, loginRequest, registerRequest, setAuth } from "../auth";
+import {
+  applyDocumentLang,
+  getCondensedFont,
+  getUiFont,
+  loadUiLang,
+  saveUiLang,
+  t,
+  type UiLang,
+} from "../i18n/ui";
 import svgPaths from "../../imports/svg-czrgecjots";
 
 const LOGO_MARK_URL = "/Assets/logo.png";
 const LOGO_GAP_KEY = "agora_logo_gap";
 const TEXT_LOGO_OFFSET_KEY = "agora_text_logo_offset_x";
-const monoFont = { fontFamily: "'Share Tech Mono', monospace" };
-const condensedFont = { fontFamily: "'Barlow Condensed', sans-serif" };
 
 function GoogleIcon() {
   return (
@@ -35,6 +42,9 @@ function AppleIcon() {
 
 export default function Landing() {
   const navigate = useNavigate();
+  const [uiLang, setUiLang] = useState<UiLang>(() => loadUiLang());
+  const font = getUiFont(uiLang);
+  const condensed = getCondensedFont(uiLang);
   const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"landing" | "auth">("landing");
@@ -49,6 +59,10 @@ export default function Landing() {
   useEffect(() => {
     if (getAuth()?.token) navigate("/chat");
   }, [navigate]);
+
+  useEffect(() => {
+    applyDocumentLang(uiLang);
+  }, [uiLang]);
 
   useEffect(() => {
     const v1 = localStorage.getItem(LOGO_GAP_KEY);
@@ -73,6 +87,11 @@ export default function Landing() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const setLang = (lang: UiLang) => {
+    saveUiLang(lang);
+    setUiLang(lang);
+  };
+
   const handleLogoGapChange = (px: number) => {
     setLogoGap(px);
     localStorage.setItem(LOGO_GAP_KEY, String(px));
@@ -91,7 +110,7 @@ export default function Landing() {
   const submitAuth = async () => {
     setError(null);
     if (!userId.trim() || !password) {
-      setError("Enter user ID and password");
+      setError(t(uiLang, "landing.enterCreds"));
       return;
     }
     setBusy(true);
@@ -102,11 +121,38 @@ export default function Landing() {
       setAuth(data);
       navigate("/chat");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Auth failed");
+      setError(e instanceof Error ? e.message : t(uiLang, "landing.authFailed"));
     } finally {
       setBusy(false);
     }
   };
+
+  const langToggle = (
+    <div className="absolute top-4 right-4 z-10 flex items-center gap-2" style={getUiFont("en")}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-40">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M2 12h20" />
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+      </svg>
+      <div className="flex items-center gap-1.5 text-[11px] tracking-wide">
+        <button
+          type="button"
+          onClick={() => setLang("en")}
+          className={`px-0.5 transition-colors ${uiLang === "en" ? "text-black font-semibold" : "text-black/35 hover:text-black/60"}`}
+        >
+          EN
+        </button>
+        <span className="text-black/20">/</span>
+        <button
+          type="button"
+          onClick={() => setLang("zh")}
+          className={`px-0.5 transition-colors ${uiLang === "zh" ? "text-black font-semibold" : "text-black/35 hover:text-black/60"}`}
+        >
+          CN
+        </button>
+      </div>
+    </div>
+  );
 
   const logoSection = (
     <div className="flex justify-center mb-8">
@@ -117,22 +163,23 @@ export default function Landing() {
   const spacingControl = controlVisible && (
     <div className="fixed bottom-4 right-4 bg-white/95 border border-black/10 rounded-[10px] shadow-lg px-3 py-2.5 flex flex-col gap-2 z-10">
       <div className="flex items-center gap-3">
-        <span className="text-[10px] text-[var(--app-muted-text)] whitespace-nowrap w-20" style={monoFont}>logo–text gap</span>
+        <span className="text-[10px] text-[var(--app-muted-text)] whitespace-nowrap w-20" style={font}>logo–text gap</span>
         <input type="range" min={0} max={48} value={logoGap} onChange={(e) => handleLogoGapChange(parseInt(e.target.value, 10))} className="w-20 h-1.5 accent-black" />
-        <span className="text-[10px] text-[var(--app-muted-text)] w-6" style={monoFont}>{logoGap}px</span>
+        <span className="text-[10px] text-[var(--app-muted-text)] w-6" style={font}>{logoGap}px</span>
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-[10px] text-[var(--app-muted-text)] whitespace-nowrap w-20" style={monoFont}>text logo X</span>
+        <span className="text-[10px] text-[var(--app-muted-text)] whitespace-nowrap w-20" style={font}>text logo X</span>
         <input type="range" min={-40} max={40} value={textLogoOffsetX} onChange={(e) => handleTextLogoOffsetChange(parseInt(e.target.value, 10))} className="w-20 h-1.5 accent-black" />
-        <span className="text-[10px] text-[var(--app-muted-text)] w-8" style={monoFont}>{textLogoOffsetX}px</span>
+        <span className="text-[10px] text-[var(--app-muted-text)] w-8" style={font}>{textLogoOffsetX}px</span>
       </div>
-      <button onClick={handleResetToDefault} className="text-[9px] text-[var(--app-muted-text)] hover:text-black self-start mt-0.5" style={monoFont}>reset to default</button>
+      <button onClick={handleResetToDefault} className="text-[9px] text-[var(--app-muted-text)] hover:text-black self-start mt-0.5" style={font}>reset to default</button>
     </div>
   );
 
   if (mode === "auth") {
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 relative">
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 relative" style={uiLang === "zh" ? { lineHeight: 1.55 } : undefined}>
+        {langToggle}
         {spacingControl}
         <div className="w-full max-w-[320px] flex flex-col gap-6">
           {logoSection}
@@ -145,9 +192,9 @@ export default function Landing() {
                 className={`flex-1 h-[36px] rounded-[8px] text-[12px] border transition-colors ${
                   authMode === m ? "bg-black text-white border-black" : "border-black/15 text-black/60 hover:bg-black/5"
                 }`}
-                style={monoFont}
+                style={font}
               >
-                {m === "login" ? "Login" : "Register"}
+                {m === "login" ? t(uiLang, "landing.login") : t(uiLang, "landing.register")}
               </button>
             ))}
           </div>
@@ -157,10 +204,10 @@ export default function Landing() {
                 type="text"
                 value={userId}
                 onChange={(e) => setUserId(e.target.value)}
-                placeholder="User ID (3–32: a-z, 0-9, _ -)"
+                placeholder={t(uiLang, "landing.userIdPh")}
                 autoComplete="username"
                 className="bg-transparent w-full outline-none text-[#828282] placeholder-[#828282]"
-                style={{ ...monoFont, fontSize: "13px" }}
+                style={{ ...font, fontSize: "13px" }}
               />
             </div>
             <div className="h-[48px] bg-black rounded-[10px] flex items-center px-4">
@@ -169,34 +216,34 @@ export default function Landing() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void submitAuth()}
-                placeholder="Password"
+                placeholder={t(uiLang, "landing.passwordPh")}
                 autoComplete={authMode === "login" ? "current-password" : "new-password"}
                 className="bg-transparent w-full outline-none text-[#828282] placeholder-[#828282]"
-                style={{ ...monoFont, fontSize: "13px" }}
+                style={{ ...font, fontSize: "13px" }}
               />
             </div>
             {error && (
-              <p className="text-[11px] text-red-600" style={monoFont}>{error}</p>
+              <p className="text-[11px] text-red-600" style={font}>{error}</p>
             )}
             <button
               onClick={() => void submitAuth()}
               disabled={busy}
               className="h-[48px] bg-black rounded-[10px] flex items-center justify-center cursor-pointer hover:bg-neutral-800 transition-colors disabled:opacity-40"
             >
-              <span className="text-white" style={{ ...monoFont, fontSize: "13px" }}>
-                {busy ? "Please wait…" : authMode === "login" ? "Login" : "Create account"}
+              <span className="text-white" style={{ ...font, fontSize: "13px" }}>
+                {busy ? t(uiLang, "landing.pleaseWait") : authMode === "login" ? t(uiLang, "landing.login") : t(uiLang, "landing.createAccount")}
               </span>
             </button>
           </div>
-          <p className="text-center text-[#828282]" style={{ ...monoFont, fontSize: "11px" }}>
-            Forgot password? Contact admin.
+          <p className="text-center text-[#828282]" style={{ ...font, fontSize: "11px" }}>
+            {t(uiLang, "landing.forgot")}
           </p>
           <button
             onClick={() => setMode("landing")}
             className="text-center text-[#828282] hover:text-black transition-colors"
-            style={{ ...monoFont, fontSize: "11px" }}
+            style={{ ...font, fontSize: "11px" }}
           >
-            ← back
+            {t(uiLang, "landing.back")}
           </button>
         </div>
       </div>
@@ -204,7 +251,8 @@ export default function Landing() {
   }
 
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 relative">
+    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 relative" style={uiLang === "zh" ? { lineHeight: 1.55 } : undefined}>
+      {langToggle}
       <AnimatePresence mode="wait">
         {splashVisible ? (
           <motion.div
@@ -240,8 +288,8 @@ export default function Landing() {
                 className="h-[48px] bg-white border border-black/10 rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 opacity-40 cursor-not-allowed"
               >
                 <GoogleIcon />
-                <span style={{ fontFamily: "'Roboto', sans-serif", fontSize: "14px", color: "rgba(0,0,0,0.54)" }}>
-                  Continue with Google
+                <span style={{ ...font, fontSize: "14px", color: "rgba(0,0,0,0.54)" }}>
+                  {t(uiLang, "landing.google")}
                 </span>
               </button>
 
@@ -251,14 +299,14 @@ export default function Landing() {
                 className="h-[48px] bg-black rounded-[10px] shadow-[0px_0px_3px_0px_rgba(0,0,0,0.08),0px_2px_3px_0px_rgba(0,0,0,0.17)] flex items-center justify-center gap-3 opacity-40 cursor-not-allowed"
               >
                 <AppleIcon />
-                <span className="text-white" style={{ fontFamily: "'SF Pro Display', sans-serif", fontSize: "14px" }}>
-                  Continue with Apple
+                <span className="text-white" style={{ ...font, fontSize: "14px" }}>
+                  {t(uiLang, "landing.apple")}
                 </span>
               </button>
 
               <div className="flex items-center gap-3 my-1">
                 <div className="flex-1 h-px bg-black" />
-                <span className="text-black" style={{ ...condensedFont, fontSize: "14px" }}>OR</span>
+                <span className="text-black" style={{ ...condensed, fontSize: "14px" }}>{t(uiLang, "landing.or")}</span>
                 <div className="flex-1 h-px bg-black" />
               </div>
 
@@ -266,8 +314,8 @@ export default function Landing() {
                 onClick={() => { setMode("auth"); setAuthMode("login"); setError(null); }}
                 className="h-[48px] bg-black rounded-[10px] flex items-center justify-center cursor-pointer hover:bg-neutral-800 transition-colors"
               >
-                <span className="text-white" style={{ ...monoFont, fontSize: "13px" }}>
-                  Continue with User ID
+                <span className="text-white" style={{ ...font, fontSize: "13px" }}>
+                  {t(uiLang, "landing.continueUserId")}
                 </span>
               </button>
             </div>

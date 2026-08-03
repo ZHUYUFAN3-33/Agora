@@ -43,11 +43,13 @@ try:
     from stance_knowledge import (
         load_stance_knowledge,
         get_stance_knowledge_block,
+        peek_matched_card_id,
         _match_topic_card as sk_match_topic_card,
     )
     HAVE_STANCE_KNOWLEDGE = True
 except ImportError:
     HAVE_STANCE_KNOWLEDGE = False
+    peek_matched_card_id = None  # type: ignore
 
 # Cross-session memory: carry a short recap of the last few sessions into the
 # next one (implicit auto-carry, keyed by user_id + scenario_type). Adds exactly
@@ -289,7 +291,8 @@ def last_user_index(transcript_lines: List[str]) -> Optional[int]:
 
 
 def stance_knowledge_on_hit(scenario_type, stance, message, lang, knowledge,
-                            include_header: bool = True) -> str:
+                            include_header: bool = True,
+                            include_related: bool = False) -> str:
     """Stance-knowledge block for `message`, but ONLY when it actually hits a
     topic-card keyword; "" otherwise. This suppresses the module's generic
     fallback so the block is tied to a real keyword match — the single rule both
@@ -297,6 +300,8 @@ def stance_knowledge_on_hit(scenario_type, stance, message, lang, knowledge,
     message) and the session-start preloaded hint (build once from info.jsonl's
     hint). include_header=False returns the body alone, for callers that add
     their own distinct block title.
+
+    include_related: expand one-hop related_cards (A-OR-B trigger decided by caller).
     """
     if not (HAVE_STANCE_KNOWLEDGE and knowledge and stance and message):
         return ""
@@ -308,6 +313,52 @@ def stance_knowledge_on_hit(scenario_type, stance, message, lang, knowledge,
     return get_stance_knowledge_block(
         scenario_type, stance, message, lang,
         knowledge=knowledge, include_header=include_header,
+        include_related=include_related,
+    )
+
+
+def resolve_dynamic_stance_knowledge(
+    *,
+    scenario_type: Optional[str],
+    stance: Optional[str],
+    last_user_message: str,
+    lang: str,
+    knowledge,
+    hit_history: Dict[str, List[str]],
+    agent_key: str,
+    deliberation_state: str,
+) -> str:
+    """
+    Dynamic stance-knowledge channel with one-hop related_cards expansion.
+
+    Expansion (include_related=True) when EITHER:
+      A. this agent already hit the SAME card earlier this session (repeat hit), or
+      B. deliberation is in Convergence.
+    Records the card_id into hit_history after the repeat check.
+    """
+    if not (HAVE_STANCE_KNOWLEDGE and knowledge and stance and last_user_message and peek_matched_card_id):
+        return ""
+    card_id = peek_matched_card_id(
+        scenario_type or "",
+        stance,
+        last_user_message,
+        lang,
+        knowledge=knowledge,
+    )
+    if not card_id:
+        return ""
+    hits = hit_history.setdefault(agent_key, [])
+    repeat_hit = card_id in hits  # trigger A (check BEFORE recording)
+    in_convergence = deliberation_state == "Convergence"  # trigger B
+    hits.append(card_id)
+    return stance_knowledge_on_hit(
+        scenario_type,
+        stance,
+        last_user_message,
+        lang,
+        knowledge,
+        include_header=True,
+        include_related=(repeat_hit or in_convergence),
     )
 
 # -------------------------------
@@ -1090,6 +1141,7 @@ def run_user_turn(
     session.setdefault("latest_rationale", {k: "" for k in agent_keys})
     session.setdefault("latest_snippet_id", {k: None for k in agent_keys})
     session.setdefault("snippet_counters", {k: 0 for k in agent_keys})
+    session.setdefault("agent_knowledge_hit_history", {k: [] for k in agent_keys})
     # Ensure keys exist even if session was created with a fixed A/B/C dict.
     for k in agent_keys:
         session["memory_snippets"].setdefault(k, [])
@@ -1097,6 +1149,9 @@ def run_user_turn(
         session["latest_rationale"].setdefault(k, "")
         session["latest_snippet_id"].setdefault(k, None)
         session["snippet_counters"].setdefault(k, 0)
+        session["agent_knowledge_hit_history"].setdefault(k, [])
+
+    stance_knowledge_data = load_stance_knowledge() if HAVE_STANCE_KNOWLEDGE else None
 
     transcript_lines = history_to_transcript_lines(session.get("history") or [])
     responses: List[dict] = []
@@ -1267,6 +1322,27 @@ def run_user_turn(
                     lines.append(f"Stance weighting for this closing stage: {weight_hint}")
         except Exception:
             pass
+
+        # Stance Knowledge — DYNAMIC channel + related_cards A-OR-B expand
+        # (repeat hit of same card, or Convergence / Concluded).
+        if HAVE_STANCE_KNOWLEDGE and stance_knowledge_data:
+            stance = agent_configs.get(agent_key, {}).get("stance")
+            li = last_user_index(transcript_lines)
+            last_user_message = (
+                transcript_lines[li].split(":", 1)[1].strip() if li is not None else ""
+            )
+            sk_block = resolve_dynamic_stance_knowledge(
+                scenario_type=scenario_type,
+                stance=stance,
+                last_user_message=last_user_message,
+                lang=lang,
+                knowledge=stance_knowledge_data,
+                hit_history=session["agent_knowledge_hit_history"],
+                agent_key=agent_key,
+                deliberation_state=lookup_state,
+            )
+            if sk_block:
+                lines.append(sk_block)
         return "\n".join(lines)
 
     def append_agent(agent: "ChatAgent", txt: str) -> None:
@@ -1986,6 +2062,13 @@ def main():
     latest_rationale: Dict[str, str] = {k: "" for k in agent_keys}
     memory_snippets: Dict[str, List[dict]] = {k: [] for k in agent_keys}
 
+    # Per-agent history of stance-knowledge card_ids hit this session. When the
+    # DYNAMIC channel matches a topic card against the user's latest message, its
+    # card_id is appended here. A repeat hit of the same card is one of the two
+    # triggers (the other being the Convergence phase) for expanding one-hop
+    # related cards.
+    agent_knowledge_hit_history: Dict[str, List[str]] = {k: [] for k in agent_keys}
+
     # User @-mention hard routing: keys queued here speak next, in order,
     # before Admin-1/2 get to choose again.
     mention_patterns = build_mention_patterns(agent_keys, name_map)
@@ -2098,14 +2181,27 @@ def main():
         # agent's stance, matched against the user's LATEST message and re-checked
         # every turn. Independent of the session-start preloaded hint channel
         # (=== BACKGROUND (from setup) ===); both can appear in one prompt.
+        #
+        # One-hop related_cards expansion (the [相关背景] block) is switched on when
+        # EITHER trigger fires:
+        #   A. this agent hit this SAME card earlier this session (repeat hit), or
+        #   B. the deliberation is in the Convergence phase.
+        # Otherwise only the single matched card is shown (include_related=False).
         if HAVE_STANCE_KNOWLEDGE and stance_knowledge_data:
             stance = agent_configs.get(agent_key, {}).get("stance")
             li = last_user_index(transcript_lines)
             last_user_message = (
                 transcript_lines[li].split(":", 1)[1].strip() if li is not None else ""
             )
-            sk_block = stance_knowledge_on_hit(
-                args.scenario_type, stance, last_user_message, args.lang, stance_knowledge_data,
+            sk_block = resolve_dynamic_stance_knowledge(
+                scenario_type=args.scenario_type,
+                stance=stance,
+                last_user_message=last_user_message,
+                lang=args.lang,
+                knowledge=stance_knowledge_data,
+                hit_history=agent_knowledge_hit_history,
+                agent_key=agent_key,
+                deliberation_state=s["state"],
             )
             if sk_block:
                 lines.append(sk_block)

@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { API_BASE, type Scene } from "../data/agents";
 import { monoFont } from "../pages/chatConstants";
+import type { UiLang } from "../i18n/ui";
 
-export type UiLang = "en" | "zh";
+export type { UiLang };
 
 type FieldOption = { value: string; label: { en?: string; zh?: string } | string };
 export type TemplateField = {
@@ -888,11 +889,10 @@ export type Agora2IntakePayload = {
   scenario_type: string;
   lang: UiLang;
   intake: Record<string, unknown>;
-  hint?: string;
   session_update?: string;
 };
 
-/** Scene-specific intake — after profile; includes hint + optional session_update. */
+/** Scene-specific intake — after profile; optional session_update for return visits. */
 export function IntakeModal({
   scene,
   lang,
@@ -912,7 +912,6 @@ export function IntakeModal({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [intakeValues, setIntakeValues] = useState<Record<string, string>>({});
   const [sessionUpdate, setSessionUpdate] = useState("");
-  const [hint, setHint] = useState("");
   const [saving, setSaving] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [clearedErrors, setClearedErrors] = useState<Record<string, boolean>>({});
@@ -967,7 +966,6 @@ export function IntakeModal({
       scenario_type: scene.id,
       lang,
       intake: valuesToObject(template.scenario_fields, intakeValues),
-      hint: hint.trim() || undefined,
       session_update: sessionUpdate.trim() || undefined,
     });
     setSaving(false);
@@ -1030,18 +1028,6 @@ export function IntakeModal({
           />
         </div>
       )}
-      <div className="mt-5 border border-black/10 rounded-[12px] p-4">
-        <label className="text-[12px] text-black/70 mb-1.5 block" style={monoFont}>
-          {lang === "zh" ? "简单描述一下这次想重点聊的情况（可选）" : "Briefly describe what you want to focus on this time (optional)"}
-        </label>
-        <input
-          type="text"
-          value={hint}
-          onChange={(e) => setHint(e.target.value)}
-          className="w-full text-[12px] px-3 py-2 border border-black/15 rounded-[6px] outline-none"
-          style={monoFont}
-        />
-      </div>
     </FormShell>
   );
 }
@@ -1094,7 +1080,7 @@ export function MemoryHistoryPanel({
             {lang === "zh" ? "历史摘要" : "Past session memory"}
           </h2>
           <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>
-            {lang === "zh" ? `共 ${count} 次 session` : `${count} session(s) so far`}
+            {lang === "zh" ? `共 ${count} 次会话` : `${count} session(s) so far`}
           </p>
         </div>
         <button type="button" onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px]">✕</button>

@@ -78,6 +78,31 @@
         "external_pressure": "Current manager already knows I’m interviewing and asked for a courtesy heads-up before I resign. Honda’s written offer expires in 12 days; Sony wants a verbal by Friday next week. Parents in China keep messaging about ‘settling’ and prefer Toyota for brand stability. Partner said: ‘If it’s Tochigi, we need a real plan — not just try for a month.’"
       },
       "date": "2026-08-02T21:52:58+00:00"
+    },
+    {
+      "session_id": "521614",
+      "scenario_type": "employment",
+      "intake": {
+        "decision_field": "Researcher / applied battery materials (industry lab vs academia)",
+        "options": [
+          "Sony — Junior Researcher, ~¥7.0M total cash, Tokyo (Osaki area), battery materials application team",
+          "Honda — Researcher, ~¥7.2M + housing allowance, Tochigi R&D, solid-state adjacent project",
+          "Toyota — Assistant Researcher, ~¥6.8M, Toyota City (Aichi), long-horizon battery cell materials",
+          "UTokyo — Project Researcher (non-tenure), ~¥5.5–6.0M academic package, Hongo, 3-year grant-tied contract"
+        ],
+        "deadline": "3 weeks — Sony and Honda want a verbal reply by mid-month",
+        "current_status": "employed",
+        "priority_ranking": [
+          "salary",
+          "stability",
+          "location",
+          "growth",
+          "culture"
+        ],
+        "comparison_anchor": "Default lean is Sony: Tokyo commute stays ~55 min door-to-door, pay clears ¥7M, and partner can keep Shinagawa job. Still pulled by Honda’s solid-state-adjacent depth — technically the most interesting lab, but Tochigi would mean weekday separation or a brutal commute.",
+        "external_pressure": "Current manager already knows I’m interviewing and asked for a courtesy heads-up before I resign. Honda’s written offer expires in 12 days; Sony wants a verbal by Friday next week. Parents in China keep messaging about ‘settling’ and prefer Toyota for brand stability. Partner said: ‘If it’s Tochigi, we need a real plan — not just try for a month.’"
+      },
+      "date": "2026-08-02T23:31:46+00:00"
     }
   ]
 }

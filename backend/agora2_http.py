@@ -242,14 +242,22 @@ def assemble_session_agents(
 ) -> Dict[str, dict]:
     """
     Returns {slot: AgentSpec including preloaded_knowledge}.
-    Same hint string is applied to every agent (product UI has one input).
+
+    Prefer per-agent ``hint`` / ``stance`` on each config entry.
+    The optional top-level ``hint`` arg is legacy: only applied to slots
+    that do not already carry their own hint.
     """
-    hint = (hint or "").strip()
+    legacy_hint = (hint or "").strip()
     cfg = {}
     for key, conf in agent_configs.items():
         entry = dict(conf)
-        if hint:
-            entry["hint"] = hint
+        own = (entry.get("hint") or "").strip()
+        if own:
+            entry["hint"] = own
+        elif legacy_hint:
+            entry["hint"] = legacy_hint
+        else:
+            entry.pop("hint", None)
         cfg[key] = entry
 
     kb = get_stance_kb() if HAVE_STANCE_KNOWLEDGE else None

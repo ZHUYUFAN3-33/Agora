@@ -12,6 +12,19 @@ import {
   type Agora2IntakePayload,
   type UiLang,
 } from "../components/IntakeModal";
+import {
+  applyDocumentLang,
+  defaultsForTone,
+  getTutorialSteps,
+  getUiFont,
+  labelCaseClass,
+  loadUiLang,
+  phaseLabel,
+  saveUiLang,
+  t,
+  toneLabel,
+  toneOptions,
+} from "../i18n/ui";
 import { authFetch, getAuth, logoutRequest } from "../auth";
 import { useAppearanceContext } from "../context/AppearanceContext";
 import {
@@ -21,6 +34,10 @@ import {
   type ExperimentMode,
   type Scene,
   AGENT_KEYS,
+  ALL_AGENT_KEYS,
+  DEFAULT_ACTIVE_AGENT_KEYS,
+  MIN_ROSTER_AGENTS,
+  MAX_ROSTER_AGENTS,
   LIMITED_AGENT_POOL,
   LIMITED_DEFAULT_SELECTED,
   DEFAULT_AGENT_NAMES,
@@ -29,16 +46,20 @@ import {
   API_BASE,
   BACKEND_NAME_TO_KEY,
   DECISION_BLOCKS,
-  DECISION_BLOCK_DESCRIPTIONS,
-  DECISION_BLOCK_EXAMPLES,
   EMOTION_EMOJI,
   EMOTION_COLORS,
-  EMOTION_EXAMPLES,
   EMOTION_IMAGES,
   defaultSetting,
   getEmotionDecisionSummary,
   getEmotionDecisionRole,
+  getEmotionExamples,
+  getDecisionExamples,
+  getSuggestedPrompts,
   isAgora2SceneId,
+  nextFreeAgentKey,
+  backendLabelForKey,
+  SCENARIO_STANCES,
+  defaultStanceForKey,
 } from "../data/agents";
 import {
   monoFont,
@@ -50,7 +71,6 @@ import {
   LIMITED_POOL_ACCENT_MAP,
   EMOTION_EMOJI_VARIANTS,
   EMOJI_REGEX,
-  WELCOME_TUTORIAL_STEPS,
 } from "./chatConstants";
 
 function hashSeed(value: string): number {
@@ -153,11 +173,63 @@ interface ConvSettings {
   agentNames: Record<AgentKey, string>;
   agentBackendNames: Record<AgentKey, string>;
   agentSettings: Record<AgentKey, AgentCustomSetting>;
+  activeAgentKeys: AgentKey[];
   limitedSelectedAgents: AgentPoolKey[];
   selectedScene: Scene | null;
   maxAgentTurns: number;
   maxUserGap: number;
   mode: ExperimentMode;
+}
+
+function blankAgentSettings(): Record<AgentKey, AgentCustomSetting> {
+  return {
+    A: defaultSetting("A"),
+    B: defaultSetting("B"),
+    C: defaultSetting("C"),
+    D: defaultSetting("D"),
+    E: defaultSetting("E"),
+    F: defaultSetting("F"),
+  };
+}
+
+function cloneAgentSettings(src: Partial<Record<AgentKey, AgentCustomSetting>>): Record<AgentKey, AgentCustomSetting> {
+  const out = blankAgentSettings();
+  for (const k of ALL_AGENT_KEYS) {
+    if (src[k]) out[k] = { ...defaultSetting(k), ...src[k] };
+  }
+  return out;
+}
+
+function normalizeActiveKeys(keys: AgentKey[] | undefined, mode: ExperimentMode): AgentKey[] {
+  if (mode === "single") return ["A"];
+  const valid = (keys || []).filter((k): k is AgentKey => ALL_AGENT_KEYS.includes(k));
+  const unique: AgentKey[] = [];
+  for (const k of valid) {
+    if (!unique.includes(k)) unique.push(k);
+  }
+  if (unique.length === 0) return [...DEFAULT_ACTIVE_AGENT_KEYS];
+  return unique.slice(0, MAX_ROSTER_AGENTS);
+}
+
+function buildStartAgentsPayload(
+  keys: AgentKey[],
+  names: Record<AgentKey, string>,
+  settings: Record<AgentKey, AgentCustomSetting>,
+  scenarioId?: string | null,
+) {
+  return keys.map((key) => {
+    const s = settings[key];
+    const stance = s?.stance || defaultStanceForKey(scenarioId, key, keys);
+    return {
+      key,
+      name: (names[key] || backendLabelForKey(key)).trim() || backendLabelForKey(key),
+      decision: s?.decisionBlock || "Rational",
+      emotion: s?.emotionTag || "Joy",
+      accent_color: s?.accentColor || DEFAULT_AGENT_COLORS[key],
+      stance: stance || undefined,
+      hint: (s?.hint || "").trim() || undefined,
+    };
+  });
 }
 
 interface Conversation {
@@ -188,16 +260,20 @@ function applyDisplayNames(
   mode: ExperimentMode = "full",
   backendNames?: Record<AgentKey, string>,
 ): string {
-  let out = content
-    .replace(/\bChatbotA\b/g, names.A)
-    .replace(/\bChatbotB\b/g, names.B)
-    .replace(/\bChatbotC\b/g, names.C);
-  if (mode === "limited" && backendNames) {
-    (["A", "B", "C"] as AgentKey[]).forEach((k) => {
+  let out = content;
+  for (const k of ALL_AGENT_KEYS) {
+    const display = names[k];
+    if (display) {
+      out = out.replace(new RegExp(`\\bChatbot${k}\\b`, "g"), display);
+    }
+  }
+  if (backendNames) {
+    const keys = mode === "limited" ? (["A", "B", "C"] as AgentKey[]) : ALL_AGENT_KEYS;
+    keys.forEach((k) => {
       const internalName = (backendNames[k] || "").trim();
-      if (!internalName) return;
+      if (!internalName || internalName === names[k]) return;
       const escaped = internalName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      out = out.replace(new RegExp(`\\b${escaped}\\b`, "g"), names[k]);
+      out = out.replace(new RegExp(`\\b${escaped}\\b`, "g"), names[k] || internalName);
     });
   }
   const label = (nickname || "").trim() || "You";
@@ -256,7 +332,7 @@ function diversifyEmotionEmoji(
   const accentSet = new Set(palette.accent);
   const primaryPool = palette.primary;
   const accentPool = palette.accent.length > 0 ? palette.accent : palette.primary;
-  const agentOffset = agentKey ? AGENT_KEYS.indexOf(agentKey) + 1 : 0;
+  const agentOffset = agentKey ? ALL_AGENT_KEYS.indexOf(agentKey) + 1 : 0;
   const messageOffset = hashSeed(messageId || content) % 11;
   let replacementIndex = 0;
   let replaced = false;
@@ -445,6 +521,7 @@ function AgentInfoCard({
   anchorRect,
   anchorRef,
   onClose,
+  uiLang = "en",
 }: {
   agentKey: AgentKey;
   name: string;
@@ -452,6 +529,7 @@ function AgentInfoCard({
   anchorRect: DOMRect | null;
   anchorRef: React.RefObject<HTMLElement | null>;
   onClose: () => void;
+  uiLang?: UiLang;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -473,8 +551,8 @@ function AgentInfoCard({
   if (!anchorRect || typeof window === "undefined") return null;
   const emotionTag = settings.emotionTag || "joy";
   const decisionBlock = settings.decisionBlock || "Rational";
-  const roleLabel = getEmotionDecisionRole(emotionTag, decisionBlock);
-  const behaviorDescription = getEmotionDecisionSummary(emotionTag, decisionBlock);
+  const roleLabel = getEmotionDecisionRole(emotionTag, decisionBlock, uiLang);
+  const behaviorDescription = getEmotionDecisionSummary(emotionTag, decisionBlock, uiLang);
   const panelWidth = 252;
   const viewportPad = 12;
   const left = Math.min(Math.max(anchorRect.left, viewportPad), Math.max(viewportPad, window.innerWidth - panelWidth - viewportPad));
@@ -557,6 +635,7 @@ function AgentEmotionPopover({
   safeRect,
   onHoverStart,
   onHoverEnd,
+  uiLang = "en",
 }: {
   agentKey: AgentKey;
   settings: AgentCustomSetting;
@@ -566,14 +645,16 @@ function AgentEmotionPopover({
   safeRect: DOMRect | null;
   onHoverStart: () => void;
   onHoverEnd: () => void;
+  uiLang?: UiLang;
 }) {
   if (!anchorRect || typeof window === "undefined") return null;
+  const font = getUiFont(uiLang);
   const emotionTag = settings.emotionTag || "joy";
   const emotionColor = EMOTION_COLORS[emotionTag] || "#111111";
   const decisionIndex = Math.max(0, DECISION_BLOCKS.indexOf(settings.decisionBlock));
   const emotionDefaults = defaultSetting(agentKey);
   const panelWidth = 252;
-  const estimatedPanelHeight = 332;
+  const estimatedPanelHeight = 260;
   const viewportPad = 12;
   const safeTop = Math.max(viewportPad, (safeRect?.top ?? 0) + viewportPad);
   const safeBottom = Math.min(window.innerHeight - viewportPad, (safeRect?.bottom ?? window.innerHeight) - viewportPad);
@@ -605,16 +686,16 @@ function AgentEmotionPopover({
           style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.06)" }}
         >
           <div className={`absolute left-5 h-3.5 w-3.5 rotate-45 border-foreground/[0.08] bg-[var(--background)] ${placeAbove ? "bottom-[-7px] border-b border-r" : "top-[-7px] border-l border-t"}`} />
-          {/* EMOTION section */}
+          {/* TONE section */}
           <div className="mb-3">
             <div className="mb-2 px-0.5">
-              <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Emotion</span>
+              <span className={`text-[10px] text-foreground/85 ${labelCaseClass(uiLang)}`} style={font}>{t(uiLang, "hover.emotion")}</span>
             </div>
             <div className="rounded-[10px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-2.5">
               <div
-                className="flex items-center justify-between gap-2 rounded-[8px] border px-2.5 py-2 text-[10px]"
+                className="flex items-center justify-between gap-2 rounded-[8px] border px-2.5 py-2 text-[10px] mb-2"
                 style={{
-                  ...monoFont,
+                  ...font,
                   borderColor: emotionColor + "44",
                   background: emotionColor + "12",
                   color: emotionColor,
@@ -622,37 +703,32 @@ function AgentEmotionPopover({
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <EmotionIcon emotion={emotionTag} size={14} />
-                  <span className="capitalize font-semibold">{emotionTag}</span>
+                  <span className="font-semibold">{toneLabel(uiLang, emotionTag)}</span>
                 </div>
               </div>
-              <div className="mt-2.5 flex flex-col gap-2">
-                {([
-                  { label: "Valence", field: "valence" as const, value: settings.valence },
-                  { label: "Arousal", field: "arousal" as const, value: settings.arousal },
-                  { label: "Control", field: "control" as const, value: settings.control },
-                ] as const).map(({ label, field, value }) => (
-                  <div key={field} className="flex min-w-0 items-center gap-2 rounded-[8px] px-1 py-0.5">
-                    <span className="w-[54px] flex-shrink-0 text-[10px] text-foreground/80" style={monoFont}>{label}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={Math.round(value * 100)}
-                      onChange={(e) => onAdjustEmotion(agentKey, { [field]: parseInt(e.target.value, 10) / 100 } as Partial<AgentCustomSetting>)}
-                      onMouseUp={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
-                      onTouchEnd={() => onAdjustEmotion(agentKey, { emotionOn: true }, true)}
-                      className="min-w-0 flex-1 h-[4px] accent-black"
-                    />
-                    <span className="w-[34px] flex-shrink-0 text-right text-[10px] text-foreground/80" style={monoFont}>{value.toFixed(2)}</span>
-                  </div>
-                ))}
-              </div>
+              <CustomDropdown
+                value={emotionTag}
+                onChange={(v) => {
+                  const d = defaultsForTone(v);
+                  onAdjustEmotion(agentKey, {
+                    emotionOn: true,
+                    emotionTag: v,
+                    valence: d.valence,
+                    arousal: d.arousal,
+                    control: d.control,
+                    emotionText: "",
+                  }, false);
+                }}
+                options={toneOptions(uiLang)}
+                size="sm"
+                style={font}
+              />
             </div>
           </div>
           {/* DECISION section */}
           <div>
             <div className="mb-2 px-0.5">
-              <span className="text-[10px] tracking-widest text-foreground/85 uppercase" style={monoFont}>Decision</span>
+              <span className={`text-[10px] text-foreground/85 ${labelCaseClass(uiLang)}`} style={font}>{t(uiLang, "hover.decision")}</span>
             </div>
             <div className="rounded-[10px] border border-foreground/[0.06] bg-foreground/[0.015] px-3 py-2.5">
               <div className="flex items-center gap-2 px-1 py-1">
@@ -660,20 +736,20 @@ function AgentEmotionPopover({
                   type="button"
                   onClick={() => cycleDecision(-1)}
                   className="flex h-7 w-7 items-center justify-center rounded-[7px] text-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
-                  aria-label="Previous decision style"
+                  aria-label={t(uiLang, "hover.prevDecision")}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M15 18l-6-6 6-6" />
                   </svg>
                 </button>
                 <div className="min-w-0 flex-1 text-center">
-                  <div className="text-[11px] text-foreground" style={monoFont}>{settings.decisionBlock}</div>
+                  <div className="text-[11px] text-foreground" style={font}>{t(uiLang, `decision.${settings.decisionBlock}`)}</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => cycleDecision(1)}
                   className="flex h-7 w-7 items-center justify-center rounded-[7px] text-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
-                  aria-label="Next decision style"
+                  aria-label={t(uiLang, "hover.nextDecision")}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M9 18l6-6-6-6" />
@@ -693,16 +769,16 @@ function AgentEmotionPopover({
                 emotionText: "",
               }, false)}
               className="text-[10px] text-foreground/65 transition-colors hover:text-foreground"
-              style={monoFont}
+              style={font}
             >
-              reset tag
+              {t(uiLang, "hover.resetTag")}
             </button>
             <button
               onClick={() => onOpenAdvanced(agentKey)}
               className="rounded-[6px] border border-foreground/[0.08] px-2 py-1 text-[10px] text-foreground transition-colors hover:border-foreground/20 hover:bg-foreground/[0.02]"
-              style={monoFont}
+              style={font}
             >
-              advance setting
+              {t(uiLang, "hover.advanced")}
             </button>
           </div>
         </motion.div>
@@ -728,6 +804,7 @@ const AgentMessage = React.memo(function AgentMessage({
   chatAnnotationMode = false,
   layerAnnotations,
   onChatAnnotationDraft,
+  uiLang = "en",
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
@@ -744,6 +821,7 @@ const AgentMessage = React.memo(function AgentMessage({
   chatAnnotationMode?: boolean;
   layerAnnotations?: ChatLayerAnnotation[];
   onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
+  uiLang?: UiLang;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [infoCardOpen, setInfoCardOpen] = useState(false);
@@ -892,6 +970,7 @@ const AgentMessage = React.memo(function AgentMessage({
               anchorRect={anchorRect}
               anchorRef={triggerRef}
               onClose={() => setInfoCardOpen(false)}
+              uiLang={uiLang}
             />
           )}
           <AnimatePresence>
@@ -902,6 +981,7 @@ const AgentMessage = React.memo(function AgentMessage({
                   settings={currentSettings || defaultSetting(message.agentKey)}
                   anchorRect={anchorRect}
                   safeRect={safeRect}
+                  uiLang={uiLang}
                   onHoverStart={openPopover}
                   onHoverEnd={closePopoverSoon}
                   onAdjustEmotion={(key, patch, shouldAnalyze) => {
@@ -1033,11 +1113,10 @@ const UserMessage = React.memo(function UserMessage({
   );
 });
 
-const MODE_LABELS: Record<ExperimentMode, string> = { full: "Multi-1", limited: "Multi-2", single: "Single" };
-
-const ConvItem = React.memo(function ConvItem({ conv, isActive, onSelectConv }: { conv: Conversation; isActive: boolean; onSelectConv: (id: string) => void }) {
+const ConvItem = React.memo(function ConvItem({ conv, isActive, onSelectConv, lang = "en" }: { conv: Conversation; isActive: boolean; onSelectConv: (id: string) => void; lang?: UiLang }) {
   const mode = conv.settings?.mode ?? "full";
-  const modeLabel = MODE_LABELS[mode];
+  const modeLabel = t(lang, mode === "full" ? "chat.multi" : mode === "limited" ? "chat.multi2" : "chat.single");
+  const font = getUiFont(lang);
   return (
     <button
       onClick={() => onSelectConv(conv.id)}
@@ -1046,14 +1125,14 @@ const ConvItem = React.memo(function ConvItem({ conv, isActive, onSelectConv }: 
       }`}
     >
       <div className="flex items-center justify-between gap-2 min-w-0">
-        <span className="text-[12px] truncate flex-1" style={{ ...monoFont, color: isActive ? "#fff" : "#000" }}>
+        <span className="text-[12px] truncate flex-1" style={{ ...font, color: isActive ? "#fff" : "#000" }}>
           {conv.title}
         </span>
-        <span className="text-[9px] px-1.5 py-0.5 rounded flex-shrink-0" style={{ ...monoFont, color: isActive ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.4)", background: isActive ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.06)" }}>
+        <span className="text-[9px] px-1.5 py-0.5 rounded flex-shrink-0" style={{ ...font, color: isActive ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.4)", background: isActive ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.06)" }}>
           {modeLabel}
         </span>
       </div>
-      <span className="text-[10px] truncate" style={{ ...monoFont, color: isActive ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.4)" }}>
+      <span className="text-[10px] truncate" style={{ ...font, color: isActive ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.4)" }}>
         {conv.timestamp}
       </span>
     </button>
@@ -1062,7 +1141,7 @@ const ConvItem = React.memo(function ConvItem({ conv, isActive, onSelectConv }: 
 
 // ─── Attach menu (+ button, upload file etc.) ───────────────────────────────────
 
-function AttachMenu({ open, onClose, anchorRef }: { open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLButtonElement | null> }) {
+function AttachMenu({ open, onClose, anchorRef, lang = "en" }: { open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLButtonElement | null>; lang?: UiLang }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node) && anchorRef.current && !anchorRef.current.contains(e.target as Node)) onClose(); };
@@ -1076,7 +1155,7 @@ function AttachMenu({ open, onClose, anchorRef }: { open: boolean; onClose: () =
       className="absolute bottom-full left-0 mb-2 bg-white border border-black/10 rounded-[12px] shadow-[0_2px_12px_rgba(0,0,0,0.06)] py-2 min-w-[200px] z-50">
       <button onClick={() => { onClose(); /* TODO: file upload */ }} className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-black/5 transition-colors text-left">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        <span className="text-[12px]" style={monoFont}>Add photos and files</span>
+        <span className="text-[12px]" style={getUiFont(lang)}>{t(lang, "chat.addFiles")}</span>
       </button>
     </motion.div>
   );
@@ -1093,6 +1172,7 @@ function SummaryPanel({
   loading,
   error,
   onGenerate,
+  lang = "en",
 }: {
   open: boolean;
   onClose: () => void;
@@ -1101,8 +1181,10 @@ function SummaryPanel({
   loading: boolean;
   error: string | null;
   onGenerate: () => void;
+  lang?: UiLang;
 }) {
   if (!open) return null;
+  const font = getUiFont(lang);
   const hasMarkdown = !!(markdown || "").trim();
   return (
     <motion.div
@@ -1111,7 +1193,7 @@ function SummaryPanel({
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
     >
-      <button type="button" className="absolute inset-0 bg-black/30" aria-label="Close summary" onClick={onClose} />
+      <button type="button" className="absolute inset-0 bg-black/30" aria-label={t(lang, "summary.close")} onClick={onClose} />
       <motion.div
         initial={{ opacity: 0, y: 12, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1121,9 +1203,9 @@ function SummaryPanel({
       >
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-black/8">
           <div className="min-w-0">
-            <p className="text-[13px] text-black" style={monoFont}>Decision summary</p>
-            <p className="text-[10px] text-[var(--app-muted-text)] mt-0.5 truncate" style={monoFont}>
-              Session {roomId}
+            <p className="text-[13px] text-black" style={font}>{t(lang, "summary.title")}</p>
+            <p className="text-[10px] text-[var(--app-muted-text)] mt-0.5 truncate" style={font}>
+              {t(lang, "summary.session", { id: roomId })}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -1133,16 +1215,16 @@ function SummaryPanel({
                 onClick={onGenerate}
                 disabled={loading}
                 className="px-2.5 py-1.5 rounded-[8px] border border-black/10 text-[11px] text-black/70 hover:bg-black/5 disabled:opacity-40"
-                style={monoFont}
+                style={font}
               >
-                {loading ? "Generating…" : "Regenerate"}
+                {loading ? t(lang, "summary.generating") : t(lang, "summary.regenerate")}
               </button>
             )}
             <button
               type="button"
               onClick={onClose}
               className="p-1.5 rounded-[8px] hover:bg-black/5 text-black/50"
-              aria-label="Close"
+              aria-label={t(lang, "summary.close")}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
             </button>
@@ -1150,38 +1232,37 @@ function SummaryPanel({
         </div>
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {loading && (
-            <p className="text-[12px] text-[var(--app-muted-text)]" style={monoFont}>
-              Reading this session&apos;s log and drafting the direction summary…
+            <p className="text-[12px] text-[var(--app-muted-text)]" style={font}>
+              {t(lang, "summary.reading")}
             </p>
           )}
           {!loading && error && (
             <div className="space-y-3">
-              <p className="text-[12px] text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded-[8px]" style={monoFont}>
+              <p className="text-[12px] text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded-[8px]" style={font}>
                 {error}
               </p>
               <button
                 type="button"
                 onClick={onGenerate}
                 className="h-[36px] px-4 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800"
-                style={monoFont}
+                style={font}
               >
-                Try again
+                {t(lang, "summary.tryAgain")}
               </button>
             </div>
           )}
           {!loading && !error && !hasMarkdown && (
             <div className="flex flex-col items-start gap-3 py-2">
-              <p className="text-[12px] text-[var(--app-muted-text)] leading-relaxed" style={monoFont}>
-                Generate a short decision-direction summary from this session&apos;s chat log.
-                Nothing is requested until you press Generate.
+              <p className="text-[12px] text-[var(--app-muted-text)] leading-relaxed" style={font}>
+                {t(lang, "summary.idle")}
               </p>
               <button
                 type="button"
                 onClick={onGenerate}
                 className="h-[36px] px-4 bg-black text-white rounded-[8px] text-[12px] hover:bg-neutral-800"
-                style={monoFont}
+                style={font}
               >
-                Generate
+                {t(lang, "summary.generate")}
               </button>
             </div>
           )}
@@ -1201,14 +1282,27 @@ function SummaryPanel({
 
 // ─── Settings menu (Customize Agent, Customize Scene, Reload, Export) ─
 
-function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onSummary, onExportLog, onPastMemory, hasRoomId, showPastMemory, showFontColor, onToggleFontColor }: {
+function GlobeIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
+}
+
+function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppearance, onReloadHistory, onSummary, onExportLog, onPastMemory, hasRoomId, showSummary = true, showPastMemory, showFontColor, onToggleFontColor, lang, onLangChange }: {
   open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLButtonElement | null>;
   onCustomize: () => void; onScene: () => void; onAppearance: () => void;
   onReloadHistory: () => void; onSummary: () => void; onExportLog: () => void;
-  onPastMemory?: () => void; hasRoomId: boolean; showPastMemory?: boolean;
+  onPastMemory?: () => void; hasRoomId: boolean; showSummary?: boolean; showPastMemory?: boolean;
   showFontColor: boolean; onToggleFontColor: () => void;
+  lang: UiLang;
+  onLangChange: (lang: UiLang) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const font = getUiFont(lang);
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node) && anchorRef.current && !anchorRef.current.contains(e.target as Node)) onClose(); };
     if (open) document.addEventListener("mousedown", h);
@@ -1231,26 +1325,50 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
   const Item = ({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) => (
     <button onClick={() => { onClose(); onClick(); }} className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-black/5 transition-colors text-left">
       <span className="opacity-40 flex-shrink-0">{icon}</span>
-      <span className="text-[12px]" style={monoFont}>{label}</span>
+      <span className="text-[12px]" style={font}>{label}</span>
     </button>
   );
   return (
     <motion.div ref={ref} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
-      className="absolute bottom-full right-0 mb-2 bg-white border border-black/10 rounded-[12px] shadow-[0_2px_12px_rgba(0,0,0,0.06)] py-2 min-w-[200px] z-50">
-      <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label="Customize Agent" onClick={onCustomize} />
-      <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>} label="Customize Scene" onClick={onScene} />
-      {showFontColor && <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3a9 9 0 1 0 9 9"/><circle cx="12" cy="12" r="3"/></svg>} label="字体颜色" onClick={onAppearance} />}
+      className="absolute bottom-full right-0 mb-2 bg-white border border-black/10 rounded-[12px] shadow-[0_2px_12px_rgba(0,0,0,0.06)] py-2 min-w-[220px] z-50">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <span className="opacity-40 flex-shrink-0"><GlobeIcon /></span>
+        <span className="text-[12px] flex-1" style={font}>{t(lang, "settings.language")}</span>
+        <div className="flex items-center gap-1.5 text-[11px] tracking-wide" style={getUiFont("en")}>
+          <button
+            type="button"
+            onClick={() => onLangChange("en")}
+            className={`px-0.5 transition-colors ${lang === "en" ? "text-black font-semibold" : "text-black/35 hover:text-black/60"}`}
+          >
+            EN
+          </button>
+          <span className="text-black/20">/</span>
+          <button
+            type="button"
+            onClick={() => onLangChange("zh")}
+            className={`px-0.5 transition-colors ${lang === "zh" ? "text-black font-semibold" : "text-black/35 hover:text-black/60"}`}
+          >
+            CN
+          </button>
+        </div>
+      </div>
+      <div className="my-1 border-t border-black/8" />
+      <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label={t(lang, "settings.customizeAgent")} onClick={onCustomize} />
+      <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>} label={t(lang, "settings.customizeScene")} onClick={onScene} />
+      {showFontColor && <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3a9 9 0 1 0 9 9"/><circle cx="12" cy="12" r="3"/></svg>} label={t(lang, "settings.fontColor")} onClick={onAppearance} />}
       {hasRoomId && (
         <>
-          <Item icon={<svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="17.18 15 8.18 15 8.18 6"/><path d="M10.58,12A18,18,0,1,1,6.23,26.88"/></svg>} label="Reload history" onClick={onReloadHistory} />
-          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>} label="Decision summary" onClick={onSummary} />
-          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label="Export log" onClick={onExportLog} />
+          <Item icon={<svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="17.18 15 8.18 15 8.18 6"/><path d="M10.58,12A18,18,0,1,1,6.23,26.88"/></svg>} label={t(lang, "settings.reloadHistory")} onClick={onReloadHistory} />
+          {showSummary && (
+            <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>} label={t(lang, "settings.decisionSummary")} onClick={onSummary} />
+          )}
+          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label={t(lang, "settings.exportLog")} onClick={onExportLog} />
         </>
       )}
       {showPastMemory && onPastMemory && (
         <Item
           icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
-          label="Past session memory"
+          label={t(lang, "settings.pastMemory")}
           onClick={onPastMemory}
         />
       )}
@@ -1260,10 +1378,11 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
 
 // ─── User Menu (Account, Help, Logout) ─────────────────────────────────────────
 
-function UserMenu({ nickname, isAdmin, onAccount, onHelp, onAdmin, onLogout, onClose }: {
-  nickname: string; isAdmin?: boolean; onAccount: () => void; onHelp: () => void; onAdmin?: () => void; onLogout: () => void; onClose: () => void;
+function UserMenu({ nickname, isAdmin, onAccount, onHelp, onAdmin, onLogout, onClose, lang = "en" }: {
+  nickname: string; isAdmin?: boolean; onAccount: () => void; onHelp: () => void; onAdmin?: () => void; onLogout: () => void; onClose: () => void; lang?: UiLang;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const font = getUiFont(lang);
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
     document.addEventListener("mousedown", h);
@@ -1273,7 +1392,7 @@ function UserMenu({ nickname, isAdmin, onAccount, onHelp, onAdmin, onLogout, onC
   const Item = ({ icon, label, onClick, danger = false }: { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }) => (
     <button onClick={onClick} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[8px] transition-colors text-left ${danger ? "hover:bg-red-50 text-red-500" : "hover:bg-black/5 text-black"}`}>
       <span className="opacity-40 flex-shrink-0">{icon}</span>
-      <span className="text-[12px]" style={monoFont}>{label}</span>
+      <span className="text-[12px]" style={font}>{label}</span>
     </button>
   );
 
@@ -1282,15 +1401,15 @@ function UserMenu({ nickname, isAdmin, onAccount, onHelp, onAdmin, onLogout, onC
       className="absolute bottom-[56px] left-3 right-3 bg-white border border-black/10 rounded-[12px] shadow-[0_2px_12px_rgba(0,0,0,0.06)] z-50 py-2 overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 mb-1">
         <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500 flex-shrink-0" />
-        <span className="text-[12px] tracking-widest text-black" style={monoFont}>{(nickname || "you").toUpperCase()}</span>
+        <span className="text-[12px] tracking-widest text-black" style={font}>{(nickname || t(lang, "chat.you")).toUpperCase()}</span>
       </div>
       <div className="px-1">
-        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label="Account" onClick={() => { onClose(); onAccount(); }} />
+        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label={t(lang, "settings.account")} onClick={() => { onClose(); onAccount(); }} />
         {isAdmin && onAdmin && (
-          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>} label="Admin" onClick={() => { onClose(); onAdmin(); }} />
+          <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>} label={t(lang, "settings.admin")} onClick={() => { onClose(); onAdmin(); }} />
         )}
-        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>} label="Help" onClick={() => { onClose(); onHelp(); }} />
-        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>} label="Logout" onClick={() => { onClose(); onLogout(); }} danger />
+        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>} label={t(lang, "settings.help")} onClick={() => { onClose(); onHelp(); }} />
+        <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>} label={t(lang, "settings.logout")} onClick={() => { onClose(); onLogout(); }} danger />
       </div>
     </motion.div>
   );
@@ -1298,15 +1417,16 @@ function UserMenu({ nickname, isAdmin, onAccount, onHelp, onAdmin, onLogout, onC
 
 // ─── Customizer Modal (paginated cards) ────────────────────────────────────────
 
-const CARD_LABELS = ["Basic", "Emotion", "Behavior"] as const;
-
 function CustomizerModal({
   agentNames,
   agentSettings,
   experimentMode,
+  agentKeys = AGENT_KEYS,
+  scenarioId = null,
+  uiLang = "en",
   onSave,
   onClose,
-  onAnalyze,
+  onAnalyze: _onAnalyze,
   initialOpenCard = null,
   tutorialStep = null,
   onTutorialBack,
@@ -1317,6 +1437,9 @@ function CustomizerModal({
   agentNames: Record<AgentKey, string>;
   agentSettings: Record<AgentKey, AgentCustomSetting>;
   experimentMode: ExperimentMode;
+  agentKeys?: AgentKey[];
+  scenarioId?: string | null;
+  uiLang?: UiLang;
   onSave: (names: Record<AgentKey, string>, settings: Record<AgentKey, AgentCustomSetting>) => void;
   onClose: () => void;
   onAnalyze: (key: AgentKey, v: number, a: number, c: number, text?: string) => Promise<{ emotion_tag: string; confidence: number } | null>;
@@ -1327,65 +1450,148 @@ function CustomizerModal({
   onTutorialSkip?: () => void;
   guideGradientPalette: GuideGradientPalette;
 }) {
+  const font = getUiFont(uiLang);
+  const cardLabels = [t(uiLang, "custom.cardBasic"), t(uiLang, "custom.cardTone"), t(uiLang, "custom.cardBehavior")] as const;
+  const tutorialSteps = getTutorialSteps(uiLang);
   const [localNames, setLocalNames] = useState<Record<AgentKey, string>>({ ...agentNames });
-  const [localSettings, setLocalSettings] = useState<Record<AgentKey, AgentCustomSetting>>({ A: { ...agentSettings.A }, B: { ...agentSettings.B }, C: { ...agentSettings.C } });
-  const [selectedAgent, setSelectedAgent] = useState<AgentKey>(initialOpenCard || "A");
-  const [custTags, setCustTags] = useState<Partial<Record<AgentKey, string>>>({});
-  const [custConfs, setCustConfs] = useState<Partial<Record<AgentKey, number>>>({});
+  const [localSettings, setLocalSettings] = useState<Record<AgentKey, AgentCustomSetting>>(() => cloneAgentSettings(agentSettings));
+  const [selectedAgent, setSelectedAgent] = useState<AgentKey>(initialOpenCard || agentKeys[0] || "A");
   const [page, setPage] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
+  const [knowledgeTags, setKnowledgeTags] = useState<Array<{ id: string; label: string }>>([]);
+  const [knowledgeMatched, setKnowledgeMatched] = useState<boolean | null>(null);
+  // Per-card scroll positions so switching pages does not share one scrollbar offset
+  const cardScrollRef = useRef<HTMLDivElement>(null);
+  const cardScrollPosRef = useRef<Record<string, number>>({});
+  const pageRef = useRef(page);
+  pageRef.current = page;
 
   const canEditAdvanced = experimentMode === "full";
-  const agentOptions = experimentMode === "single" ? [("A" as AgentKey)] : AGENT_KEYS;
+  const agentOptions = experimentMode === "single" ? (["A"] as AgentKey[]) : agentKeys;
+  // Stance/hint UI is always available in full mode. If no agora2 scene is selected yet,
+  // fall back to employment options so Basic card is not empty (preview/start bind to real scene later).
+  const stanceScenarioId =
+    scenarioId && SCENARIO_STANCES[scenarioId] ? scenarioId : (canEditAdvanced ? "employment" : null);
+  const stanceOptions = stanceScenarioId ? SCENARIO_STANCES[stanceScenarioId] : [];
+  const showStanceFields = canEditAdvanced && stanceOptions.length > 0;
+  const stanceSceneBound = !!(scenarioId && SCENARIO_STANCES[scenarioId]);
   const totalCards = canEditAdvanced ? 3 : 1;
   const tutorialCardIndex = tutorialStep !== null && tutorialStep >= 2 && tutorialStep <= 4 ? tutorialStep - 2 : null;
-  const tutorialGuideStep = tutorialStep !== null ? WELCOME_TUTORIAL_STEPS[tutorialStep] : null;
+  const tutorialGuideStep = tutorialStep !== null ? tutorialSteps[tutorialStep] : null;
+
+  const scrollKey = (agent: AgentKey, card: number) => `${agent}:${card}`;
+  const goToPage = useCallback((next: number) => {
+    const el = cardScrollRef.current;
+    if (el) cardScrollPosRef.current[scrollKey(selectedAgent, pageRef.current)] = el.scrollTop;
+    setPage(next);
+  }, [selectedAgent]);
 
   useEffect(() => { if (initialOpenCard) setSelectedAgent(initialOpenCard); }, [initialOpenCard]);
   useEffect(() => { setPage(0); }, [selectedAgent]);
-  useEffect(() => { analyze(selectedAgent); }, [selectedAgent]);
   useEffect(() => {
-    if (tutorialCardIndex !== null) setPage(tutorialCardIndex);
-  }, [tutorialCardIndex]);
+    if (tutorialCardIndex !== null) goToPage(tutorialCardIndex);
+  }, [tutorialCardIndex, goToPage]);
+  useEffect(() => {
+    const el = cardScrollRef.current;
+    if (!el) return;
+    el.scrollTop = cardScrollPosRef.current[scrollKey(selectedAgent, page)] ?? 0;
+  }, [page, selectedAgent]);
+
+  // Seed default stance when opening an agent without one
+  useEffect(() => {
+    if (!showStanceFields || !stanceScenarioId) return;
+    setLocalSettings((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const k of agentOptions) {
+        if (!next[k]?.stance) {
+          const st = defaultStanceForKey(stanceScenarioId, k, agentOptions);
+          if (st) {
+            next[k] = { ...next[k], stance: st };
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [showStanceFields, stanceScenarioId, agentOptions.join(",")]);
+
+  // Debounced knowledge preview for selected agent's hint + stance
+  useEffect(() => {
+    if (!showStanceFields || !stanceScenarioId) {
+      setKnowledgeTags([]);
+      setKnowledgeMatched(null);
+      return;
+    }
+    const s = localSettings[selectedAgent];
+    const hint = (s?.hint || "").trim();
+    const stance = s?.stance || "";
+    if (!hint || !stance) {
+      setKnowledgeTags([]);
+      setKnowledgeMatched(hint ? false : null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      fetch(`${API_BASE}/knowledge-preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scenario_type: stanceScenarioId, stance, hint, lang: uiLang }),
+      })
+        .then((r) => r.json())
+        .then((data: { matched?: boolean; tags?: Array<{ id: string; label: string }> }) => {
+          if (cancelled) return;
+          setKnowledgeMatched(!!data.matched);
+          setKnowledgeTags(Array.isArray(data.tags) ? data.tags : []);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setKnowledgeMatched(false);
+            setKnowledgeTags([]);
+          }
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [showStanceFields, selectedAgent, localSettings[selectedAgent]?.hint, localSettings[selectedAgent]?.stance, stanceScenarioId, uiLang]);
 
   const upd = (key: AgentKey, field: keyof AgentCustomSetting, value: unknown) =>
     setLocalSettings((prev) => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
 
-  const analyze = async (key: AgentKey, snapshot?: AgentCustomSetting) => {
-    const s = snapshot ?? localSettings[key];
-    const r = await onAnalyze(key, s.valence, s.arousal, s.control, s.emotionText || "");
-    if (r) {
-      setCustTags((p) => ({ ...p, [key]: r.emotion_tag }));
-      setCustConfs((p) => ({ ...p, [key]: r.confidence }));
-      upd(key, "emotionTag", r.emotion_tag);
-    }
-    return r;
+  const applyTone = (key: AgentKey, tone: string) => {
+    const d = defaultsForTone(tone);
+    setLocalSettings((prev) => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        emotionOn: true,
+        emotionTag: tone,
+        valence: d.valence,
+        arousal: d.arousal,
+        control: d.control,
+        emotionText: "",
+      },
+    }));
   };
 
   const handleSave = async () => {
     if (isSaving) return;
     setIsSaving(true);
     try {
-      let settingsToSave: Record<AgentKey, AgentCustomSetting> = {
-        A: { ...localSettings.A },
-        B: { ...localSettings.B },
-        C: { ...localSettings.C },
-      };
-      if (canEditAdvanced) {
-        await Promise.all(agentOptions.map(async (key) => {
-          const snapshot = settingsToSave[key];
-          const r = await analyze(key, snapshot);
-          if (r?.emotion_tag) {
-            settingsToSave = {
-              ...settingsToSave,
-              [key]: {
-                ...settingsToSave[key],
-                emotionOn: true,
-                emotionTag: r.emotion_tag,
-              },
-            };
-          }
-        }));
+      const settingsToSave: Record<AgentKey, AgentCustomSetting> = cloneAgentSettings(localSettings);
+      for (const key of agentOptions) {
+        const tag = settingsToSave[key]?.emotionTag || "joy";
+        const d = defaultsForTone(tag);
+        settingsToSave[key] = {
+          ...settingsToSave[key],
+          emotionOn: true,
+          emotionTag: tag,
+          valence: d.valence,
+          arousal: d.arousal,
+          control: d.control,
+        };
       }
       onSave(localNames, settingsToSave);
       onClose();
@@ -1394,25 +1600,27 @@ function CustomizerModal({
     }
   };
 
-  const goPrev = () => setPage((p) => Math.max(0, p - 1));
-  const goNext = () => setPage((p) => Math.min(totalCards - 1, p + 1));
+  const goPrev = () => goToPage(Math.max(0, pageRef.current - 1));
+  const goNext = () => goToPage(Math.min(totalCards - 1, pageRef.current + 1));
 
   const renderCard = (key: AgentKey, cardIndex: number) => {
     const s = localSettings[key];
     const accentColor = s.accentColor || DEFAULT_AGENT_COLORS[key];
-    const emotionTag = custTags[key] || s.emotionTag;
-    const examples = emotionTag ? (EMOTION_EXAMPLES[emotionTag] || []) : [];
+    const emotionTag = s.emotionTag || "joy";
+    const examples = getEmotionExamples(emotionTag, uiLang);
+    const decisionExamples = getDecisionExamples(s.decisionBlock, uiLang);
+    const lbl = labelCaseClass(uiLang);
 
     if (cardIndex === 0) {
       return (
-        <div key="basic" className="flex flex-col gap-4 w-full break-words">
+        <div key="basic" className="flex flex-col gap-4 w-full break-words" style={uiLang === "zh" ? { lineHeight: 1.55 } : undefined}>
           <div>
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Display Name</label>
+            <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.displayName")}</label>
             <input type="text" value={localNames[key]} maxLength={24} onChange={(e) => setLocalNames((p) => ({ ...p, [key]: e.target.value }))}
-              className="w-full text-[12px] px-3 py-1.5 border border-black/15 rounded-[6px] outline-none focus:border-black/40 transition-colors" style={monoFont} />
+              className="w-full text-[12px] px-3 py-1.5 border border-black/15 rounded-[6px] outline-none focus:border-black/40 transition-colors" style={font} />
           </div>
           <div>
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Accent Color</label>
+            <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.accentColor")}</label>
             <div className="flex items-center gap-2">
               <input type="color" value={accentColor} onChange={(e) => upd(key, "accentColor", e.target.value)}
                 className="w-10 h-8 rounded-[6px] border border-black/15 cursor-pointer p-0" />
@@ -1420,49 +1628,87 @@ function CustomizerModal({
                 className="flex-1 text-[11px] px-3 py-1.5 border border-black/15 rounded-[6px] outline-none focus:border-black/40 font-mono" maxLength={7} />
             </div>
           </div>
+          {showStanceFields && (
+            <>
+              {!stanceSceneBound && (
+                <p className="text-[10px] text-[var(--app-muted-text)] leading-relaxed" style={font}>
+                  {t(uiLang, "custom.stanceHintUnbound")}
+                </p>
+              )}
+              <div>
+                <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.basicStance")}</label>
+                <CustomDropdown
+                  value={s.stance || stanceOptions[0]?.value || ""}
+                  onChange={(v) => upd(key, "stance", v)}
+                  options={stanceOptions.map((o) => ({ value: o.value, label: t(uiLang, `stance.${o.value}`) }))}
+                  size="sm"
+                  style={font}
+                />
+              </div>
+              <div>
+                <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.knowledgeHint")}</label>
+                <p className="text-[10px] text-[var(--app-muted-text)] mb-1.5" style={font}>
+                  {t(uiLang, "custom.knowledgeHelp")}
+                </p>
+                <textarea
+                  value={s.hint || ""}
+                  onChange={(e) => upd(key, "hint", e.target.value)}
+                  placeholder={t(uiLang, "custom.knowledgePh")}
+                  rows={2}
+                  className="w-full text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none resize-none leading-relaxed focus:border-black/40 transition-colors"
+                  style={font}
+                />
+                <div className="mt-2 flex flex-wrap items-center justify-start gap-1.5 min-h-[22px]">
+                  {knowledgeMatched === false && (s.hint || "").trim() && (
+                    <span className="text-[9px] text-[var(--app-muted-text)]" style={font}>{t(uiLang, "custom.noKnowledge")}</span>
+                  )}
+                  {knowledgeMatched && knowledgeTags.length > 0 && (
+                    <span className="text-[9px] text-[var(--app-muted-text)]" style={font}>{t(uiLang, "custom.matchedTopic")}</span>
+                  )}
+                  {knowledgeTags.map((tag) => (
+                    <span
+                      key={tag.id}
+                      className="text-[9px] px-2 py-0.5 rounded-[4px] border border-black/10 bg-black/[0.03] text-black/70"
+                      style={font}
+                    >
+                      {tag.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       );
     }
 
     if (cardIndex === 1 && canEditAdvanced) {
       return (
-        <div key="emotion" className="flex flex-col gap-4 w-full break-words">
+        <div key="tone" className="flex flex-col gap-4 w-full break-words" style={uiLang === "zh" ? { lineHeight: 1.55 } : undefined}>
           <div>
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Emotion Status</label>
-            <p className="text-[10px] text-[var(--app-muted-text)] mb-2" style={monoFont}>Adjust valence, arousal, control to shape response tone</p>
-            <div className="flex flex-col gap-2">
-              {emotionTag && (
-                <div className="flex items-center gap-2 px-2 py-1.5 border rounded-[6px] text-[11px]"
-                  style={{ borderColor: (EMOTION_COLORS[emotionTag] || "#000") + "40", background: (EMOTION_COLORS[emotionTag] || "#000") + "10", color: EMOTION_COLORS[emotionTag] || "#000", ...monoFont }}>
-                  <EmotionIcon emotion={emotionTag} size={16} />
-                  <span className="capitalize">{emotionTag}</span>
-                  <span style={{ color: "var(--app-muted-text)" }}>{Math.round((custConfs[key] || 0) * 100)}%</span>
-                </div>
-              )}
-              {([{ label: "Valence", field: "valence" as const, val: s.valence }, { label: "Arousal", field: "arousal" as const, val: s.arousal }, { label: "Control", field: "control" as const, val: s.control }] as const).map(({ label, field, val }) => (
-                <div key={field} className="flex items-center gap-2">
-                  <span className="text-[10px] text-[var(--app-muted-text)] w-14 flex-shrink-0" style={monoFont}>{label}</span>
-                  <input type="range" min={0} max={100} value={Math.round(val * 100)}
-                    onChange={(e) => upd(key, field, parseInt(e.target.value) / 100)} onMouseUp={() => analyze(key)} onTouchEnd={() => analyze(key)}
-                    className="flex-1 h-[3px] accent-black" />
-                  <span className="text-[10px] text-[var(--app-muted-text)] w-8 text-right" style={monoFont}>{val.toFixed(2)}</span>
-                </div>
-              ))}
-              <div className="mt-2">
-                <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Emotion from text</label>
-                <p className="text-[10px] text-[var(--app-muted-text)] mb-1.5" style={monoFont}>Describe the tone you want (e.g. I feel happy, excited). Leave empty to use sliders only.</p>
-                <input type="text" value={s.emotionText ?? ""} onChange={(e) => upd(key, "emotionText", e.target.value)} onBlur={() => analyze(key)}
-                  placeholder="e.g. I feel excited, worried..."
-                  className="w-full text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none focus:border-black/40 transition-colors" style={monoFont} />
-              </div>
+            <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.tone")}</label>
+            <p className="text-[10px] text-[var(--app-muted-text)] mb-2" style={font}>{t(uiLang, "custom.toneHelp")}</p>
+            <div
+              className="flex items-center gap-2 px-2 py-1.5 border rounded-[6px] text-[11px] mb-2"
+              style={{ borderColor: (EMOTION_COLORS[emotionTag] || "#000") + "40", background: (EMOTION_COLORS[emotionTag] || "#000") + "10", color: EMOTION_COLORS[emotionTag] || "#000", ...font }}
+            >
+              <EmotionIcon emotion={emotionTag} size={16} />
+              <span>{toneLabel(uiLang, emotionTag)}</span>
             </div>
+            <CustomDropdown
+              value={emotionTag}
+              onChange={(v) => applyTone(key, v)}
+              options={toneOptions(uiLang)}
+              size="sm"
+              style={font}
+            />
           </div>
           {examples.length > 0 && (
             <div>
-              <p className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5" style={monoFont}>Example responses</p>
-              <ul className="text-[10px] text-[var(--app-muted-text)] space-y-1 pl-3 border-l-2 border-black/10" style={{ ...monoFont, borderColor: (EMOTION_COLORS[emotionTag!] || "#000") + "30" }}>
+              <p className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5`} style={font}>{t(uiLang, "custom.examples")}</p>
+              <ul className="text-[10px] text-[var(--app-muted-text)] space-y-1 pl-3 border-l-2 border-black/10" style={{ ...font, borderColor: (EMOTION_COLORS[emotionTag] || "#000") + "30" }}>
                 {examples.slice(0, 3).map((ex, i) => (
-                  <li key={i} className="pl-2">"{ex}"</li>
+                  <li key={i} className="pl-2">&ldquo;{ex}&rdquo;</li>
                 ))}
               </ul>
             </div>
@@ -1473,33 +1719,28 @@ function CustomizerModal({
 
     if (cardIndex === 2 && canEditAdvanced) {
       return (
-        <div key="behavior" className="flex flex-col gap-4 w-full break-words">
+        <div key="behavior" className="flex flex-col gap-4 w-full break-words" style={uiLang === "zh" ? { lineHeight: 1.55 } : undefined}>
           <div>
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Decision making style</label>
-            <p className="text-[10px] text-[var(--app-muted-text)] mb-2" style={monoFont}>Reasoning style for this agent</p>
+            <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.decisionStyle")}</label>
+            <p className="text-[10px] text-[var(--app-muted-text)] mb-2" style={font}>{t(uiLang, "custom.decisionHelp")}</p>
             <CustomDropdown
               value={s.decisionBlock}
               onChange={(v) => upd(key, "decisionBlock", v as AgentCustomSetting["decisionBlock"])}
-              options={DECISION_BLOCKS.map((b) => ({ value: b, label: b }))}
+              options={DECISION_BLOCKS.map((b) => ({ value: b, label: t(uiLang, `decision.${b}`) }))}
               size="sm"
-              style={monoFont}
+              style={font}
             />
-            <p className="text-[9px] text-[var(--app-muted-text)] mt-1" style={monoFont}>{DECISION_BLOCK_DESCRIPTIONS[s.decisionBlock]}</p>
-            {DECISION_BLOCK_EXAMPLES[s.decisionBlock]?.length > 0 && (
+            <p className="text-[9px] text-[var(--app-muted-text)] mt-1" style={font}>{t(uiLang, `decision.desc.${s.decisionBlock}`)}</p>
+            {decisionExamples.length > 0 && (
               <div className="mt-2">
-                <p className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5" style={monoFont}>Example responses</p>
-                <ul className="text-[10px] text-[var(--app-muted-text)] space-y-1 pl-3 border-l-2 border-black/10" style={monoFont}>
-                  {DECISION_BLOCK_EXAMPLES[s.decisionBlock].slice(0, 3).map((ex, i) => (
-                    <li key={i} className="pl-2">"{ex}"</li>
+                <p className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5`} style={font}>{t(uiLang, "custom.examples")}</p>
+                <ul className="text-[10px] text-[var(--app-muted-text)] space-y-1 pl-3 border-l-2 border-black/10" style={font}>
+                  {decisionExamples.slice(0, 3).map((ex, i) => (
+                    <li key={i} className="pl-2">&ldquo;{ex}&rdquo;</li>
                   ))}
                 </ul>
               </div>
             )}
-          </div>
-          <div>
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Additional Prompt</label>
-            <textarea value={s.additionalPrompt} onChange={(e) => upd(key, "additionalPrompt", e.target.value)} placeholder="Extra instructions for this agent..." rows={3}
-              className="w-full text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none resize-none leading-relaxed focus:border-black/40 transition-colors" style={monoFont} />
           </div>
         </div>
       );
@@ -1523,19 +1764,19 @@ function CustomizerModal({
               <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} pulse />
               <div className="relative z-10">
                 <div className="flex items-center justify-between gap-3 mb-2">
-                  <p className="text-[11px] tracking-widest text-black uppercase" style={monoFont}>
-                    {tutorialStep! + 1}/{WELCOME_TUTORIAL_STEPS.length} · {tutorialGuideStep?.title}
+                  <p className={`text-[11px] text-black ${labelCaseClass(uiLang)}`} style={font}>
+                    {tutorialStep! + 1}/{tutorialSteps.length} · {tutorialGuideStep?.title}
                   </p>
                   <button
                     type="button"
                     onClick={onTutorialSkip}
                     className="text-[10px] text-[var(--app-muted-text)] hover:text-black transition-colors"
-                    style={monoFont}
+                    style={font}
                   >
-                    skip
+                    {t(uiLang, "tutorial.skip")}
                   </button>
                 </div>
-                <p className="text-[12px] text-black/75 leading-relaxed" style={monoFont}>
+                <p className="text-[12px] text-black/75 leading-relaxed" style={font}>
                   {tutorialGuideStep?.body}
                 </p>
                 <div className="flex items-center justify-between mt-4">
@@ -1543,17 +1784,17 @@ function CustomizerModal({
                     type="button"
                     onClick={onTutorialBack}
                     className="px-3 py-2 rounded-[10px] border border-black/10 text-[11px] text-[var(--app-muted-text)] hover:text-black hover:border-black/20 transition-colors"
-                    style={monoFont}
+                    style={font}
                   >
-                    back
+                    {t(uiLang, "tutorial.back")}
                   </button>
                   <button
                     type="button"
                     onClick={onTutorialNext}
                     className="px-3 py-2 rounded-[10px] bg-black text-white text-[11px] hover:bg-neutral-800 transition-colors"
-                    style={monoFont}
+                    style={font}
                   >
-                    {tutorialStep === 3 ? "continue" : "next"}
+                    {tutorialStep === 3 ? t(uiLang, "tutorial.continue") : t(uiLang, "tutorial.next")}
                   </button>
                 </div>
               </div>
@@ -1562,8 +1803,12 @@ function CustomizerModal({
         )}
         <div className="flex items-center justify-between px-5 py-4 border-b border-black/8 flex-shrink-0">
           <div>
-            <h2 className="text-[15px]" style={{ ...monoFont, fontWeight: 600 }}>Customize Agent</h2>
-            <p className="text-[10px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>{canEditAdvanced ? `${CARD_LABELS[page]} · ${totalCards} cards` : "Configure name and color"}</p>
+            <h2 className="text-[15px]" style={{ ...font, fontWeight: 600 }}>{t(uiLang, "custom.title")}</h2>
+            <p className="text-[10px] text-[var(--app-muted-text)] mt-0.5" style={font}>
+              {canEditAdvanced
+                ? `${cardLabels[page]} ${t(uiLang, "custom.cardsSuffix", { n: totalCards })}`
+                : t(uiLang, "custom.subtitleSimple")}
+            </p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1571,16 +1816,16 @@ function CustomizerModal({
         </div>
         <div className="px-5 py-4 flex-1 min-h-0 flex flex-col overflow-hidden">
           <div className="mb-3 flex-shrink-0">
-            <label className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-1.5 block" style={monoFont}>Select Agent</label>
+            <label className={`text-[10px] text-[var(--app-muted-text)] ${labelCaseClass(uiLang)} mb-1.5 block`} style={font}>{t(uiLang, "custom.selectAgent")}</label>
             <CustomDropdown
               value={selectedAgent}
               onChange={(v) => setSelectedAgent(v as AgentKey)}
               options={agentOptions.map((key) => ({ value: key, label: localNames[key] }))}
-              style={monoFont}
+              style={font}
             />
           </div>
           <div className="border border-black/10 rounded-[12px] overflow-hidden bg-black/[0.02] flex-1 min-h-0 flex flex-col">
-            <div className="overflow-x-hidden overflow-y-auto flex-1 min-h-0 w-full" style={{ minWidth: 0 }}>
+            <div ref={cardScrollRef} className="overflow-x-hidden overflow-y-auto flex-1 min-h-0 w-full" style={{ minWidth: 0 }}>
               <motion.div
                 className="flex"
                 animate={{ x: `-${page * 100}%` }}
@@ -1601,7 +1846,7 @@ function CustomizerModal({
                 </button>
                 <div className="flex gap-1.5">
                   {Array.from({ length: totalCards }).map((_, i) => (
-                    <button key={i} onClick={() => tutorialCardIndex === null && setPage(i)}
+                    <button key={i} onClick={() => tutorialCardIndex === null && goToPage(i)}
                       disabled={tutorialCardIndex !== null}
                       className={`w-2 h-2 rounded-full transition-all ${i === page ? "bg-black scale-125" : "bg-black/25 hover:bg-black/40"} disabled:cursor-not-allowed`}
                       aria-label={`Card ${i + 1}`} />
@@ -1616,8 +1861,8 @@ function CustomizerModal({
           </div>
         </div>
         <div className="flex justify-end gap-2 px-5 py-4 border-t border-black/8">
-          <motion.button onClick={onClose} whileTap={{ scale: 0.97 }} disabled={isSaving} className="px-4 py-2 text-[12px] border border-black/15 rounded-[8px] hover:bg-black/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style={monoFont}>Cancel</motion.button>
-          <motion.button onClick={handleSave} whileTap={{ scale: 0.97 }} disabled={isSaving} className="px-4 py-2 text-[12px] bg-black text-white rounded-[8px] hover:bg-neutral-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style={monoFont}>{isSaving ? "Saving..." : "Save"}</motion.button>
+          <motion.button onClick={onClose} whileTap={{ scale: 0.97 }} disabled={isSaving} className="px-4 py-2 text-[12px] border border-black/15 rounded-[8px] hover:bg-black/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style={font}>{t(uiLang, "custom.cancel")}</motion.button>
+          <motion.button onClick={handleSave} whileTap={{ scale: 0.97 }} disabled={isSaving} className="px-4 py-2 text-[12px] bg-black text-white rounded-[8px] hover:bg-neutral-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style={font}>{isSaving ? t(uiLang, "custom.saving") : t(uiLang, "custom.save")}</motion.button>
         </div>
       </motion.div>
     </motion.div>
@@ -1626,15 +1871,15 @@ function CustomizerModal({
 
 // ─── Scene Selector ───────────────────────────────────────────────────────────
 
-function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang, onLangChange }: {
+function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang }: {
   scenes: Scene[];
   selectedScene: Scene | null;
   onSelect: (s: Scene) => void;
   onClose: () => void;
   lang: UiLang;
-  onLangChange: (lang: UiLang) => void;
 }) {
   const SCENE_PAGE_SIZE = 3;
+  const font = getUiFont(lang);
   const scenePages: Scene[][] = Array.from(
     { length: Math.ceil((scenes?.length || 0) / SCENE_PAGE_SIZE) },
     (_, i) => scenes.slice(i * SCENE_PAGE_SIZE, i * SCENE_PAGE_SIZE + SCENE_PAGE_SIZE),
@@ -1661,34 +1906,16 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang, on
       >
         <div className="flex items-center justify-between px-6 py-5 border-b border-black/8">
           <div>
-            <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>
-              {lang === "zh" ? "选择场景" : "Choose scenario"}
+            <h2 className="text-[16px]" style={{ ...font, fontWeight: 600 }}>
+              {t(lang, "welcome.chooseScenario")}
             </h2>
-            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={monoFont}>
-              {lang === "zh" ? "就职 / 亲子 · 先选语言" : "Employment / Parent-Child · pick language first"}
+            <p className="text-[11px] text-[var(--app-muted-text)] mt-0.5" style={font}>
+              {t(lang, "welcome.scenarioSubtitle")}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex border border-black/15 rounded-[8px] overflow-hidden text-[11px]" style={monoFont}>
-              <button
-                type="button"
-                onClick={() => onLangChange("en")}
-                className={`px-2.5 py-1.5 ${lang === "en" ? "bg-black text-white" : "hover:bg-black/5"}`}
-              >
-                EN
-              </button>
-              <button
-                type="button"
-                onClick={() => onLangChange("zh")}
-                className={`px-2.5 py-1.5 ${lang === "zh" ? "bg-black text-white" : "hover:bg-black/5"}`}
-              >
-                中文
-              </button>
-            </div>
-            <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
+          <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-[8px] transition-colors">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
         <div className="px-6 py-5 flex-1 min-h-0 flex flex-col overflow-hidden">
           <div className="border border-black/10 rounded-[12px] overflow-hidden bg-black/[0.02] flex-1 min-h-0 flex flex-col">
@@ -1705,10 +1932,10 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang, on
                         <button key={s.id} onClick={() => onSelect(s)}
                           className={`text-left p-4 border-2 rounded-[12px] transition-all hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)] ${selectedScene?.id === s.id ? "border-black" : "border-black/10 hover:border-black/30"}`}>
                           <div className="text-2xl mb-2">{s.icon}</div>
-                          <div className="text-[13px] mb-1" style={{ ...monoFont, fontWeight: 500 }}>{s.title}</div>
-                          <div className="text-[10px] text-[var(--app-muted-text)] leading-relaxed" style={monoFont}>{s.description}</div>
+                          <div className="text-[13px] mb-1" style={{ ...font, fontWeight: 500 }}>{s.title}</div>
+                          <div className="text-[10px] text-[var(--app-muted-text)] leading-relaxed" style={font}>{s.description}</div>
                           {isAgora2SceneId(s.id) && (
-                            <div className="text-[9px] text-[var(--app-muted-text)] mt-2 tracking-widest uppercase" style={monoFont}>intake required</div>
+                            <div className={`text-[9px] text-[var(--app-muted-text)] mt-2 ${labelCaseClass(lang)}`} style={font}>{t(lang, "welcome.intakeRequired")}</div>
                           )}
                         </button>
                       ))}
@@ -1721,7 +1948,7 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang, on
                         <svg width="20" height="20" viewBox="0 0 16 16" fill="none" className="opacity-20 group-hover:opacity-50 transition-opacity">
                           <path d="M8 1V15M1 8H15" stroke="black" strokeWidth="1.5" strokeLinecap="round"/>
                         </svg>
-                        <span className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>customize</span>
+                        <span className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={font}>{t(lang, "welcome.customize")}</span>
                       </motion.button>
                     </div>
                   </div>
@@ -1751,7 +1978,7 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang, on
         </div>
         {selectedScene && (
           <div className="px-6 pb-4">
-            <button onClick={() => { onSelect(null as unknown as Scene); }} className="text-[11px] text-[var(--app-muted-text)] hover:text-black transition-colors" style={monoFont}>Clear selection</button>
+            <button onClick={() => { onSelect(null as unknown as Scene); }} className="text-[11px] text-[var(--app-muted-text)] hover:text-black transition-colors" style={font}>{t(lang, "welcome.clearSelection")}</button>
           </div>
         )}
       </motion.div>
@@ -1779,8 +2006,9 @@ export default function Chat() {
     isSystem?: boolean;
   }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
-  const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>({ A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") });
-  const quickAdjustPendingRef = useRef<Record<AgentKey, Promise<void> | null>>({ A: null, B: null, C: null });
+  const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>(blankAgentSettings());
+  const activeAgentKeysRef = useRef<AgentKey[]>([...DEFAULT_ACTIVE_AGENT_KEYS]);
+  const quickAdjustPendingRef = useRef<Partial<Record<AgentKey, Promise<void> | null>>>({});
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -1808,7 +2036,8 @@ export default function Chat() {
 
   const [agentNames, setAgentNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
   const [agentBackendNames, setAgentBackendNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
-  const [agentSettings, setAgentSettings] = useState<Record<AgentKey, AgentCustomSetting>>({ A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") });
+  const [agentSettings, setAgentSettings] = useState<Record<AgentKey, AgentCustomSetting>>(() => blankAgentSettings());
+  const [activeAgentKeys, setActiveAgentKeys] = useState<AgentKey[]>([...DEFAULT_ACTIVE_AGENT_KEYS]);
   const [limitedSelectedAgents, setLimitedSelectedAgents] = useState<AgentPoolKey[]>([...LIMITED_DEFAULT_SELECTED]);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
@@ -1817,7 +2046,14 @@ export default function Chat() {
   const [agora2Intake, setAgora2Intake] = useState<Agora2IntakePayload | null>(null);
   const [userProfile, setUserProfile] = useState<Record<string, unknown> | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [uiLang, setUiLang] = useState<UiLang>("en");
+  const [uiLang, setUiLang] = useState<UiLang>(() => loadUiLang());
+  const setLang = useCallback((lang: UiLang) => {
+    saveUiLang(lang);
+    setUiLang(lang);
+  }, []);
+  useEffect(() => {
+    applyDocumentLang(uiLang);
+  }, [uiLang]);
   const [sessionCountBefore, setSessionCountBefore] = useState(0);
   const [sessionIndex, setSessionIndex] = useState<number | null>(null);
   const [lastIntake, setLastIntake] = useState<Record<string, unknown> | null>(null);
@@ -1849,9 +2085,21 @@ export default function Chat() {
     () => auth?.user_id || "web_user",
     [auth?.user_id],
   );
-  const suggestedPrompts = selectedScene?.suggestedPrompts?.length
-    ? selectedScene.suggestedPrompts
-    : [];
+  const suggestedPrompts = useMemo(() => {
+    const id = selectedScene?.id;
+    const local = getSuggestedPrompts(id, uiLang);
+    if (uiLang === "zh") return local;
+    if (selectedScene?.suggestedPrompts?.length) return selectedScene.suggestedPrompts;
+    if (id) {
+      const fromScenes = scenes.find((s) => s.id === id)?.suggestedPrompts;
+      if (fromScenes?.length) return fromScenes;
+    }
+    return local;
+  }, [selectedScene, scenes, uiLang]);
+  const welcomeTutorialSteps = useMemo(() => getTutorialSteps(uiLang), [uiLang]);
+  const uiFont = getUiFont(uiLang);
+  const modeLabelFor = (m: ExperimentMode) =>
+    t(uiLang, m === "full" ? "chat.multi" : m === "limited" ? "chat.multi2" : "chat.single");
 
   useEffect(() => {
     if (!auth?.token) {
@@ -1929,6 +2177,13 @@ export default function Chat() {
 
   useEffect(() => { if (!getAuth()?.token) navigate("/"); }, [navigate]);
 
+  // Multi-2 is admin-only — bounce non-admins off limited mode
+  useEffect(() => {
+    if (!isAdmin && experimentMode === "limited") {
+      setExperimentMode("full");
+    }
+  }, [isAdmin, experimentMode]);
+
   // Restore past rooms from SQLite after re-login
   useEffect(() => {
     if (!getAuth()?.token) return;
@@ -1984,11 +2239,8 @@ export default function Chat() {
                 settings: {
                   agentNames: { ...DEFAULT_AGENT_NAMES },
                   agentBackendNames: { ...DEFAULT_AGENT_NAMES },
-                  agentSettings: {
-                    A: defaultSetting("A"),
-                    B: defaultSetting("B"),
-                    C: defaultSetting("C"),
-                  },
+                  agentSettings: blankAgentSettings(),
+                  activeAgentKeys: [...DEFAULT_ACTIVE_AGENT_KEYS],
                   limitedSelectedAgents: [...LIMITED_DEFAULT_SELECTED],
                   selectedScene: scenes.find((s) => s.id === r.scenario_type) || null,
                   maxAgentTurns,
@@ -2099,6 +2351,110 @@ export default function Chat() {
 
   useEffect(() => { agentNamesRef.current = agentNames; }, [agentNames]);
   useEffect(() => { agentSettingsRef.current = agentSettings; }, [agentSettings]);
+  useEffect(() => { activeAgentKeysRef.current = activeAgentKeys; }, [activeAgentKeys]);
+
+  const syncRosterToBackend = useCallback(async (
+    keys: AgentKey[],
+    names: Record<AgentKey, string>,
+    settings: Record<AgentKey, AgentCustomSetting>,
+  ) => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return true;
+    const mode = currentConv?.settings?.mode ?? experimentMode;
+    if (mode === "limited") return true;
+    try {
+      const res = await fetch(`${API_BASE}/roster`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+        },
+        body: JSON.stringify({
+          room_id: roomId,
+          mode,
+          agents: buildStartAgentsPayload(
+            keys,
+            names,
+            settings,
+            selectedScene?.id || currentConv?.settings?.selectedScene?.id,
+          ),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.warn("roster sync failed", data);
+        return false;
+      }
+      const apiAgents = (data as { agents?: Array<{ key?: string; name?: string; stance?: string; hint?: string; decision?: string; emotion?: string }> }).agents || [];
+      if (apiAgents.length > 0) {
+        const apiKeys = apiAgents.map((a) => a.key as AgentKey).filter((k) => ALL_AGENT_KEYS.includes(k));
+        setActiveAgentKeys(apiKeys);
+        activeAgentKeysRef.current = apiKeys;
+        setAgentNames((prev) => {
+          const next = { ...prev };
+          apiAgents.forEach((a) => {
+            const k = a.key as AgentKey;
+            if (k && a.name) next[k] = a.name;
+          });
+          return next;
+        });
+        setAgentSettings((prev) => {
+          const next = cloneAgentSettings(prev);
+          apiAgents.forEach((a) => {
+            const k = a.key as AgentKey;
+            if (!k || !next[k]) return;
+            if (a.stance) next[k].stance = a.stance;
+            if (typeof a.hint === "string") next[k].hint = a.hint;
+            if (a.decision) next[k].decisionBlock = a.decision as AgentCustomSetting["decisionBlock"];
+            if (a.emotion) next[k].emotionTag = String(a.emotion).toLowerCase();
+          });
+          return next;
+        });
+      }
+      return true;
+    } catch (e) {
+      console.warn("roster sync error", e);
+      return false;
+    }
+  }, [currentConv?.roomId, currentConv?.settings?.mode, currentConv?.settings?.selectedScene?.id, experimentMode, auth?.token, selectedScene?.id]);
+
+  const addAgent = useCallback(() => {
+    if (experimentMode === "single" || experimentMode === "limited") return;
+    setActiveAgentKeys((prev) => {
+      if (prev.length >= MAX_ROSTER_AGENTS) return prev;
+      const nextKey = nextFreeAgentKey(prev);
+      if (!nextKey) return prev;
+      const next = [...prev, nextKey];
+      const sceneId = selectedScene?.id || currentConv?.settings?.selectedScene?.id;
+      const seeded = {
+        ...defaultSetting(nextKey),
+        stance: defaultStanceForKey(sceneId, nextKey, next),
+      };
+      const nextNames = { ...agentNamesRef.current, [nextKey]: backendLabelForKey(nextKey) };
+      const nextSettings = { ...agentSettingsRef.current, [nextKey]: seeded };
+      setAgentNames(nextNames);
+      setAgentSettings(nextSettings);
+      agentNamesRef.current = nextNames;
+      agentSettingsRef.current = nextSettings;
+      activeAgentKeysRef.current = next;
+      setCustomizerInitialAgent(nextKey);
+      setShowCustomizer(true);
+      void syncRosterToBackend(next, nextNames, nextSettings);
+      return next;
+    });
+  }, [experimentMode, selectedScene?.id, currentConv?.settings?.selectedScene?.id, syncRosterToBackend]);
+
+  const removeAgent = useCallback((key: AgentKey) => {
+    if (experimentMode === "single" || experimentMode === "limited") return;
+    setActiveAgentKeys((prev) => {
+      if (prev.length <= MIN_ROSTER_AGENTS) return prev;
+      if (!prev.includes(key)) return prev;
+      const next = prev.filter((k) => k !== key);
+      activeAgentKeysRef.current = next;
+      void syncRosterToBackend(next, agentNamesRef.current, agentSettingsRef.current);
+      return next;
+    });
+  }, [experimentMode, syncRosterToBackend]);
 
   useEffect(() => {
     if (welcomeTutorialStep === null || currentConv) return;
@@ -2241,12 +2597,12 @@ export default function Chat() {
     const text = inputValue.trim();
     if (!text || isLoading) return;
     if (!currentConvId && !selectedScene) {
-      setSessionCreateError("Select a scene first — do not start without choosing your scenario.");
+      setSessionCreateError(t(uiLang, "err.selectScene"));
       openSceneSelector();
       return;
     }
     if (!currentConvId && experimentMode === "limited" && limitedSelectedAgents.length !== 3) {
-      setSessionCreateError("Limited mode requires selecting exactly 3 agents.");
+      setSessionCreateError(t(uiLang, "err.limited3"));
       return;
     }
     setSessionCreateError(null);
@@ -2259,19 +2615,19 @@ export default function Chat() {
     const isNewConv = !convId;
     let nextNamesForConv: Record<AgentKey, string> = { ...agentNamesRef.current };
     let nextBackendNamesForConv: Record<AgentKey, string> = { ...agentBackendNames };
-    let nextSettingsForConv: Record<AgentKey, AgentCustomSetting> = {
-      A: { ...agentSettingsRef.current.A },
-      B: { ...agentSettingsRef.current.B },
-      C: { ...agentSettingsRef.current.C },
-    };
+    let nextSettingsForConv: Record<AgentKey, AgentCustomSetting> = cloneAgentSettings(agentSettingsRef.current);
+    let nextActiveKeys: AgentKey[] = normalizeActiveKeys(
+      experimentMode === "single" ? ["A"] : activeAgentKeysRef.current,
+      experimentMode,
+    );
 
     if (!convId) {
       if (isAgora2SceneId(selectedScene?.id) && (!userProfile || !agora2Intake)) {
         if (!userProfile) {
-          setSessionCreateError("Complete your profile before chatting.");
+          setSessionCreateError(t(uiLang, "err.profile"));
           setShowProfileModal(true);
         } else {
-          setSessionCreateError("Complete session intake for this scene before chatting.");
+          setSessionCreateError(t(uiLang, "err.intake"));
           if (selectedScene) setPendingIntakeScene(selectedScene);
         }
         setInputValue(text);
@@ -2289,13 +2645,20 @@ export default function Chat() {
             scene_id: selectedScene!.id,
             mode: experimentMode,
             limited_selected_agent_keys: experimentMode === "limited" ? limitedSelectedAgents : undefined,
+            agents: experimentMode === "limited"
+              ? undefined
+              : buildStartAgentsPayload(
+                  nextActiveKeys,
+                  nextNamesForConv,
+                  nextSettingsForConv,
+                  selectedScene.id,
+                ),
             ...(isAgora2SceneId(selectedScene.id) && userProfile && agora2Intake
               ? {
                   scenario_type: selectedScene.id,
                   lang: agora2Intake.lang || uiLang,
                   profile: userProfile,
                   intake: agora2Intake.intake,
-                  hint: agora2Intake.hint || "",
                   session_update: agora2Intake.session_update || "",
                   user_id: webUserId,
                   use_demo_intake: false,
@@ -2305,14 +2668,14 @@ export default function Chat() {
         });
         const data = await res.json();
         if (!res.ok) {
-          setSessionCreateError((data?.error as string) || `Failed to create session (${res.status}). Please try again.`);
+          setSessionCreateError((data?.error as string) || t(uiLang, "err.createSession"));
           setInputValue(text);
           setIsLoading(false);
           return;
         }
         roomId = data.room_id || "";
         if (!roomId) {
-          setSessionCreateError("No room_id from server. Please try again.");
+          setSessionCreateError(t(uiLang, "err.noRoom"));
           setInputValue(text);
           setIsLoading(false);
           return;
@@ -2321,9 +2684,11 @@ export default function Chat() {
         // Apply agent defaults from info.jsonl (decision, emotion)
         const agentsFromApi = data.agents || [];
         if (agentsFromApi.length > 0) {
+          const apiKeys: AgentKey[] = [];
           agentsFromApi.forEach((a: { key?: string; pool_key?: string; name?: string; decision?: string; emotion?: string; role?: string }) => {
             const k = a.key as AgentKey;
-            if (k && (k === "A" || k === "B" || k === "C")) {
+            if (k && ALL_AGENT_KEYS.includes(k)) {
+              apiKeys.push(k);
               const defaultCfg = defaultSetting(k);
               const shouldApplyApiBehaviorDefaults =
                 experimentMode !== "full" ||
@@ -2332,10 +2697,14 @@ export default function Chat() {
                   nextSettingsForConv[k].decisionBlock === defaultCfg.decisionBlock
                 );
               if (a.name) nextBackendNamesForConv[k] = a.name;
+              if (experimentMode === "full" && a.name) {
+                nextNamesForConv[k] = a.name;
+              }
               if (experimentMode === "limited") {
                 const profile = LIMITED_AGENT_POOL.find((p) => p.key === (a.pool_key as AgentPoolKey));
                 nextNamesForConv[k] = profile?.defaultName || a.name || nextNamesForConv[k];
               }
+              const apiAgent = a as { stance?: string; hint?: string; decision?: string; emotion?: string; role?: string; pool_key?: string; name?: string };
               nextSettingsForConv[k] = {
                 ...nextSettingsForConv[k],
                 decisionBlock: shouldApplyApiBehaviorDefaults
@@ -2350,22 +2719,39 @@ export default function Chat() {
                 accentColor: experimentMode === "limited"
                   ? (LIMITED_POOL_ACCENT_MAP[(a.pool_key as AgentPoolKey) || "A"] || nextSettingsForConv[k].accentColor)
                   : nextSettingsForConv[k].accentColor,
+                stance: apiAgent.stance || nextSettingsForConv[k].stance,
+                hint: typeof apiAgent.hint === "string" ? apiAgent.hint : nextSettingsForConv[k].hint,
               };
             }
           });
+          if (apiKeys.length > 0) {
+            nextActiveKeys = normalizeActiveKeys(apiKeys, experimentMode);
+          }
           setAgentNames(nextNamesForConv);
           setAgentBackendNames(nextBackendNamesForConv);
           setAgentSettings(nextSettingsForConv);
+          setActiveAgentKeys(nextActiveKeys);
+          activeAgentKeysRef.current = nextActiveKeys;
         }
       } catch {
-        setSessionCreateError(backendOnline ? "Failed to create session. Please try again." : "Backend is not running. Start with: python app.py");
+        setSessionCreateError(backendOnline ? t(uiLang, "err.createSession") : t(uiLang, "err.backendDown"));
         setInputValue(text);
         setIsLoading(false);
         return;
       }
       const newConv: Conversation = {
         id: `conv-${Date.now()}`, roomId, title: text.length > 48 ? text.slice(0, 48) + "…" : text, preview: text, timestamp: "just now", messages: [userMsg],
-        settings: { agentNames: nextNamesForConv, agentBackendNames: nextBackendNamesForConv, agentSettings: nextSettingsForConv, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap, mode: experimentMode },
+        settings: {
+          agentNames: nextNamesForConv,
+          agentBackendNames: nextBackendNamesForConv,
+          agentSettings: nextSettingsForConv,
+          activeAgentKeys: nextActiveKeys,
+          limitedSelectedAgents,
+          selectedScene,
+          maxAgentTurns,
+          maxUserGap,
+          mode: experimentMode,
+        },
       };
       setConversations((prev) => [newConv, ...prev]);
       convId = newConv.id;
@@ -2380,16 +2766,19 @@ export default function Chat() {
       ? nextSettingsForConv
       : agentSettingsRef.current;
     const agentEmotionOverrides: Record<string, string> = {};
-    const additionalRules: Record<string, string> = {};
     const agentDecisionBlock: Record<string, string> = {};
     const useNeutral = activeMode === "limited" || activeMode === "single";
     if (useNeutral) {
       if (activeMode === "single") agentDecisionBlock["A"] = "Rational";
     } else {
-      AGENT_KEYS.forEach((k) => {
-        if (requestAgentSettings[k].emotionOn && requestAgentSettings[k].emotionTag) agentEmotionOverrides[k] = requestAgentSettings[k].emotionTag!;
-        if (requestAgentSettings[k].additionalPrompt) additionalRules[k] = requestAgentSettings[k].additionalPrompt;
-        agentDecisionBlock[k] = requestAgentSettings[k].decisionBlock;
+      const rosterKeys = isNewConv
+        ? nextActiveKeys
+        : normalizeActiveKeys(currentConv?.settings?.activeAgentKeys || activeAgentKeysRef.current, activeMode);
+      rosterKeys.forEach((k) => {
+        const cfg = requestAgentSettings[k];
+        if (!cfg) return;
+        if (cfg.emotionOn && cfg.emotionTag) agentEmotionOverrides[k] = cfg.emotionTag;
+        agentDecisionBlock[k] = cfg.decisionBlock;
       });
     }
 
@@ -2407,7 +2796,6 @@ export default function Chat() {
           emotion_tag: null,
           emotion_target: null,
           agent_emotion_overrides: agentEmotionOverrides,
-          additional_rules: additionalRules,
           agent_decision_block: agentDecisionBlock,
           max_agent_turns_before_user: maxTurns,
           max_user_gap: maxUserGap,
@@ -2435,13 +2823,20 @@ export default function Chat() {
           scene_id: sceneForRecreate.id,
           mode: activeMode,
           limited_selected_agent_keys: activeMode === "limited" ? limitedSelectedAgents : undefined,
+          agents: activeMode === "limited"
+            ? undefined
+            : buildStartAgentsPayload(
+                normalizeActiveKeys(currentConv?.settings?.activeAgentKeys || activeAgentKeysRef.current, activeMode),
+                agentNamesRef.current,
+                agentSettingsRef.current,
+                sceneForRecreate.id,
+              ),
           ...(isAgora2SceneId(sceneForRecreate.id) && userProfile && agora2Intake
             ? {
                 scenario_type: sceneForRecreate.id,
                 lang: agora2Intake.lang || uiLang,
                 profile: userProfile,
                 intake: agora2Intake.intake,
-                hint: agora2Intake.hint || "",
                 session_update: agora2Intake.session_update || "",
                 user_id: webUserId,
                 use_demo_intake: false,
@@ -2460,7 +2855,7 @@ export default function Chat() {
       if (!res.ok && String((data as { error?: string })?.error || "").includes("Invalid room_id")) {
         const newRoom = await recreateRoom();
         if (!newRoom) {
-          throw new Error("Session expired after server restart. Re-select the scene and try again.");
+          throw new Error(t(uiLang, "err.sessionExpired"));
         }
         roomId = newRoom;
         setConversations((prev) =>
@@ -2500,8 +2895,8 @@ export default function Chat() {
       }
     } catch (err) {
       setTypingKeys([]);
-      const detail = err instanceof Error && err.message ? err.message : "Something went wrong. Please try again.";
-      const errMsg: Message = { id: `msg-err-${Date.now()}`, role: "agent", content: backendOnline ? detail : "Backend is not running. Start with: python app.py", timestamp: Date.now() };
+      const detail = err instanceof Error && err.message ? err.message : t(uiLang, "err.generic");
+      const errMsg: Message = { id: `msg-err-${Date.now()}`, role: "agent", content: backendOnline ? detail : t(uiLang, "err.backendDown"), timestamp: Date.now() };
       setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, messages: [...c.messages, errMsg] } : c));
     } finally {
       setIsLoading(false);
@@ -2520,9 +2915,11 @@ export default function Chat() {
       const runtimeBackendNames: Partial<Record<AgentKey, string>> = {};
       const runtimeNames: Partial<Record<AgentKey, string>> = {};
       const modeForHistory: ExperimentMode = currentConv?.settings?.mode ?? experimentMode;
+      const histKeys: AgentKey[] = [];
       (data.active_agents || []).forEach((a: { key?: string; name?: string }) => {
         const k = a.key as AgentKey;
-        if ((k === "A" || k === "B" || k === "C") && a.name) {
+        if (k && ALL_AGENT_KEYS.includes(k) && a.name) {
+          histKeys.push(k);
           runtimeMap[a.name] = k;
           runtimeBackendNames[k] = a.name;
           if (modeForHistory !== "limited") {
@@ -2530,6 +2927,11 @@ export default function Chat() {
           }
         }
       });
+      if (histKeys.length > 0) {
+        const normalized = normalizeActiveKeys(histKeys, modeForHistory);
+        setActiveAgentKeys(normalized);
+        activeAgentKeysRef.current = normalized;
+      }
       if (Object.keys(runtimeNames).length > 0) {
         setAgentNames((prev) => ({ ...prev, ...runtimeNames }));
       }
@@ -2572,7 +2974,7 @@ export default function Chat() {
       const res = await fetch(`${API_BASE}/export-logs/${currentConv.roomId}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert((err as { error?: string }).error || "Export failed");
+        alert((err as { error?: string }).error || t(uiLang, "err.export"));
         return;
       }
       const blob = await res.blob();
@@ -2583,7 +2985,7 @@ export default function Chat() {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      alert("Export failed — is the backend running?");
+      alert(t(uiLang, "err.exportBackend"));
     }
   };
 
@@ -2600,12 +3002,12 @@ export default function Chat() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setSummaryError((data as { error?: string }).error || "Could not generate summary");
+        setSummaryError((data as { error?: string }).error || t(uiLang, "err.summary"));
         return;
       }
       setSummaryByRoom((prev) => ({ ...prev, [roomId]: (data as { markdown?: string }).markdown || "" }));
     } catch {
-      setSummaryError("Summary failed — is the backend running?");
+      setSummaryError(t(uiLang, "err.summaryBackend"));
     } finally {
       setSummaryLoading(false);
     }
@@ -2613,6 +3015,8 @@ export default function Chat() {
 
   /** Open panel only — API runs when user presses Generate. */
   const handleOpenSummary = () => {
+    const mode = currentConv?.settings?.mode ?? experimentMode;
+    if (mode === "single") return;
     setSummaryError(null);
     setSummaryLoading(false);
     setSummaryOpen(true);
@@ -2621,7 +3025,8 @@ export default function Chat() {
   const defaultConvSettings = (mode: ExperimentMode = "full"): ConvSettings => ({
     agentNames: { ...DEFAULT_AGENT_NAMES },
     agentBackendNames: { ...DEFAULT_AGENT_NAMES },
-    agentSettings: { A: defaultSetting("A"), B: defaultSetting("B"), C: defaultSetting("C") },
+    agentSettings: blankAgentSettings(),
+    activeAgentKeys: mode === "single" ? ["A"] : [...DEFAULT_ACTIVE_AGENT_KEYS],
     limitedSelectedAgents: [...LIMITED_DEFAULT_SELECTED],
     selectedScene: null,
     maxAgentTurns: 5,
@@ -2632,29 +3037,44 @@ export default function Chat() {
   const getConvSettings = (conv: Conversation | null): ConvSettings => {
     const def = defaultConvSettings(experimentMode);
     if (!conv?.settings) return def;
-    return { ...def, ...conv.settings, mode: conv.settings.mode ?? "full" };
+    const mode = conv.settings.mode ?? "full";
+    return {
+      ...def,
+      ...conv.settings,
+      mode,
+      activeAgentKeys: normalizeActiveKeys(conv.settings.activeAgentKeys, mode),
+      agentSettings: cloneAgentSettings(conv.settings.agentSettings || {}),
+    };
   };
 
   const saveCurrentConvSettings = useCallback(() => {
     if (!currentConvId) return;
     const existingMode = currentConv?.settings?.mode ?? "full";
-    const s: ConvSettings = { agentNames, agentBackendNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap, mode: existingMode };
+    const s: ConvSettings = {
+      agentNames,
+      agentBackendNames,
+      agentSettings,
+      activeAgentKeys,
+      limitedSelectedAgents,
+      selectedScene,
+      maxAgentTurns,
+      maxUserGap,
+      mode: existingMode,
+    };
     setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, settings: s } : c));
-  }, [currentConvId, currentConv?.settings?.mode, experimentMode, agentNames, agentBackendNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap]);
+  }, [currentConvId, currentConv?.settings?.mode, experimentMode, agentNames, agentBackendNames, agentSettings, activeAgentKeys, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap]);
 
   const loadConvSettings = useCallback((conv: Conversation | null) => {
     const s = getConvSettings(conv);
-    setAgentNames(s.agentNames);
-    setAgentBackendNames(s.agentBackendNames || { ...DEFAULT_AGENT_NAMES });
-    const merged = (k: AgentKey) => ({ ...defaultSetting(k), ...s.agentSettings[k] });
-    const mergedSettings = { A: merged("A"), B: merged("B"), C: merged("C") };
+    setAgentNames({ ...DEFAULT_AGENT_NAMES, ...s.agentNames });
+    setAgentBackendNames({ ...DEFAULT_AGENT_NAMES, ...(s.agentBackendNames || {}) });
+    const mergedSettings = cloneAgentSettings(s.agentSettings);
     setAgentSettings(mergedSettings);
-    agentNamesRef.current = { ...s.agentNames };
-    agentSettingsRef.current = {
-      A: { ...mergedSettings.A },
-      B: { ...mergedSettings.B },
-      C: { ...mergedSettings.C },
-    };
+    const keys = normalizeActiveKeys(s.activeAgentKeys, s.mode);
+    setActiveAgentKeys(keys);
+    agentNamesRef.current = { ...DEFAULT_AGENT_NAMES, ...s.agentNames };
+    agentSettingsRef.current = cloneAgentSettings(mergedSettings);
+    activeAgentKeysRef.current = keys;
     setLimitedSelectedAgents(normalizeLimitedSelection(s.limitedSelectedAgents || LIMITED_DEFAULT_SELECTED));
     setSelectedScene(s.selectedScene);
     setMaxAgentTurns(s.maxAgentTurns);
@@ -2673,11 +3093,13 @@ export default function Chat() {
 
   useEffect(() => {
     if (currentConvId) saveCurrentConvSettings();
-  }, [agentNames, agentBackendNames, agentSettings, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap]);
+  }, [agentNames, agentBackendNames, agentSettings, activeAgentKeys, limitedSelectedAgents, selectedScene, maxAgentTurns, maxUserGap]);
 
   const handleNewChat = () => {
     setCurrentConvId(null);
     loadConvSettings(null);
+    setActiveAgentKeys([...DEFAULT_ACTIVE_AGENT_KEYS]);
+    activeAgentKeysRef.current = [...DEFAULT_ACTIVE_AGENT_KEYS];
     setTypingKeys([]);
     setMsgQueue([]);
     setSidebarOpen(false);
@@ -2821,12 +3243,12 @@ export default function Chat() {
         setCustomizerInitialAgent(null);
         return 5;
       }
-      if (prev >= WELCOME_TUTORIAL_STEPS.length - 1) {
+      if (prev >= welcomeTutorialSteps.length - 1) {
         return null;
       }
       return prev + 1;
     });
-  }, [shouldGuideThroughCustomizer]);
+  }, [shouldGuideThroughCustomizer, welcomeTutorialSteps.length]);
 
   const rewindWelcomeTutorial = useCallback(() => {
     setWelcomeTutorialStep((prev) => {
@@ -2848,7 +3270,7 @@ export default function Chat() {
     welcomeTutorialStep === 1 && !shouldGuideThroughCustomizer
       ? "In limited mode, choose exactly three preset agents first. After that, the guide moves on to prompts and chat controls."
       : welcomeTutorialStep !== null
-        ? WELCOME_TUTORIAL_STEPS[welcomeTutorialStep].body
+        ? welcomeTutorialSteps[welcomeTutorialStep].body
         : "";
   const guideGradientPalette = DEFAULT_GUIDE_GRADIENT;
 
@@ -2857,19 +3279,30 @@ export default function Chat() {
     <div className="h-screen bg-white flex overflow-hidden">
       <AnimatePresence>
         {showCustomizer && (
-          <CustomizerModal agentNames={agentNames} agentSettings={agentSettings} experimentMode={currentConv?.settings?.mode ?? experimentMode}
+          <CustomizerModal
+            agentNames={agentNames}
+            agentSettings={agentSettings}
+            experimentMode={currentConv?.settings?.mode ?? experimentMode}
+            agentKeys={
+              (currentConv?.settings?.mode ?? experimentMode) === "single"
+                ? ["A"]
+                : (currentConv?.settings?.activeAgentKeys || activeAgentKeys)
+            }
+            scenarioId={selectedScene?.id || currentConv?.settings?.selectedScene?.id || null}
+            uiLang={uiLang}
             onSave={(names, settings) => {
               const mode = currentConv?.settings?.mode ?? experimentMode;
+              const roster = mode === "single" ? (["A"] as AgentKey[]) : (currentConv?.settings?.activeAgentKeys || activeAgentKeys);
               if (mode === "full" && currentConv?.roomId) {
-                const agentFullNames: Record<AgentKey, string> = { A: "ChatbotA", B: "ChatbotB", C: "ChatbotC" };
                 const changes: Array<{ type: string; agent: string; before: string | null; after: string | null }> = [];
-                AGENT_KEYS.forEach((k) => {
-                  const agent = agentFullNames[k];
+                roster.forEach((k) => {
+                  const agent = backendLabelForKey(k);
                   if (names[k] !== agentNames[k]) changes.push({ type: "agent_name", agent, before: agentNames[k] ?? null, after: names[k] ?? null });
                   if (settings[k]?.accentColor !== agentSettings[k]?.accentColor) changes.push({ type: "accent_color", agent, before: agentSettings[k]?.accentColor ?? null, after: settings[k]?.accentColor ?? null });
                   if (settings[k]?.emotionOn !== agentSettings[k]?.emotionOn || settings[k]?.emotionTag !== agentSettings[k]?.emotionTag) changes.push({ type: "emotion", agent, before: agentSettings[k]?.emotionTag ?? null, after: settings[k]?.emotionTag ?? null });
                   if (settings[k]?.decisionBlock !== agentSettings[k]?.decisionBlock) changes.push({ type: "decision", agent, before: agentSettings[k]?.decisionBlock ?? null, after: settings[k]?.decisionBlock ?? null });
-                  if ((settings[k]?.additionalPrompt ?? "") !== (agentSettings[k]?.additionalPrompt ?? "")) changes.push({ type: "additional_prompt", agent, before: agentSettings[k]?.additionalPrompt ?? null, after: settings[k]?.additionalPrompt ?? null });
+                  if ((settings[k]?.stance ?? null) !== (agentSettings[k]?.stance ?? null)) changes.push({ type: "stance", agent, before: agentSettings[k]?.stance ?? null, after: settings[k]?.stance ?? null });
+                  if ((settings[k]?.hint ?? "") !== (agentSettings[k]?.hint ?? "")) changes.push({ type: "hint", agent, before: agentSettings[k]?.hint ?? null, after: settings[k]?.hint ?? null });
                 });
               if (changes.length > 0) {
                   fetch(`${API_BASE}/log-param-change`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }) }).catch(() => {});
@@ -2878,7 +3311,8 @@ export default function Chat() {
               setAgentNames(names);
               setAgentSettings(settings);
               agentNamesRef.current = { ...names };
-              agentSettingsRef.current = { A: { ...settings.A }, B: { ...settings.B }, C: { ...settings.C } };
+              agentSettingsRef.current = cloneAgentSettings(settings);
+              void syncRosterToBackend(roster, names, settings);
             }}
             onClose={() => {
               setShowCustomizer(false);
@@ -2971,7 +3405,6 @@ export default function Chat() {
                   scenes={scenes}
                   selectedScene={selectedScene}
                   lang={uiLang}
-                  onLangChange={setUiLang}
                   onSelect={(s) => {
                     if (isAgora2SceneId(s.id)) {
                       void beginAgora2Scene(s);
@@ -3017,6 +3450,7 @@ export default function Chat() {
             setMutedColor={appearance.setMutedColor}
             reset={appearance.reset}
             defaultColor={appearance.defaultColor}
+            lang={uiLang}
           />
         )}
       </AnimatePresence>
@@ -3039,25 +3473,34 @@ export default function Chat() {
         <div className="px-3 pt-4 pb-2 flex-shrink-0">
           <button onClick={handleNewChat} className="w-full h-[40px] border border-black/20 rounded-[8px] flex items-center justify-center gap-2 hover:bg-black hover:text-white hover:border-black transition-all duration-200 group">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1V11M1 6H11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            <span className="text-[12px]" style={monoFont}>new chat</span>
+            <span className="text-[12px]" style={uiFont}>{t(uiLang, "chat.newChat")}</span>
           </button>
         </div>
         {!currentConvId && (
           <div className="px-3 py-3 border-b border-black/8 flex-shrink-0">
-            <p className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest mb-2" style={monoFont}>MODE</p>
+            <p className={`text-[10px] text-[var(--app-muted-text)] mb-2 ${labelCaseClass(uiLang)}`} style={uiFont}>{t(uiLang, "chat.mode")}</p>
             <div className="flex flex-col gap-1.5">
-              {(["full", "limited", "single"] as const).map((m) => (
+              {(["full", "limited", "single"] as const)
+                .filter((m) => m !== "limited" || isAdmin)
+                .map((m) => (
                 <button
                   key={m}
-                  onClick={() => setExperimentMode(m)}
+                  onClick={() => {
+                    setExperimentMode(m);
+                    if (m === "single") {
+                      setActiveAgentKeys(["A"]);
+                      activeAgentKeysRef.current = ["A"];
+                    } else if (m === "full" && (experimentMode === "single" || activeAgentKeys.length < MIN_ROSTER_AGENTS)) {
+                      setActiveAgentKeys([...DEFAULT_ACTIVE_AGENT_KEYS]);
+                      activeAgentKeysRef.current = [...DEFAULT_ACTIVE_AGENT_KEYS];
+                    }
+                  }}
                   className={`w-full text-left px-3 py-2 rounded-[6px] text-[11px] transition-colors border ${
                     experimentMode === m ? "bg-black text-white border-black" : "border-black/10 hover:bg-black/5"
                   }`}
-                  style={monoFont}
+                  style={uiFont}
                 >
-                  {m === "full" && "Multi-1"}
-                  {m === "limited" && "Multi-2"}
-                  {m === "single" && "Single"}
+                  {modeLabelFor(m)}
                 </button>
               ))}
             </div>
@@ -3065,10 +3508,10 @@ export default function Chat() {
         )}
         <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 min-h-0 min-w-0">
           {conversations.length === 0 ? (
-            <p className="text-center text-[var(--app-muted-text)] text-[11px] mt-8" style={monoFont}>no conversations yet</p>
+            <p className="text-center text-[var(--app-muted-text)] text-[11px] mt-8" style={uiFont}>{t(uiLang, "chat.noConversations")}</p>
           ) : (
             <div className="flex flex-col gap-1">
-              {conversations.map((conv) => <ConvItem key={conv.id} conv={conv} isActive={conv.id === currentConvId} onSelectConv={handleSelectConv} />)}
+              {conversations.map((conv) => <ConvItem key={conv.id} conv={conv} isActive={conv.id === currentConvId} onSelectConv={handleSelectConv} lang={uiLang} />)}
             </div>
           )}
         </div>
@@ -3078,6 +3521,7 @@ export default function Chat() {
               <UserMenu
                 nickname={nickname}
                 isAdmin={isAdmin}
+                lang={uiLang}
                 onAccount={() => {
                   const s = selectedScene && isAgora2SceneId(selectedScene.id) ? selectedScene : null;
                   if (s) {
@@ -3097,7 +3541,7 @@ export default function Chat() {
           <button onClick={() => setUserMenuOpen((v) => !v)} className="w-full flex items-center gap-2 px-3 py-4 border-t border-black/8 hover:bg-black/3 transition-colors">
             <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500 flex-shrink-0" />
             <span className="flex-1 text-left text-[11px] text-[var(--app-muted-text)] truncate" style={monoFont}>{(nickname || "you").toUpperCase()}</span>
-            {!backendOnline && <span className="text-[9px] text-amber-400 flex-shrink-0" style={monoFont}>offline</span>}
+            {!backendOnline && <span className="text-[9px] text-amber-400 flex-shrink-0" style={uiFont}>{t(uiLang, "chat.offline")}</span>}
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2" className="opacity-30 flex-shrink-0"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </div>
@@ -3117,19 +3561,19 @@ export default function Chat() {
               <AnimatedGuideFrame active palette={guideGradientPalette} rounded="rounded-[14px]" inset="inset-0" fillColor={GUIDE_FRAME_FILL} pulse />
               <div className="relative z-10">
                   <div className="flex items-center justify-between gap-3 mb-2">
-                    <p className="text-[11px] tracking-widest text-black uppercase" style={monoFont}>
-                      {welcomeTutorialStep + 1}/{WELCOME_TUTORIAL_STEPS.length} · {WELCOME_TUTORIAL_STEPS[welcomeTutorialStep].title}
+                    <p className={`text-[11px] text-black ${labelCaseClass(uiLang)}`} style={uiFont}>
+                      {welcomeTutorialStep + 1}/{welcomeTutorialSteps.length} · {welcomeTutorialSteps[welcomeTutorialStep].title}
                     </p>
                     <button
                       type="button"
                       onClick={dismissWelcomeGuide}
                       className="text-[10px] text-[var(--app-muted-text)] hover:text-black transition-colors"
-                      style={monoFont}
+                      style={uiFont}
                     >
-                      skip
+                      {t(uiLang, "tutorial.skip")}
                     </button>
                   </div>
-                  <p className="text-[12px] text-black/75 leading-relaxed" style={monoFont}>
+                  <p className="text-[12px] text-black/75 leading-relaxed" style={uiFont}>
                     {currentWelcomeTutorialBody}
                   </p>
                   <div className="flex items-center justify-between mt-4">
@@ -3138,17 +3582,21 @@ export default function Chat() {
                       onClick={rewindWelcomeTutorial}
                       disabled={welcomeTutorialStep === 0}
                       className="px-3 py-2 rounded-[10px] border border-black/10 text-[11px] text-[var(--app-muted-text)] hover:text-black hover:border-black/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      style={monoFont}
+                      style={uiFont}
                     >
-                      back
+                      {t(uiLang, "tutorial.back")}
                     </button>
                     <button
                       type="button"
                       onClick={welcomeTutorialStep === 1 && shouldGuideThroughCustomizer ? () => openCustomizerTutorial("A") : advanceWelcomeTutorial}
                       className="px-3 py-2 rounded-[10px] bg-black text-white text-[11px] hover:bg-neutral-800 transition-colors"
-                      style={monoFont}
+                      style={uiFont}
                     >
-                      {welcomeTutorialStep === 1 && shouldGuideThroughCustomizer ? "open" : welcomeTutorialStep === WELCOME_TUTORIAL_STEPS.length - 1 ? "done" : "next"}
+                      {welcomeTutorialStep === 1 && shouldGuideThroughCustomizer
+                        ? t(uiLang, "tutorial.open")
+                        : welcomeTutorialStep === welcomeTutorialSteps.length - 1
+                          ? t(uiLang, "tutorial.done")
+                          : t(uiLang, "tutorial.next")}
                     </button>
                   </div>
               </div>
@@ -3164,24 +3612,56 @@ export default function Chat() {
             {currentConv ? (
               <span className="text-[13px] text-black/70 truncate" style={monoFont}>{currentConv.title}</span>
             ) : (
-              <span className="text-[13px] text-[var(--app-muted-text)]" style={monoFont}>new conversation_</span>
+              <span className="text-[13px] text-[var(--app-muted-text)]" style={uiFont}>{t(uiLang, "chat.newConversation")}</span>
             )}
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">
             {currentConv && (
-              <div className="flex items-center gap-1.5 pr-3 border-r border-black/10" style={monoFont}>
-                <span className="text-[10px] text-[var(--app-muted-text)] uppercase tracking-widest">Turn {currentConv.messages?.filter((m) => m.role === "user").length ?? 0}</span>
+              <div className="flex items-center gap-1.5 pr-3 border-r border-black/10" style={uiFont}>
+                <span className={`text-[10px] text-[var(--app-muted-text)] ${labelCaseClass(uiLang)}`}>{t(uiLang, "chat.turnN", { n: currentConv.messages?.filter((m) => m.role === "user").length ?? 0 })}</span>
                 {showPhaseIndicator && currentPhase && (
-                  <span className="text-[10px] text-[var(--app-muted-text)]">· Phase: {currentPhase}</span>
+                  <span className="text-[10px] text-[var(--app-muted-text)]">{t(uiLang, "chat.phase", { phase: phaseLabel(uiLang, currentPhase) })}</span>
                 )}
               </div>
             )}
-            {(currentConv?.settings?.mode === "single" ? ["A"] : AGENT_KEYS).map((key) => (
-              <div key={key} className="flex items-center gap-1.5" title={agentNames[key as AgentKey]}>
+            {((currentConv?.settings?.mode ?? experimentMode) === "single"
+              ? (["A"] as AgentKey[])
+              : activeAgentKeys
+            ).map((key) => {
+              const headerMode = currentConv?.settings?.mode ?? experimentMode;
+              const canEditRoster = !!currentConv && headerMode === "full";
+              return (
+              <div key={key} className="relative group/chip flex items-center gap-1.5 pr-1" title={agentNames[key as AgentKey]}>
                 <div className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0" style={{ backgroundColor: agentSettings[key as AgentKey]?.accentColor || DEFAULT_AGENT_COLORS[key as AgentKey] }} />
                 <span className="hidden sm:block text-[10px] tracking-widest text-black" style={monoFont}>{agentNames[key as AgentKey]}</span>
+                {canEditRoster && activeAgentKeys.length > MIN_ROSTER_AGENTS && (
+                  <button
+                    type="button"
+                    aria-label={t(uiLang, "chat.removeAgent", { name: agentNames[key] })}
+                    onClick={(e) => { e.stopPropagation(); removeAgent(key); }}
+                    className="ml-0.5 w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover/chip:opacity-100 hover:bg-black/8 text-black/40 hover:text-black/70 transition-opacity"
+                  >
+                    <svg width="8" height="8" viewBox="0 0 12 12" fill="none" aria-hidden>
+                      <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                )}
               </div>
-            ))}
+              );
+            })}
+            {!!currentConv && (currentConv?.settings?.mode ?? experimentMode) === "full"
+              && activeAgentKeys.length < MAX_ROSTER_AGENTS && (
+              <button
+                type="button"
+                onClick={() => addAgent()}
+                title={t(uiLang, "chat.addAgent")}
+                className="w-6 h-6 border border-dashed border-black/20 rounded-[6px] flex items-center justify-center text-black/30 hover:text-black/60 hover:border-black/40 transition-colors"
+              >
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden>
+                  <path d="M8 1V15M1 8H15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            )}
             <div className="flex items-center gap-1.5 ml-1 pl-3 border-l border-black/10" title={nickname || "You"}>
               <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500" />
               <span className="hidden sm:block text-[10px] tracking-widest text-black" style={monoFont}>{(nickname || "You").toUpperCase()}</span>
@@ -3193,19 +3673,18 @@ export default function Chat() {
           {currentConv && chatAnnotationMode && (
             <div
               className="max-w-[680px] sm:max-w-[800px] lg:max-w-[960px] xl:max-w-[1100px] mx-auto mb-4 flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-[10px] border border-black/10 bg-white/95 text-[11px] text-neutral-700 shadow-sm"
-              style={monoFont}
+              style={uiFont}
             >
               <span>
-                Layer annotation: select text, then choose Decision, Emotion, or Scene. Press{" "}
-                <kbd className="px-1 rounded border border-black/15 bg-black/5 font-mono">x</kbd> to exit.
+                {t(uiLang, "layer.hint")}
               </span>
               <button
                 type="button"
                 onClick={clearChatAnnotations}
                 className="shrink-0 rounded-md border border-black/15 bg-black/[0.04] px-2.5 py-1 text-[11px] hover:bg-black/[0.08] transition-colors"
-                style={monoFont}
+                style={uiFont}
               >
-                Clear all
+                {t(uiLang, "layer.clearAll")}
               </button>
             </div>
           )}
@@ -3222,8 +3701,8 @@ export default function Chat() {
               <div className="flex flex-col items-center gap-4 w-full">
                 <AgoraLogo size={96} />
                 {!backendOnline && (
-                  <p className="text-center text-[11px] text-amber-500 w-full leading-relaxed border border-amber-200 bg-amber-50 px-3 py-2 rounded-[8px]" style={monoFont}>
-                    Backend offline — start with: <strong>python app.py</strong>
+                  <p className="text-center text-[11px] text-amber-500 w-full leading-relaxed border border-amber-200 bg-amber-50 px-3 py-2 rounded-[8px]" style={uiFont}>
+                    {t(uiLang, "welcome.backendOffline")}
                   </p>
                 )}
               </div>
@@ -3233,7 +3712,7 @@ export default function Chat() {
               >
                 <AnimatedGuideFrame active={isWelcomeStepActive(1)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
                 <div className="relative z-10 px-2 py-2">
-                  <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>AGENTS</p>
+                  <p className={`text-[10px] text-[var(--app-muted-text)] mb-3 text-center ${labelCaseClass(uiLang)}`} style={uiFont}>{t(uiLang, "welcome.agents")}</p>
                   {experimentMode === "limited" ? (
                     <>
                       <motion.div
@@ -3281,17 +3760,17 @@ export default function Chat() {
                           );
                         })}
                       </motion.div>
-                      <p className="text-[10px] text-center text-[var(--app-muted-text)] mt-2" style={monoFont}>Selected {limitedSelectedAgents.length}/3</p>
+                      <p className="text-[10px] text-center text-[var(--app-muted-text)] mt-2" style={uiFont}>{t(uiLang, "welcome.selectedN", { n: limitedSelectedAgents.length })}</p>
                     </>
                   ) : (
                     <motion.div
                       key={`agent-grid-${experimentMode}`}
-                      className={`grid gap-3 w-full ${experimentMode === "single" ? "grid-cols-1" : "grid-cols-2"}`}
+                      className={`grid gap-3 w-full items-stretch ${experimentMode === "single" ? "grid-cols-1" : "grid-cols-2"}`}
                       initial="hidden"
                       animate="visible"
                       variants={{ visible: { transition: { staggerChildren: 0.07, delayChildren: 0.1 } } }}
                     >
-                      {(experimentMode === "single" ? ["A"] : AGENT_KEYS).map((key) => (
+                      {(experimentMode === "single" ? (["A"] as AgentKey[]) : activeAgentKeys).map((key) => (
                         <motion.button
                           key={`${experimentMode}-${key}`}
                           variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } } }}
@@ -3305,28 +3784,51 @@ export default function Chat() {
                             setCustomizerInitialAgent(key as AgentKey);
                             setShowCustomizer(true);
                           }}
-                          className="border border-black/8 rounded-[10px] px-3 py-3 text-left transition-colors group"
+                          className="relative h-full min-h-[97px] border border-black/8 rounded-[10px] px-3 py-3 text-left transition-colors group"
                         >
-                          <div className="flex items-center gap-1.5 mb-1">
+                          {experimentMode !== "single" && activeAgentKeys.length > MIN_ROSTER_AGENTS && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              aria-label={t(uiLang, "chat.removeAgent", { name: agentNames[key] })}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeAgent(key);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  removeAgent(key);
+                                }
+                              }}
+                              className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-black/8 text-black/40 hover:text-black/70 transition-opacity"
+                            >
+                              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden>
+                                <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                              </svg>
+                            </span>
+                          )}
+                          <div className="flex items-center gap-1.5 mb-1 pr-4">
                             <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: agentSettings[key as AgentKey]?.accentColor || DEFAULT_AGENT_COLORS[key as AgentKey] }} />
                             <span className="text-[10px] tracking-widest text-black" style={monoFont}>{agentNames[key as AgentKey]}</span>
                           </div>
-                          <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{getEmotionDecisionSummary(agentSettings[key as AgentKey]?.emotionTag ?? null, agentSettings[key as AgentKey]?.decisionBlock ?? "Rational")}</p>
-                          <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>click to customize →</p>
+                          <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={uiFont}>{getEmotionDecisionSummary(agentSettings[key as AgentKey]?.emotionTag ?? null, agentSettings[key as AgentKey]?.decisionBlock ?? "Rational", uiLang)}</p>
+                          <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={uiFont}>{t(uiLang, "welcome.clickCustomize")}</p>
                         </motion.button>
                       ))}
-                      {experimentMode !== "single" && (
+                      {experimentMode !== "single" && activeAgentKeys.length < MAX_ROSTER_AGENTS && (
                         <motion.button
                           variants={{ hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } } }}
                           whileHover={{ y: -2 }}
                           whileTap={{ scale: 0.98 }}
-                          onClick={() => { setCustomizerInitialAgent(null); setShowCustomizer(true); }}
-                          className="border border-dashed border-black/15 rounded-[10px] px-3 py-3 flex flex-col items-center justify-center gap-1 hover:border-black/40 hover:bg-black/2 transition-colors group min-h-[72px]"
+                          onClick={() => addAgent()}
+                          className="h-full min-h-[97px] self-stretch border border-dashed border-black/15 rounded-[10px] px-3 py-3 flex flex-col items-center justify-center gap-1 hover:border-black/40 hover:bg-black/2 transition-colors group"
                         >
                           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="opacity-20 group-hover:opacity-50 transition-opacity">
                             <path d="M8 1V15M1 8H15" stroke="black" strokeWidth="1.5" strokeLinecap="round"/>
                           </svg>
-                          <span className="text-[9px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>customize</span>
+                          <span className="text-[9px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={uiFont}>{t(uiLang, "welcome.addAgent")}</span>
                         </motion.button>
                       )}
                     </motion.div>
@@ -3339,7 +3841,7 @@ export default function Chat() {
               >
                 <AnimatedGuideFrame active={isWelcomeStepActive(0)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
                 <div className="relative z-10 px-2 py-2">
-                  <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>SCENE</p>
+                  <p className={`text-[10px] text-[var(--app-muted-text)] mb-3 text-center ${labelCaseClass(uiLang)}`} style={uiFont}>{t(uiLang, "welcome.scene")}</p>
                   <motion.button
                     whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                     whileTap={{ scale: 0.98 }}
@@ -3348,17 +3850,17 @@ export default function Chat() {
                   >
                     <div className="flex items-center gap-1.5 mb-1">
                       <div className="w-[6px] h-[6px] rounded-[1.2px] flex-shrink-0" style={{ backgroundColor: selectedScene?.color || "#000000" }} />
-                      <span className="text-[10px] tracking-widest text-black" style={monoFont}>{selectedScene?.title || "Select a scene"}</span>
+                      <span className="text-[10px] tracking-widest text-black" style={uiFont}>{selectedScene?.title || t(uiLang, "welcome.selectScene")}</span>
                       {sessionIndex != null && (
-                        <span className="text-[9px] text-black/50 ml-1" style={monoFont}>· Session {sessionIndex}</span>
+                        <span className="text-[9px] text-black/50 ml-1" style={uiFont}>{t(uiLang, "welcome.sessionN", { n: sessionIndex })}</span>
                       )}
-                      <span className="text-[9px] text-black/40 ml-auto" style={monoFont}>{uiLang === "zh" ? "中文" : "EN"}</span>
+                      <span className="text-[9px] text-black/40 ml-auto" style={uiFont}>{uiLang === "zh" ? "中文" : "EN"}</span>
                     </div>
-                    <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={monoFont}>{selectedScene?.description || "Choose employment, parent-child, or another scenario before chatting. Nothing starts until you pick one."}</p>
-                    <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={monoFont}>
+                    <p className="text-[10px] text-[var(--app-muted-text)] group-hover:text-black/70 transition-colors" style={uiFont}>{selectedScene?.description || t(uiLang, "welcome.chooseSceneHint")}</p>
+                    <p className="text-[9px] text-[var(--app-muted-text)] mt-2 group-hover:text-black/70 transition-colors" style={uiFont}>
                       {selectedScene
-                        ? (agora2Intake ? "intake ready · click to change →" : "click to change scenario →")
-                        : "click to choose scenario →"}
+                        ? (agora2Intake ? t(uiLang, "welcome.intakeReady") : t(uiLang, "welcome.clickChange"))
+                        : t(uiLang, "welcome.clickChoose")}
                     </p>
                   </motion.button>
                 </div>
@@ -3369,11 +3871,11 @@ export default function Chat() {
               >
                 <AnimatedGuideFrame active={isWelcomeStepActive(5)} palette={guideGradientPalette} rounded="rounded-[12px]" fillColor={GUIDE_FRAME_FILL} pulse />
                 <div className="relative z-10 px-2 py-2">
-                  <p className="text-[10px] text-[var(--app-muted-text)] mb-3 text-center tracking-widest" style={monoFont}>SUGGESTED PROMPTS</p>
+                  <p className={`text-[10px] text-[var(--app-muted-text)] mb-3 text-center ${labelCaseClass(uiLang)}`} style={uiFont}>{t(uiLang, "welcome.prompts")}</p>
                   <div className="flex flex-col gap-2">
                     {suggestedPrompts.map((prompt, i) => (
                       <motion.button
-                        key={i}
+                        key={`${selectedScene?.id || "default"}-${i}`}
                         whileHover={{ y: -2, boxShadow: "0 4px 14px rgba(0,0,0,0.07)" }}
                         whileTap={{ scale: 0.98 }}
                         onClick={() => { setInputValue(prompt); inputRef.current?.focus(); }}
@@ -3443,6 +3945,7 @@ export default function Chat() {
                       chatAnnotationMode={chatAnnotationMode}
                       layerAnnotations={chatLayerAnnotations[msg.id]}
                       onChatAnnotationDraft={onChatAnnotationDraft}
+                      uiLang={uiLang}
                     />
                   );
                 });
@@ -3496,15 +3999,15 @@ export default function Chat() {
                   </span>
                 </motion.button>
                 <AnimatePresence>
-                  <AttachMenu open={attachMenuOpen} onClose={() => setAttachMenuOpen(false)} anchorRef={attachBtnRef} />
+                  <AttachMenu open={attachMenuOpen} onClose={() => setAttachMenuOpen(false)} anchorRef={attachBtnRef} lang={uiLang} />
                 </AnimatePresence>
               </div>
               <div className="flex-1 min-h-[48px] bg-black rounded-[12px] flex items-center px-4 py-3">
                 <textarea ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={handleKeyDown}
-                  placeholder="Enter a question or topic to explore..."
+                  placeholder={t(uiLang, "chat.inputPh")}
                   rows={1} disabled={isLoading}
                   className="flex-1 min-h-[24px] bg-transparent resize-none outline-none text-white placeholder-[#828282] leading-relaxed disabled:opacity-50"
-                  style={{ ...monoFont, fontSize: "13px", maxHeight: "120px" }}
+                  style={{ ...uiFont, fontSize: "13px", maxHeight: "120px" }}
                   onInput={(e) => autoResizeInput(e.currentTarget)} />
               </div>
               <motion.button onClick={handleSend} disabled={!inputValue.trim() || isLoading}
@@ -3536,13 +4039,16 @@ export default function Chat() {
                     onExportLog={handleExportLog}
                     onPastMemory={() => setShowMemoryHistory(true)}
                     hasRoomId={!!currentConv?.roomId}
-                    showPastMemory={!!selectedScene && isAgora2SceneId(selectedScene.id)}
-                    showFontColor={showFontColorInSettings} onToggleFontColor={() => setShowFontColorInSettings((v) => !v)} />
+                    showSummary={(currentConv?.settings?.mode ?? experimentMode) !== "single"}
+                    showPastMemory={!!(selectedScene || currentConv?.settings?.selectedScene) && isAgora2SceneId((selectedScene || currentConv?.settings?.selectedScene)!.id)}
+                    showFontColor={showFontColorInSettings} onToggleFontColor={() => setShowFontColorInSettings((v) => !v)}
+                    lang={uiLang}
+                    onLangChange={setLang} />
                 </AnimatePresence>
               </div>
               </div>
             </div>
-            <p className="text-center text-[10px] text-[var(--app-muted-text)] mt-2" style={monoFont}>Enter for new line · ⌘+Enter / Alt+Enter to send</p>
+            <p className="text-center text-[10px] text-[var(--app-muted-text)] mt-2" style={uiFont}>{t(uiLang, "chat.inputHint")}</p>
           </div>
         </div>
       </div>
@@ -3596,6 +4102,7 @@ export default function Chat() {
           loading={summaryLoading}
           error={summaryError}
           onGenerate={() => void fetchSessionSummary()}
+          lang={uiLang}
         />
       )}
     </AnimatePresence>

@@ -2,8 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
-
-const monoFont = { fontFamily: "'Share Tech Mono', monospace" };
+import { getUiFont, t, type UiLang } from "../i18n/ui";
 
 export function AppearanceModal({
   open,
@@ -12,6 +11,7 @@ export function AppearanceModal({
   setMutedColor,
   reset,
   defaultColor,
+  lang = "en",
 }: {
   open: boolean;
   onClose: () => void;
@@ -19,9 +19,11 @@ export function AppearanceModal({
   setMutedColor: (c: string) => void;
   reset: () => void;
   defaultColor: string;
+  lang?: UiLang;
 }) {
   const [hexInput, setHexInput] = useState(mutedColor);
   useEffect(() => { setHexInput(mutedColor); }, [mutedColor]);
+  const font = getUiFont(lang);
 
   const applyHex = () => {
     const v = hexInput.trim();
@@ -32,10 +34,10 @@ export function AppearanceModal({
   if (!open) return null;
 
   const presets = [
-    { label: "较深", color: "#3A3A3A" },
-    { label: "深灰", color: "#5F5F5F" },
-    { label: "中灰", color: "#7F7F7F" },
-    { label: "浅灰", color: "#9C9C9C" },
+    { label: t(lang, "appearance.presetDeep"), color: "#3A3A3A" },
+    { label: t(lang, "appearance.presetDark"), color: "#5F5F5F" },
+    { label: t(lang, "appearance.presetMid"), color: "#7F7F7F" },
+    { label: t(lang, "appearance.presetLight"), color: "#9C9C9C" },
   ];
 
   return (
@@ -57,11 +59,11 @@ export function AppearanceModal({
       >
         <div className="flex items-center justify-between px-6 py-5 border-b border-black/8">
           <div>
-            <h2 className="text-[16px]" style={{ ...monoFont, fontWeight: 600 }}>
-              字体颜色
+            <h2 className="text-[16px]" style={{ ...font, fontWeight: 600 }}>
+              {t(lang, "appearance.title")}
             </h2>
-            <p className="text-[11px] mt-0.5" style={{ ...monoFont, color: "var(--app-muted-text)" }}>
-              调整次要文字颜色，改善不同屏幕下的可读性
+            <p className="text-[11px] mt-0.5" style={{ ...font, color: "var(--app-muted-text)" }}>
+              {t(lang, "appearance.subtitle")}
             </p>
           </div>
           <button
@@ -76,8 +78,8 @@ export function AppearanceModal({
         </div>
         <div className="p-6 flex flex-col gap-4">
           <div>
-            <label className="text-[10px] uppercase tracking-widest mb-2 block" style={{ ...monoFont, color: "var(--app-muted-text)" }}>
-              次要文字颜色
+            <label className="text-[10px] uppercase tracking-widest mb-2 block" style={{ ...font, color: "var(--app-muted-text)" }}>
+              {t(lang, "appearance.secondary")}
             </label>
             <div className="flex items-center gap-3">
               <input
@@ -99,16 +101,13 @@ export function AppearanceModal({
             </div>
           </div>
           <div>
-            <p className="text-[10px] uppercase tracking-widest mb-2" style={{ ...monoFont, color: "var(--app-muted-text)" }}>
-              预设
-            </p>
             <div className="flex flex-wrap gap-2">
               {presets.map((p) => (
                 <button
                   key={p.color}
                   onClick={() => setMutedColor(p.color)}
                   className="px-3 py-1.5 rounded-[8px] border border-black/15 hover:border-black/30 transition-colors text-[11px]"
-                  style={{ ...monoFont, color: p.color, borderColor: mutedColor === p.color ? p.color : undefined }}
+                  style={{ ...font, color: p.color, borderColor: mutedColor === p.color ? p.color : undefined }}
                 >
                   {p.label}
                 </button>
@@ -119,9 +118,9 @@ export function AppearanceModal({
             <button
               onClick={reset}
               className="text-[11px] hover:underline"
-              style={{ ...monoFont, color: "var(--app-muted-text)" }}
+              style={{ ...font, color: "var(--app-muted-text)" }}
             >
-              恢复默认 (#5F5F5F)
+              {t(lang, "appearance.reset")} ({defaultColor})
             </button>
           </div>
         </div>
@@ -130,9 +129,9 @@ export function AppearanceModal({
             onClick={onClose}
             whileTap={{ scale: 0.97 }}
             className="px-4 py-2 text-[12px] bg-black text-white rounded-[8px] hover:bg-neutral-800 transition-colors"
-            style={monoFont}
+            style={font}
           >
-            完成
+            {t(lang, "appearance.done")}
           </motion.button>
         </div>
       </motion.div>

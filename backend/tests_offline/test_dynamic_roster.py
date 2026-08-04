@@ -8,7 +8,7 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 if backend not in sys.path:
     sys.path.insert(0, backend)
 
-from stance import assign_stance, STANCE_CYCLE_ORDER
+from stance import assign_stance, list_stances
 from agent_assembly import build_all_agent_specs
 
 failures = []
@@ -21,16 +21,16 @@ def check(ok: bool, label: str, detail=""):
 
 
 # --- stance cycle for D/E/F ---
-emp = STANCE_CYCLE_ORDER["employment"]
+emp = list_stances("employment")
 slots4 = ["A", "B", "C", "D"]
 check(assign_stance("employment", "A") == emp[0], "A keeps growth stance")
-check(assign_stance("employment", "D", slot_keys=slots4) == emp[3 % 3], "D cycles to growth", assign_stance("employment", "D", slot_keys=slots4))
-check(assign_stance("employment", "E", slot_keys=["A", "B", "C", "D", "E"]) == emp[4 % 3], "E cycles to stability")
-check(assign_stance("employment", "F", slot_keys=["A", "B", "C", "D", "E", "F"]) == emp[5 % 3], "F cycles to life")
+check(assign_stance("employment", "D", agent_keys=slots4) == emp[3 % 3], "D cycles to growth", assign_stance("employment", "D", agent_keys=slots4))
+check(assign_stance("employment", "E", agent_keys=["A", "B", "C", "D", "E"]) == emp[4 % 3], "E cycles to stability")
+check(assign_stance("employment", "F", agent_keys=["A", "B", "C", "D", "E", "F"]) == emp[5 % 3], "F cycles to life")
 
-pc = STANCE_CYCLE_ORDER["parent_child"]
+pc = list_stances("parent_child")
 check(
-    assign_stance("parent_child", "D", slot_keys=["A", "B", "C", "D"]) == pc[0],
+    assign_stance("parent_child", "D", agent_keys=["A", "B", "C", "D"]) == pc[0],
     "parent_child D cycles child_centered",
 )
 

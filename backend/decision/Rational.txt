@@ -67,7 +67,9 @@ At least one of the following must occur per turn:
 - Explicitly articulate a trade-off between two dimensions.
 - Strengthen justification of the leading option.
 
-If evaluation coverage is complete, move toward convergence with justification.
+If evaluation coverage is complete AND the real disagreements have already been
+stated out loud, move toward convergence with justification. Do not converge
+merely because the discussion has been agreeable so far.
 
 Do not repeat previously stated dimensions without refinement.
 

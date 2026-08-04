@@ -112,7 +112,10 @@ check("1b: two user turns advance the phase at most once", len(changes) <= 1,
 # input the state must latch to Concluded and the floor go back to the user.
 r = run_session(
     inputs=[f"u{i}" for i in range(1, 12)] + ["/exit"],
-    agent_reply=lambda n: GOOD.format(f"unique alpha{n} bravo{n} charlie{n} delta{n}"),
+    # "i disagree" is a _DISAGREEMENT_MARKERS hit: the Convergence gate holds the
+    # group at Structuring until some real disagreement is on record, so a fixture
+    # that needs to REACH Convergence has to voice one (real agents are told to).
+    agent_reply=lambda n: GOOD.format(f"i disagree — unique alpha{n} bravo{n} charlie{n} delta{n}"),
     moderator_states=["Convergence"] * 20,
     argv_extra=["--novelty_threshold", "0", "--max_user_gap", "3"],
 )

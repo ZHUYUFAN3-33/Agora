@@ -135,6 +135,52 @@ def list_available_presets(decision_dir: str = DECISION_DIR_DEFAULT,
 # Assembly
 # -------------------------------------------------------------------------
 
+# Canned-phrase banks inside the emotion/decision presets, stripped at splice
+# time (backend-dev). Preset FILES on disk stay intact — this only filters what
+# reaches the model.
+_CANNED_EXAMPLE_HEADERS = ("example lines:", "example reactions:")
+_DROP_WHOLE_SECTION_KEYWORDS = ("lexical cues",)
+_DROP_DECISION_SECTION_KEYWORDS = ("structural examples",)
+
+STRIP_EMOTION_PHRASE_BANKS = True
+STRIP_DECISION_EXAMPLES = True
+
+
+def _is_rule(line: str) -> bool:
+    s = line.strip()
+    return bool(s) and set(s) == {"="}
+
+
+def strip_phrase_banks(text: str, drop_sections: tuple = None) -> str:
+    """Remove canned example blocks and whole named sections from a preset."""
+    drop_sections = _DROP_WHOLE_SECTION_KEYWORDS if drop_sections is None else drop_sections
+    lines = text.splitlines()
+    out: list = []
+    i, n = 0, len(lines)
+    while i < n:
+        low = lines[i].strip().lower()
+        if low in _CANNED_EXAMPLE_HEADERS:
+            i += 1
+            while i < n and lines[i].strip().startswith("-"):
+                i += 1
+            while out and not out[-1].strip():
+                out.pop()
+            out.append("")
+            continue
+        if _is_rule(lines[i]) and i + 1 < n:
+            title = lines[i + 1].strip().lower()
+            if any(k in title for k in drop_sections):
+                i += 2
+                if i < n and _is_rule(lines[i]):
+                    i += 1
+                while i < n and not _is_rule(lines[i]):
+                    i += 1
+                continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out).strip()
+
+
 def assemble_role_text(decision_name: str, emotion_name: str,
                         decision_dir: str = DECISION_DIR_DEFAULT,
                         emotion_dir: str = EMOTION_DIR_DEFAULT) -> str:
@@ -142,6 +188,12 @@ def assemble_role_text(decision_name: str, emotion_name: str,
     that used to be hand-pasted into chatbot1/2/3.txt."""
     emotion_text = load_emotion_text(emotion_name, emotion_dir)
     decision_text = load_decision_text(decision_name, decision_dir)
+    if STRIP_EMOTION_PHRASE_BANKS and emotion_text:
+        emotion_text = strip_phrase_banks(emotion_text)
+    if STRIP_DECISION_EXAMPLES and decision_text:
+        decision_text = strip_phrase_banks(
+            decision_text, drop_sections=_DROP_DECISION_SECTION_KEYWORDS
+        )
 
     parts = []
     if emotion_text:
@@ -157,7 +209,7 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
                       emotion_dir: str = EMOTION_DIR_DEFAULT,
                       hint: Optional[str] = None,
                       stance_knowledge: Optional[dict] = None,
-                      slot_keys: Optional[List[str]] = None,
+                      agent_keys: Optional[List[str]] = None,
                       stance_override: Optional[str] = None) -> AgentSpec:
     """
     The single entry point: hands back everything needed to build one
@@ -175,9 +227,9 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
     stance_knowledge: pass the pre-loaded dict to avoid re-reading the file;
     loaded on demand when None.
 
-    slot_keys: optional roster order so extra keys (D/E/F…) cycle stances.
+    agent_keys: full pool for stance assignment wrap-around (backend-dev).
 
-    stance_override: when set, use this stance instead of assign_stance().
+    stance_override: product/UI — when set, use this stance instead of assign_stance().
     """
     role_text = assemble_role_text(decision_name, emotion_name, decision_dir, emotion_dir)
 
@@ -188,7 +240,7 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
         if override:
             stance = override
         else:
-            stance = assign_stance(scenario_type, agent_key, slot_keys=slot_keys)
+            stance = assign_stance(scenario_type, agent_key, agent_keys)
         stance_text = get_stance_text(scenario_type, stance, lang)
 
     preloaded_knowledge = ""
@@ -230,7 +282,7 @@ def build_all_agent_specs(agent_configs: Dict[str, dict],
     """
     if stance_knowledge is None and HAVE_STANCE_KNOWLEDGE:
         stance_knowledge = load_stance_knowledge()
-    slot_keys = list(agent_configs.keys())
+    keys = list(agent_configs.keys())
     return {
         key: build_agent_spec(
             agent_key=key,
@@ -242,7 +294,7 @@ def build_all_agent_specs(agent_configs: Dict[str, dict],
             emotion_dir=emotion_dir,
             hint=cfg.get("hint"),
             stance_knowledge=stance_knowledge,
-            slot_keys=slot_keys,
+            agent_keys=keys,
             stance_override=cfg.get("stance") or None,
         )
         for key, cfg in agent_configs.items()

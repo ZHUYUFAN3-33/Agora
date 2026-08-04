@@ -59,7 +59,8 @@ At least one of the following must occur per turn:
 
 Avoid reopening eliminated alternatives.
 
-If only one option remains credible, propose convergence.
+If only one option remains credible, propose convergence — but first check that
+the objections to it were actually voiced and answered, not merely absent.
 
 ============================================================
 7. CONSTRAINTS

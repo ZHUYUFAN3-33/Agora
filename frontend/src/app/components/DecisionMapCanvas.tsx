@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { motion } from "motion/react";
-import { getUiFont, t, type UiLang } from "../i18n/ui";
+import { getUiFont, labelCaseClass, t, type UiLang } from "../i18n/ui";
 import type { DecisionMapClaim, DecisionMapData, DecisionMapEdge, DecisionMapIssue } from "./DecisionMapPanel";
 
 export type CanvasNodeKind = "issue" | "claim";
@@ -519,12 +519,12 @@ export function DecisionMapCanvas({
             <div className="h-[3px] rounded-t-[12px]" style={{ background: statusColor(f.issue.status) }} />
             <div className="px-3.5 pt-2.5 pb-1 flex items-start justify-between gap-2 pointer-events-none">
               <div className="min-w-0">
-                <p className="text-[9px] uppercase tracking-wider text-black/35">{t(lang, "map.issues")}</p>
+                <p className={`text-[9px] text-black/35 ${labelCaseClass(lang)}`}>{t(lang, "map.issues")}</p>
                 <p className="text-[13px] text-black truncate" style={font as CSSProperties}>
                   {f.issue.label}
                 </p>
               </div>
-              <span className="text-[9px] text-black/40 flex-shrink-0 mt-0.5">
+              <span className={`text-[9px] text-black/40 flex-shrink-0 mt-0.5 ${labelCaseClass(lang)}`}>
                 {t(lang, `map.status.${f.issue.status}`) === `map.status.${f.issue.status}`
                   ? f.issue.status
                   : t(lang, `map.status.${f.issue.status}`)}
@@ -622,10 +622,10 @@ export function DecisionMapCanvas({
               }}
             >
               <div className="px-2.5 py-2 h-full flex flex-col justify-center">
-                <p className="text-[9px] uppercase tracking-wider text-black/35">{t(lang, "map.claims")}</p>
-                <p className="text-[12px] text-black truncate">{node.label}</p>
+                <p className={`text-[9px] text-black/35 ${labelCaseClass(lang)}`}>{t(lang, "map.claims")}</p>
+                <p className="text-[12px] text-black truncate" style={font as CSSProperties}>{node.label}</p>
                 {node.detail && (
-                  <p className="text-[10px] text-black/50 line-clamp-2 mt-0.5 leading-snug">{node.detail}</p>
+                  <p className="text-[10px] text-black/50 line-clamp-2 mt-0.5 leading-snug" style={font as CSSProperties}>{node.detail}</p>
                 )}
               </div>
             </motion.button>

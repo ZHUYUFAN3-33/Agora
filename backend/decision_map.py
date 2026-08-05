@@ -16,6 +16,7 @@ Open map → smart extract. Too few messages → insufficient (no LLM, no fake g
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -37,14 +38,18 @@ LABEL_MAX = 48
 IBIS_PROMPT = {
     "zh": (
         "你在从一场决策讨论中抽取 IBIS 风格决策地图。只根据原文，禁止编造。\n"
+        "【语言】所有面向用户的字段必须用中文撰写：issues.label、issues.summary、"
+        "claims.text、room_leaning.direction、room_leaning.strength。"
+        "即使原文是英文/日文，也要用中文概括（不要照抄英文）。"
+        "speaker 可保留原角色名；status / edge.type / phase 枚举值保持英文代码。\n"
         "严格输出一个 JSON 对象（不要代码块）：\n"
         "{\n"
         '  "issues": [{"id":"issue_1","label":"短标题","parent_id":null,'
         '"status":"open|leaning|settled","winning_claim_id":null,"phase":"Exploration|Structuring|Narrowing|Convergence|null","summary":"一句话题意"}],\n'
         '  "claims": [{"id":"claim_1","issue_id":"issue_1","speaker":"user或角色名",'
-        '"text":"可核对的主张一句","badge":null,"message_indexes":[0]}],\n'
+        '"text":"可核对的主张一句（中文）","badge":null,"message_indexes":[0]}],\n'
         '  "edges": [{"id":"e1","type":"emerged_from|supports|opposes","from":"…","to":"…"}],\n'
-        '  "room_leaning": {"direction":"全场倾向一句或空","strength":"明确|倾向|未定|clear|leaning|undecided"}\n'
+        '  "room_leaning": {"direction":"全场倾向一句（中文）或空","strength":"明确|倾向|未定"}\n'
         "}\n"
         "规则：\n"
         "1) 每条 claim 至少 1 个 message_indexes（原文行号，从 0 起），禁止无依据主张。\n"
@@ -52,11 +57,15 @@ IBIS_PROMPT = {
         "3) issues 通常 1–4 个；旁支用 parent_id + emerged_from 边。\n"
         "4) supports/opposes 只连 claim→claim，且原文有明显附和/反驳才连；不确定宁可不连。\n"
         "5) settled 需有收敛信号，否则 open/leaning。\n"
-        "6) badge 可填人设立场名，但 text 必须来自发言。\n"
-        "7) 若提供已有地图摘要，尽量复用已有 id，只更新变化。\n"
+        "6) badge 可填人设立场名，但 text 必须来自发言（用中文表述）。\n"
+        "7) 若提供已有地图摘要，尽量复用已有 id，只更新变化；字段仍须中文。\n"
     ),
     "en": (
         "Extract an IBIS-style decision map from this deliberation. Use only the text; invent nothing.\n"
+        "LANGUAGE: Write all user-facing fields in English "
+        "(issues.label, issues.summary, claims.text, room_leaning.direction, room_leaning.strength). "
+        "Even if the transcript is Chinese/Japanese, summarize in English. "
+        "Keep speaker names as-is; keep status / edge.type / phase enum codes in English.\n"
         "Output strictly one JSON object (no fences):\n"
         "{\n"
         '  "issues": [{"id":"issue_1","label":"short title","parent_id":null,'
@@ -289,11 +298,35 @@ def promote_layer_annotations(
     return out
 
 
-def load_latest_extract(log_dir: str, room_id: str) -> Optional[dict]:
+def transcript_fingerprint(msgs: List[dict]) -> str:
+    """Stable short hash of transcript content — used to skip re-extract when unchanged."""
+    h = hashlib.sha256()
+    h.update(str(len(msgs or [])).encode("utf-8"))
+    for m in msgs or []:
+        h.update(b"\0")
+        h.update(_msg_character(m).encode("utf-8", errors="ignore"))
+        h.update(b"\0")
+        h.update(_msg_text(m).encode("utf-8", errors="ignore"))
+    return h.hexdigest()[:20]
+
+
+def load_latest_extract_meta(
+    log_dir: str,
+    room_id: str,
+    *,
+    lang: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Newest extract row as:
+      {map, lang, fingerprint, msg_count, time}
+    If lang is set, only return a row saved for that UI lang.
+    """
     path = extract_log_path(log_dir, room_id)
     if not os.path.exists(path):
         return None
-    latest = None
+    want = normalize_lang(lang) if lang else None
+    latest_any = None
+    latest_match = None
     try:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
@@ -301,22 +334,91 @@ def load_latest_extract(log_dir: str, room_id: str) -> Optional[dict]:
                 if not line:
                     continue
                 try:
-                    latest = json.loads(line)
+                    row = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(row, dict):
+                    continue
+                payload = row.get("map") if isinstance(row.get("map"), dict) else row
+                if not isinstance(payload, dict):
+                    continue
+                meta = {
+                    "map": payload,
+                    "lang": row.get("lang") or payload.get("lang"),
+                    "fingerprint": row.get("fingerprint") or payload.get("fingerprint"),
+                    "msg_count": row.get("msg_count")
+                    if row.get("msg_count") is not None
+                    else payload.get("msg_count"),
+                    "time": row.get("time"),
+                }
+                latest_any = meta
+                row_lang = meta.get("lang")
+                if want and row_lang and normalize_lang(str(row_lang)) == want:
+                    latest_match = meta
     except OSError:
         return None
-    if not isinstance(latest, dict):
-        return None
-    if isinstance(latest.get("map"), dict):
-        return latest["map"]
-    return latest
+    if want:
+        return latest_match
+    return latest_any
 
 
-def append_extract(log_dir: str, room_id: str, payload: dict) -> None:
+def load_latest_extract(
+    log_dir: str,
+    room_id: str,
+    *,
+    lang: Optional[str] = None,
+) -> Optional[dict]:
+    """Return the newest extract map. If lang is set, prefer a row saved for that UI lang."""
+    meta = load_latest_extract_meta(log_dir, room_id, lang=lang)
+    return meta["map"] if meta else None
+
+
+def extract_cache_fresh(meta: Optional[dict], msgs: List[dict]) -> bool:
+    """True when cached extract still matches current transcript."""
+    if not meta or not isinstance(meta.get("map"), dict):
+        return False
+    fp = transcript_fingerprint(msgs)
+    cached_fp = meta.get("fingerprint")
+    if cached_fp and str(cached_fp) == fp:
+        return True
+    # Legacy rows without fingerprint: treat same message count as unchanged.
+    if not cached_fp and meta.get("msg_count") is not None:
+        try:
+            return int(meta["msg_count"]) == len(msgs or [])
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def append_extract(
+    log_dir: str,
+    room_id: str,
+    payload: dict,
+    lang: Optional[str] = None,
+    *,
+    msgs: Optional[List[dict]] = None,
+    fingerprint: Optional[str] = None,
+    msg_count: Optional[int] = None,
+) -> None:
     os.makedirs(log_dir, exist_ok=True)
     path = extract_log_path(log_dir, room_id)
-    row = {"time": datetime.now().isoformat(timespec="seconds"), "map": payload}
+    lang_n = normalize_lang(lang) if lang else None
+    body = dict(payload) if isinstance(payload, dict) else {"raw": payload}
+    if lang_n:
+        body["lang"] = lang_n
+    fp = fingerprint or (transcript_fingerprint(msgs) if msgs is not None else None)
+    n = msg_count if msg_count is not None else (len(msgs) if msgs is not None else None)
+    if fp:
+        body["fingerprint"] = fp
+    if n is not None:
+        body["msg_count"] = n
+    row = {
+        "time": datetime.now().isoformat(timespec="seconds"),
+        "lang": lang_n,
+        "fingerprint": fp,
+        "msg_count": n,
+        "map": body,
+    }
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 

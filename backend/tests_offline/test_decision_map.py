@@ -29,6 +29,10 @@ from decision_map import (
     promote_layer_annotations,
     save_summary_overall,
     load_summary_overall,
+    transcript_fingerprint,
+    extract_cache_fresh,
+    append_extract,
+    load_latest_extract_meta,
 )
 
 few = [
@@ -114,6 +118,16 @@ n2 = normalize_ibis({
     "edges": [{"id": "e", "type": "challenges", "from": "c2", "to": "c1"}],
 }, msg_count=5)
 check(n2["edges"][0]["type"] == "opposes", "challenges normalized to opposes")
+
+fp_msgs = [{"character": "user", "txt": "a"}, {"character": "A", "txt": "b"}]
+fp_msgs2 = fp_msgs + [{"character": "user", "txt": "c"}]
+check(transcript_fingerprint(fp_msgs) == transcript_fingerprint(list(fp_msgs)), "fingerprint stable")
+check(transcript_fingerprint(fp_msgs) != transcript_fingerprint(fp_msgs2), "fingerprint changes with msgs")
+append_extract(tmpdir, "r2", {"issues": [], "claims": [], "edges": []}, lang="en", msgs=fp_msgs)
+meta_fp = load_latest_extract_meta(tmpdir, "r2", lang="en")
+check(extract_cache_fresh(meta_fp, fp_msgs), "cache fresh when transcript unchanged")
+check(not extract_cache_fresh(meta_fp, fp_msgs2), "cache stale when transcript grows")
+check(not extract_cache_fresh(None, fp_msgs), "no cache → not fresh")
 
 if failures:
     print(f"\n{len(failures)} failure(s)")

@@ -354,10 +354,10 @@ export function DecisionMapPanel({
                     exit={{ opacity: 0, x: 12 }}
                     transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                     className="absolute top-3 right-3 z-20 w-[min(300px,calc(100%-1.5rem))] max-h-[min(70vh,520px)] overflow-y-auto rounded-[6px] border border-black/15 bg-[#efefed]/[0.97] shadow-[0_8px_28px_rgba(0,0,0,0.12)] backdrop-blur-sm"
-                    style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}
+                    style={font}
                   >
                     <div className="sticky top-0 flex items-center justify-between gap-2 px-2.5 py-1.5 border-b border-black/10 bg-[#e6e6e4]/95">
-                      <p className="text-[10px] uppercase tracking-[0.12em] text-black/55">{t(lang, "map.params")}</p>
+                      <p className={`text-[10px] text-black/55 ${labelCaseClass(lang)}`}>{t(lang, "map.params")}</p>
                       <button
                         type="button"
                         className="w-5 h-5 flex items-center justify-center text-black/40 hover:text-black/70 text-[12px]"
@@ -369,12 +369,13 @@ export function DecisionMapPanel({
                     </div>
 
                     <div className="divide-y divide-black/8 text-[11px]">
-                      <ParamRow label={t(lang, "map.param.type")} value={selectedIssue ? t(lang, "map.issues") : t(lang, "map.claims")} />
+                      <ParamRow lang={lang} label={t(lang, "map.param.type")} value={selectedIssue ? t(lang, "map.issues") : t(lang, "map.claims")} />
 
                       {selectedIssue && (
                         <>
-                          <ParamRow label={t(lang, "map.param.label")} value={selectedIssue.label} />
+                          <ParamRow lang={lang} label={t(lang, "map.param.label")} value={selectedIssue.label} />
                           <ParamRow
+                            lang={lang}
                             label={t(lang, "map.param.status")}
                             value={
                               t(lang, `map.status.${selectedIssue.status}`) === `map.status.${selectedIssue.status}`
@@ -383,23 +384,26 @@ export function DecisionMapPanel({
                             }
                           />
                           <ParamRow
+                            lang={lang}
                             label={t(lang, "map.param.phase")}
                             value={phaseLabel(lang, selectedIssue.phase) || selectedIssue.phase || t(lang, "map.param.none")}
                           />
-                          <ParamRow label={t(lang, "map.param.claims")} value={String(issueClaims.length)} />
+                          <ParamRow lang={lang} label={t(lang, "map.param.claims")} value={String(issueClaims.length)} />
                           <ParamRow
+                            lang={lang}
                             label={t(lang, "map.param.winning")}
                             value={winningClaim ? `${winningClaim.speaker}: ${winningClaim.text}` : t(lang, "map.param.none")}
                             multiline
                           />
                           <ParamRow
+                            lang={lang}
                             label={t(lang, "map.param.summary")}
                             value={selectedIssue.summary || t(lang, "map.param.none")}
                             multiline
                           />
                           {issueClaims.length > 0 && (
                             <div className="px-2.5 py-2 space-y-1">
-                              <p className="text-[9px] uppercase tracking-wider text-black/40">{t(lang, "map.claims")}</p>
+                              <p className={`text-[9px] text-black/40 ${labelCaseClass(lang)}`}>{t(lang, "map.claims")}</p>
                               {issueClaims.map((c) => (
                                 <button
                                   key={c.id}
@@ -418,9 +422,10 @@ export function DecisionMapPanel({
 
                       {selectedClaim && (
                         <>
-                          <ParamRow label={t(lang, "map.param.speaker")} value={selectedClaim.speaker} />
-                          <ParamRow label={t(lang, "map.param.badge")} value={selectedClaim.badge || t(lang, "map.param.none")} />
+                          <ParamRow lang={lang} label={t(lang, "map.param.speaker")} value={selectedClaim.speaker} />
+                          <ParamRow lang={lang} label={t(lang, "map.param.badge")} value={selectedClaim.badge || t(lang, "map.param.none")} />
                           <ParamRow
+                            lang={lang}
                             label={t(lang, "map.param.issue")}
                             value={parentIssue?.label || selectedClaim.issue_id}
                             onJump={
@@ -432,8 +437,9 @@ export function DecisionMapPanel({
                                 : undefined
                             }
                           />
-                          <ParamRow label={t(lang, "map.param.text")} value={selectedClaim.text} multiline />
+                          <ParamRow lang={lang} label={t(lang, "map.param.text")} value={selectedClaim.text} multiline />
                           <ParamRow
+                            lang={lang}
                             label={t(lang, "map.param.evidence")}
                             value={
                               selectedClaim.message_indexes?.length
@@ -589,15 +595,17 @@ function ParamRow({
   value,
   multiline,
   onJump,
+  lang = "en",
 }: {
   label: string;
   value: string;
   multiline?: boolean;
   onJump?: () => void;
+  lang?: UiLang;
 }) {
   return (
     <div className="grid grid-cols-[88px_1fr] gap-2 px-2.5 py-1.5 items-start">
-      <span className="text-[9px] uppercase tracking-wider text-black/40 pt-0.5">{label}</span>
+      <span className={`text-[9px] text-black/40 pt-0.5 ${labelCaseClass(lang)}`}>{label}</span>
       {onJump ? (
         <button
           type="button"
@@ -627,7 +635,7 @@ function ClaimLinkBlock({
   if (!claims.length) return null;
   return (
     <div className="px-2.5 py-2 space-y-1">
-      <p className="text-[9px] uppercase tracking-wider text-black/40">{t(lang, titleKey)}</p>
+      <p className={`text-[9px] text-black/40 ${labelCaseClass(lang)}`}>{t(lang, titleKey)}</p>
       {claims.map((c) => (
         <button
           key={`${titleKey}-${c.id}`}

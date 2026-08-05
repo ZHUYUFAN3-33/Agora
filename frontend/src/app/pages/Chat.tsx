@@ -2479,7 +2479,7 @@ export default function Chat() {
       const res = await authFetch(`/decision-map/${roomId}?${qs}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setDecisionMapError((data as { error?: string }).error || "Failed to load decision map");
+        setDecisionMapError((data as { error?: string }).error || t(uiLang, "map.errorLoad"));
         return;
       }
       const map = data as DecisionMapData;
@@ -2492,7 +2492,7 @@ export default function Chat() {
         return active.id;
       });
     } catch {
-      setDecisionMapError("Failed to load decision map");
+      setDecisionMapError(t(uiLang, "map.errorLoad"));
     } finally {
       setDecisionMapLoading(false);
       setDecisionMapExtracting(false);
@@ -2501,9 +2501,15 @@ export default function Chat() {
 
   const handleOpenDecisionMap = useCallback(() => {
     setDecisionMapOpen(true);
-    // Open → start smart extract immediately (backend returns insufficient if too few msgs)
+    // Open → smart extract only if transcript changed (backend skips when cache is fresh).
     void fetchDecisionMap({ extract: true });
   }, [fetchDecisionMap]);
+
+  // UI language switch → load/extract for that lang (skipped if same-lang cache still fresh).
+  useEffect(() => {
+    if (!decisionMapOpen || !currentConv?.roomId) return;
+    void fetchDecisionMap({ extract: true });
+  }, [uiLang]); // eslint-disable-line react-hooks/exhaustive-deps -- only on lang change
 
   const handleExtractDecisionMap = useCallback(async () => {
     const roomId = currentConv?.roomId;
@@ -2517,12 +2523,12 @@ export default function Chat() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setDecisionMapError((data as { error?: string }).error || "Extract failed");
+        setDecisionMapError((data as { error?: string }).error || t(uiLang, "map.errorExtract"));
         return;
       }
       setDecisionMap(data as DecisionMapData);
     } catch {
-      setDecisionMapError("Extract failed");
+      setDecisionMapError(t(uiLang, "map.errorExtract"));
     } finally {
       setDecisionMapExtracting(false);
     }

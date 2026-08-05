@@ -349,6 +349,9 @@ const en: Dict = {
   "map.param.none": "—",
   "map.jumpClaim": "Jump to claim",
   "map.closeParams": "Close parameters",
+  "map.errorLoad": "Failed to load decision map",
+  "map.errorExtract": "Extract failed",
+  "map.edge.opposes": "opposes",
 };
 
 const zh: Dict = {
@@ -622,6 +625,9 @@ const zh: Dict = {
   "map.param.none": "—",
   "map.jumpClaim": "跳到主张",
   "map.closeParams": "关闭参数面板",
+  "map.errorLoad": "决策地图加载失败",
+  "map.errorExtract": "抽取失败",
+  "map.edge.opposes": "反对",
 };
 
 const TABLES: Record<UiLang, Dict> = { en, zh };

@@ -1505,6 +1505,8 @@ def get_decision_map(room_id):
         enough_messages,
         load_summary_overall,
         load_latest_extract,
+        load_latest_extract_meta,
+        extract_cache_fresh,
         load_user_annotations,
         extract_ibis_llm,
         append_extract,
@@ -1517,16 +1519,26 @@ def get_decision_map(room_id):
     phase_changes = _phase_changes_for_room(room_id)
     overall = load_summary_overall(LOG_DIR, room_id)
     user_annotations = load_user_annotations(LOG_DIR, room_id)
-    cached = load_latest_extract(LOG_DIR, room_id) if smart else None
+    # Prefer same-UI-lang cache so zh/en maps don't overwrite each other.
+    cached_meta = load_latest_extract_meta(LOG_DIR, room_id, lang=lang) if smart else None
+    cached = cached_meta["map"] if cached_meta else None
+    prior_any = load_latest_extract(LOG_DIR, room_id) if smart else None
     fresh = None
 
-    if smart and do_extract and enough_messages(msgs):
+    # extract=1 means "extract if transcript changed" — skip LLM when cache is fresh.
+    need_extract = (
+        smart
+        and do_extract
+        and enough_messages(msgs)
+        and not extract_cache_fresh(cached_meta, msgs)
+    )
+    if need_extract:
         try:
             fresh = extract_ibis_llm(
-                msgs, lang, agent_module.create_response, prior=cached,
+                msgs, lang, agent_module.create_response, prior=cached or prior_any,
             )
             if fresh:
-                append_extract(LOG_DIR, room_id, fresh)
+                append_extract(LOG_DIR, room_id, fresh, lang=lang, msgs=msgs)
         except Exception as ex:
             print(f"⚠ decision-map extract failed: {ex}")
 
@@ -1543,6 +1555,7 @@ def get_decision_map(room_id):
     )
     if fresh or cached:
         payload["extracted"] = True
+    payload["extract_skipped"] = bool(do_extract and not need_extract and cached)
     return jsonify(payload)
 
 
@@ -1653,14 +1666,18 @@ def decision_map_extract(room_id):
         )
         return jsonify(payload)
 
-    cached = load_latest_extract(LOG_DIR, room_id)
+    cached = load_latest_extract(LOG_DIR, room_id, lang=lang)
+    prior_any = load_latest_extract(LOG_DIR, room_id)
     try:
-        fresh = extract_ibis_llm(msgs, lang, agent_module.create_response, prior=cached)
+        # POST /extract always re-runs (explicit "Deepen"), even if transcript unchanged.
+        fresh = extract_ibis_llm(
+            msgs, lang, agent_module.create_response, prior=cached or prior_any,
+        )
     except Exception as e:
         return jsonify({"error": f"Extract failed: {e}"}), 502
     if not fresh:
         return jsonify({"error": "Extract returned nothing"}), 502
-    append_extract(LOG_DIR, room_id, fresh)
+    append_extract(LOG_DIR, room_id, fresh, lang=lang, msgs=msgs)
 
     payload = assemble_smart_map(
         room_id=room_id,

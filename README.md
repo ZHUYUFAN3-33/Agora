@@ -84,11 +84,31 @@ cd backend && python3 tests_offline/run_all.py
 自然度层的专项测试：`test_move_tag.py`、`test_consensus_targeting.py`、`test_convergence_gate.py`、
 `test_narrowing_focus.py`、`test_refusal_and_language.py`。
 `test_cli_http_parity.py` 用于保证 web 与 CLI 两条路径不再分叉 —— **它挂了就说明忠实性被破坏**。
+`test_naturalness_parity.py` 逐条断言自然度层的 prompt 区块、stance roster 标签、双尺度新颖度
+守卫在**两条循环里都在**（并非只在 CLI 里）。
 
-> ⚠️ 本分支**未修复**的既有失败：`test_self_novelty`、`test_stance_hint`、`test_stance_knowledge`、
-> `test_stance_pool_scaling`、`test_stance_related`。这 5 个在 Agora-2 上全部通过，属于更早一次
-> backend-dev 同步（`40faa5f`）遗留的缺口（测试同步了、代码没同步完），与自然度层无关，
-> 需另开分支处理。
+**当前状态：21 个测试文件全部通过。**
+
+### 补齐 `40faa5f` 遗留缺口
+
+此前 `test_self_novelty`、`test_stance_hint`、`test_stance_knowledge`、`test_stance_pool_scaling`、
+`test_stance_related` 五个测试失败，曾被整体归因为「更早一次 backend-dev 同步遗留、与自然度层
+无关」。逐个查下来是**三个不同的原因**，其中只有两个是代码缺口：
+
+| 失败 | 实际原因 | 处理 |
+|---|---|---|
+| `test_stance_hint`、`test_stance_knowledge` | 测试 fixture 漏拷 `stance_templates/`。`_harness.bootstrap()` 会 chdir 进空临时目录，而 `stance.load_stance_templates()` 读 cwd 相对路径 → `stance_enabled()` 为 False → 不分配 stance → 整条 stance-knowledge 通道静默 no-op | 补一行 `copytree`。产品代码本来就是对的 |
+| `test_stance_related` | 同上，外加一项由**本分支新加的收敛硬门**弄挂：测试把 agent 回复 stub 成 `ok`，没有 `[MOVE] challenge` 也没有分歧词，收敛门于是把 Convergence 降回 Structuring，trigger B 永远不触发 | 补 `copytree`；Convergence 用例改为让 agent 自报 `[MOVE] challenge`。**这一项不是历史遗留，是本分支引入的** |
+| `test_self_novelty` | 真代码缺口：`enforce_novelty()` 只有 group 尺度（`transcript_lines[-novelty_window:]`），没有 per-agent 的 self 尺度 | 从 `776f5bf` 逐字移植双尺度实现（CLI 侧与基准逐字节一致），web 侧同步一遍 |
+| `test_stance_pool_scaling` | 真代码缺口：`build_system_prompt()` 的 `stance_labels` 参数、roster 的 `— represents X` 分支、`stance.get_stance_label()` 都写好了，但**全仓库零调用点** | 两条循环各接上一遍 |
+
+移植带来的两个新参数（默认值取自 `776f5bf`）：`--self_novelty_threshold`（0.35）、
+`--self_novelty_window`（6）；web 侧对应 `AGORA_SELF_NOVELTY_THRESHOLD`。
+
+> ⚠️ 一并从 `776f5bf` 带过来的还有**新颖度重试提示词的改写**：诊断语句现在区分「重复了别人」
+> 与「重复了你自己」，且候选贡献清单重新排序为「具体比较 → 排除 → 反驳 → 引用用户事实 →
+> （仅当具体选项尚未上桌时）新评估维度」。这是 prompt 文本变化，没有任何测试覆盖它，
+> 但不带过来就会与基准分叉。
 
 ---
 

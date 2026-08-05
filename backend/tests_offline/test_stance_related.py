@@ -19,6 +19,10 @@ BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 aw = bootstrap("agentwake_related_")
 shutil.copytree(os.path.join(BACKEND, "background_templates"), "background_templates")
 shutil.copytree(os.path.join(BACKEND, "scenes"), "scenes")
+# stance_templates too: stance.load_stance_templates() reads it cwd-relative, and
+# without it stance_enabled() is False -> no stance is assigned -> the whole
+# stance-knowledge channel silently no-ops and every check below fails.
+shutil.copytree(os.path.join(BACKEND, "stance_templates"), "stance_templates")
 
 _ck = Checker(); check = _ck.check
 
@@ -38,11 +42,14 @@ check("peek: no stance -> None",
 
 
 # --------------------------------------------------------------- driver
-def _run(inputs, moderator_state):
+def _run(inputs, moderator_state, agent_move=None):
     """Drive a parent_child session routing to A (child_centered). moderator_state
-    is what the moderator stub reports ('Exploration' or 'Convergence'). Returns
-    A's system prompts in order."""
+    is what the moderator stub reports ('Exploration' or 'Convergence'). agent_move
+    is an optional [MOVE] label attached to every agent turn — pass "challenge" for
+    Convergence runs, since the convergence gate withholds Convergence until real
+    disagreement is on record. Returns A's system prompts in order."""
     a_prompts = []
+    move_block = f"[MOVE]\n{agent_move}\n[/MOVE]\n" if agent_move else ""
     def fake(model, messages, temperature, max_output_tokens, meta=None):
         if meta is not None:
             meta["status"] = "completed"
@@ -57,7 +64,7 @@ def _run(inputs, moderator_state):
             return "stub."
         if sysc.startswith("You are ChatbotA"):
             a_prompts.append(sysc)
-        return "[MESSAGE]\nok\n[/MESSAGE]\n[RATIONALE]\nr\n[/RATIONALE]"
+        return f"[MESSAGE]\nok\n[/MESSAGE]\n{move_block}[RATIONALE]\nr\n[/RATIONALE]"
     aw.create_response = fake
 
     with open("info3.jsonl", "w", encoding="utf-8") as f:
@@ -86,8 +93,13 @@ check("A: a LATER (repeat) hit shows [相关背景]", any(RELATED in p for p in 
 
 # ---- trigger B: Convergence makes even a FIRST hit expand ----
 # "你好" (no card) then /next forces the moderator -> Convergence, THEN the first
-# child_defiance hit happens under Convergence.
-a = _run(["你好", "/next", "孩子很不听话", "/exit"], moderator_state="Convergence")
+# child_defiance hit happens under Convergence. The agents must self-report
+# [MOVE] challenge: the moderator asking for Convergence is not enough on its
+# own, the convergence gate holds the state at Structuring until the group has
+# actually disagreed once, and a state that never reaches Convergence would
+# never fire trigger B.
+a = _run(["你好", "/next", "孩子很不听话", "/exit"], moderator_state="Convergence",
+         agent_move="challenge")
 knf = [p for p in a if DYN_HDR in p]
 check("B: the (first) card hit under Convergence shows [相关背景]",
       len(knf) >= 1 and all(RELATED in p for p in knf),

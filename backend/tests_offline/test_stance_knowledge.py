@@ -20,6 +20,10 @@ aw = bootstrap("agentwake_stanceknow_")
 # Bring the cwd-relative data the run reads (KB + scene files) into the temp cwd.
 shutil.copytree(os.path.join(BACKEND, "background_templates"), "background_templates")
 shutil.copytree(os.path.join(BACKEND, "scenes"), "scenes")
+# stance_templates too: stance.load_stance_templates() reads it cwd-relative, and
+# without it stance_enabled() is False -> no stance is assigned -> the whole
+# stance-knowledge channel silently no-ops and every check below fails.
+shutil.copytree(os.path.join(BACKEND, "stance_templates"), "stance_templates")
 
 _ck = Checker(); check = _ck.check
 

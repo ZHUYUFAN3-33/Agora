@@ -109,6 +109,8 @@ API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 PREFER_AGENTS = float(os.getenv("AGORA_PREFER_AGENTS") or "0.85")
 # Faithful CLI default: --novelty_threshold 0.5
 NOVELTY_THRESHOLD = float(os.getenv("AGORA_NOVELTY_THRESHOLD") or "0.5")
+# Second novelty scope. Faithful CLI default: --self_novelty_threshold 0.35
+SELF_NOVELTY_THRESHOLD = float(os.getenv("AGORA_SELF_NOVELTY_THRESHOLD") or "0.35")
 
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
@@ -1069,6 +1071,7 @@ def send_message():
             max_agent_turns_before_user=max_agent_turns_before_user,
             prefer_agents=PREFER_AGENTS,
             novelty_threshold=NOVELTY_THRESHOLD,
+            self_novelty_threshold=SELF_NOVELTY_THRESHOLD,
             persist_chat=lambda msg: _persist_chat_message_db(room_id, msg, session),
             create_response_with_client=create_response_with_client,
         )

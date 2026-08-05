@@ -26,7 +26,8 @@ except ImportError:
     HAVE_AGORA_CONTEXT = False
 
 try:
-    from stance import assign_stance, stance_enabled, get_stance_text, get_convergence_weight_hint
+    from stance import (assign_stance, stance_enabled, get_stance_text,
+                        get_convergence_weight_hint, get_stance_label)
     HAVE_STANCE = True
 except ImportError:
     HAVE_STANCE = False
@@ -1480,6 +1481,8 @@ def run_user_turn(
     prefer_agents: Optional[float] = None,
     novelty_threshold: Optional[float] = None,
     novelty_window: int = 10,
+    self_novelty_threshold: Optional[float] = None,
+    self_novelty_window: int = 6,
     persist_chat: Optional[Callable[[dict], None]] = None,
     create_response_with_client: Optional[CreateFn] = None,
 ) -> Dict[str, Any]:
@@ -1493,6 +1496,14 @@ def run_user_turn(
         novelty_threshold
         if novelty_threshold is not None
         else os.getenv("AGORA_NOVELTY_THRESHOLD", "0.5")
+    )
+    # Second novelty scope (CLI: --self_novelty_threshold / --self_novelty_window).
+    # Same env-fallback shape as nov_th so an HTTP deploy can tune it without a
+    # code change, and same CLI-faithful defaults (0.35 / 6).
+    self_nov_th = float(
+        self_novelty_threshold
+        if self_novelty_threshold is not None
+        else os.getenv("AGORA_SELF_NOVELTY_THRESHOLD", "0.35")
     )
 
     key_to_agent = agents
@@ -1524,6 +1535,17 @@ def run_user_turn(
         }
         for slot in agent_keys
     }
+
+    # Short "represents X" phrase per agent, for the generated cast list in the
+    # prompt roster. Empty for scenarios that use no stances. CLI builds the same
+    # dict once at startup; here it is rebuilt per turn because the stance lives
+    # in the session and mid-session roster edits may change it.
+    stance_labels: Dict[str, str] = {}
+    if HAVE_STANCE:
+        for slot in agent_keys:
+            label = get_stance_label(scenario_type, agent_configs[slot].get("stance"), lang)
+            if label:
+                stance_labels[slot] = label
 
     moderator_state = session.setdefault(
         "moderator_state", {"mode": None, "state": "Exploration", "stall": False, "goal": ""}
@@ -1949,28 +1971,75 @@ def run_user_turn(
             run_moderator(allow_state_change=allow)
 
     def enforce_novelty(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float) -> dict:
+        """CLI-faithful port of main()'s enforce_novelty — see there for the full
+        rationale. TWO SCOPES: `group` scores the reply against the recent window
+        across all speakers, `self` against this agent's OWN last N messages. An
+        agent's own turns are roughly every third line, so anything it argued
+        before that fell out of the group window could be re-served in new
+        wording unflagged — the observed cross-turn self-repetition. Failing
+        EITHER scope triggers the one corrective retry.
+        """
         txt = parsed.get("message") or ""
-        if nov_th <= 0 or not transcript_lines or not txt:
+        if not transcript_lines or not txt:
             return parsed
-        prior = transcript_lines[-novelty_window:]
-        ratio = novelty_ratio(txt, prior)
-        if ratio >= nov_th:
+        # nov_th 0 stays the master off switch for the whole guard (both scopes);
+        # self_nov_th 0 turns off only the self scope.
+        if nov_th <= 0:
             return parsed
+
+        own_prefix = f"{agent.name}: "
+
+        def _scores(message: str) -> tuple:
+            """(group_ratio, self_ratio). self_ratio is 1.0 until this agent has
+            spoken at least once (nothing of its own to repeat yet)."""
+            if not message:
+                return 0.0, 0.0
+            group = novelty_ratio(message, transcript_lines[-novelty_window:])
+            own = [ln[len(own_prefix):] for ln in transcript_lines
+                   if ln.startswith(own_prefix)][-self_novelty_window:]
+            return group, (novelty_ratio(message, own) if own else 1.0)
+
+        def _failing(group: float, own: float):
+            """Which scope (if any) this message fails, as a short label."""
+            if nov_th > 0 and group < nov_th:
+                return "group"
+            if self_nov_th > 0 and own < self_nov_th:
+                return "self"
+            return None
+
+        ratio, self_ratio = _scores(txt)
+        scope = _failing(ratio, self_ratio)
+        if scope is None:
+            return parsed
+
         log_thinking(
             "novelty_retry",
-            f"{agent.key}: novelty={ratio:.2f} < {nov_th:.2f}, retrying once",
+            f"{agent.key}: novelty group={ratio:.2f}/{nov_th:.2f} "
+            f"self={self_ratio:.2f}/{self_nov_th:.2f} — failed on {scope}, retrying once",
         )
+
+        # Name the actual failure, so the retry fixes the right problem: the
+        # generic "the group already has this" reads as wrong (and gets ignored)
+        # when what the agent really did was repeat ITSELF.
+        if scope == "self":
+            diagnosis = ("That message re-states a point YOU have already made earlier in this "
+                         "conversation, just worded differently. Rephrasing your own earlier "
+                         "argument is not a contribution. Replace it entirely.\n")
+        else:
+            diagnosis = ("That message restates points the group already has on the table and adds "
+                         "nothing new. Replace it entirely.\n")
+
         retry_messages = messages + [
             {"role": "assistant", "content": txt},
             {
                 "role": "user",
                 "content": (
-                    "That message restates points the group already has on the table and adds nothing new. "
-                    "Replace it entirely.\n"
-                    "Contribute exactly one of: a new evaluation dimension, a specific fact from KNOWN USER "
-                    "CONTEXT that nobody has cited yet, a concrete comparison of two options along one named "
-                    "dimension, an elimination with its reason, or a direct challenge to a specific claim "
-                    "someone made.\n"
+                    diagnosis +
+                    "Contribute exactly one of: a concrete comparison of two named options along one "
+                    "dimension, an elimination with its reason, a direct challenge to a specific claim "
+                    "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
+                    "— only if the concrete options are not yet on the table — a new evaluation "
+                    "dimension.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
                     "whose point you are deferring to. Either way, do not ask a question this time. "
                     "Keep the required [MESSAGE]/[MOVE]/[RATIONALE] output format."
@@ -1979,15 +2048,19 @@ def run_user_turn(
         ]
         retry_raw = create(client_chat, retry_messages, min(temp + 0.15, 1.4), max_output_tokens)
         retry_parsed = parse_agent_turn(retry_raw)
-        retry_ratio = (
-            novelty_ratio(retry_parsed["message"], prior) if retry_parsed.get("message") else 0.0
-        )
-        if retry_ratio >= nov_th:
-            log_thinking("novelty_retry", f"{agent.key}: retry novelty={retry_ratio:.2f} (kept)")
+        retry_ratio, retry_self = _scores(retry_parsed.get("message") or "")
+
+        retry_scope = _failing(retry_ratio, retry_self)
+        if retry_scope is None:
+            log_thinking(
+                "novelty_retry",
+                f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f} (kept)",
+            )
             return retry_parsed
         log_thinking(
             "novelty_retry",
-            f"{agent.key}: retry novelty={retry_ratio:.2f}, still below {nov_th:.2f} — turn dropped",
+            f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "
+            f"still failing {retry_scope} — turn dropped",
         )
         return {"message": "", "rationale": "", "dropped": True}
 
@@ -2027,6 +2100,7 @@ def run_user_turn(
                         lang=lang,
                         session_memory_text=session_memory_text,
                         preloaded_knowledge_text=pk,
+                        stance_labels=stance_labels,
                     )
                     + get_memory_context(burst_agent.key),
                 },
@@ -2100,6 +2174,7 @@ def run_user_turn(
                     lang=lang,
                     session_memory_text=session_memory_text,
                     preloaded_knowledge_text=pk,
+                    stance_labels=stance_labels,
                 )
                 + get_memory_context(agent.key),
             },
@@ -2341,6 +2416,20 @@ def main():
                     help="How many recent transcript lines the novelty check compares against. Short "
                          "enough that a deliberate callback to something said 20 turns ago isn't "
                          "penalized. Default 10")
+    ap.add_argument("--self_novelty_threshold", type=float, default=0.35,
+                    help="Second novelty scope: how much of a reply must be new relative to THIS "
+                         "agent's own recent messages (not the whole room). Catches cross-turn "
+                         "self-repetition, which --novelty_threshold structurally cannot: with 3 "
+                         "agents an agent's own turns are only every third line, so a 10-line "
+                         "all-speaker window holds just 2-3 of them and anything older could be "
+                         "re-served in new wording unflagged. Lower than --novelty_threshold on "
+                         "purpose — scoring one voice against its own accumulated vocabulary yields "
+                         "structurally lower ratios. 0 disables this scope; --novelty_threshold 0 "
+                         "still disables the whole guard including this one. Default 0.35")
+    ap.add_argument("--self_novelty_window", type=int, default=6,
+                    help="How many of the agent's OWN past messages the self-novelty scope compares "
+                         "against. Bounded so an agent isn't scored against an ever-growing pile of "
+                         "its own vocabulary (which would eventually reject everything). Default 6")
 
     # ---- Scenario information layer (Profile + Intake + Domain Background) ----
     ap.add_argument("--scenario_type", default=None, choices=["employment", "parent_child"],
@@ -2508,6 +2597,16 @@ def main():
             args.scenario_type, agent_configs[key].get("stance"),
             hint, args.lang, stance_knowledge_data, include_header=False,
         ) if hint else ""
+
+    # Short "represents X" phrase per agent, for the generated cast list in the
+    # prompt roster. Empty for scenarios that use no stances.
+    stance_labels: Dict[str, str] = {}
+    if HAVE_STANCE:
+        for key in agent_keys:
+            label = get_stance_label(args.scenario_type,
+                                     agent_configs.get(key, {}).get("stance"), args.lang)
+            if label:
+                stance_labels[key] = label
 
     agents: List[ChatAgent] = [
         ChatAgent(k, f"Chatbot{k}", role_texts[k]) for k in agent_keys
@@ -3048,7 +3147,8 @@ def main():
                     known_context=known_context, domain_background=domain_background,
                     stance_text=get_stance_block(burst_agent.key), lang=args.lang,
                     session_memory_text=session_memory_text,
-                    preloaded_knowledge_text=agent_configs[burst_agent.key].get("preloaded_knowledge", ""))
+                    preloaded_knowledge_text=agent_configs[burst_agent.key].get("preloaded_knowledge", ""),
+                    stance_labels=stance_labels)
                     + get_memory_context(burst_agent.key)},
                 {"role": "user", "content": user_prompt},
             ]
@@ -3196,7 +3296,8 @@ def main():
                     known_context=known_context, domain_background=domain_background,
                     stance_text=get_stance_block(agent.key), lang=args.lang,
                     session_memory_text=session_memory_text,
-                    preloaded_knowledge_text=agent_configs[agent.key].get("preloaded_knowledge", ""))
+                    preloaded_knowledge_text=agent_configs[agent.key].get("preloaded_knowledge", ""),
+                    stance_labels=stance_labels)
                     + get_memory_context(agent.key)},
                 {"role": "user", "content": user_prompt},
             ]
@@ -3271,26 +3372,82 @@ def main():
             A returned dict with "dropped": True means the agent stays silent
             this turn — see the end of this function for why keeping a failed
             retry was worse than dropping it.
+
+            TWO SCOPES, because one was not enough. The original check compared
+            only against transcript_lines[-novelty_window:] — the last N lines
+            from ALL speakers. With three agents taking turns, an agent's own
+            previous message is roughly every third line, so a 10-line window
+            held only its own last 2-3 turns. Anything it had argued before that
+            fell out of the window and could be re-served in new wording without
+            ever being flagged — the observed "cross-turn self-repetition". So a
+            message is now scored twice:
+              group : vs the recent window, all speakers  -> echoing the room
+              self  : vs this agent's OWN last N messages -> repeating yourself
+            Failing EITHER triggers the corrective retry. The self scope needs
+            its own, lower threshold: it compares against a single voice's
+            accumulated vocabulary, so its scores run structurally lower than the
+            group scope's and reusing the same number would silence everyone.
             """
             txt = parsed["message"]
-            if args.novelty_threshold <= 0 or not transcript_lines or not txt:
+            if not transcript_lines or not txt:
                 return parsed
-            prior = transcript_lines[-args.novelty_window:]
-            ratio = novelty_ratio(txt, prior)
-            if ratio >= args.novelty_threshold:
+            # --novelty_threshold 0 stays the documented master off switch for the
+            # whole guard (both scopes), so existing "disable novelty" invocations
+            # keep meaning that. --self_novelty_threshold 0 turns off only the
+            # self scope.
+            if args.novelty_threshold <= 0:
+                return parsed
+
+            own_prefix = f"{agent.name}: "
+
+            def _scores(message: str) -> tuple:
+                """(group_ratio, self_ratio). self_ratio is 1.0 until this agent
+                has spoken at least once (nothing of its own to repeat yet)."""
+                if not message:
+                    return 0.0, 0.0
+                group = novelty_ratio(message, transcript_lines[-args.novelty_window:])
+                own = [ln[len(own_prefix):] for ln in transcript_lines
+                       if ln.startswith(own_prefix)][-args.self_novelty_window:]
+                return group, (novelty_ratio(message, own) if own else 1.0)
+
+            def _failing(group: float, own: float):
+                """Which scope (if any) this message fails, as a short label."""
+                if args.novelty_threshold > 0 and group < args.novelty_threshold:
+                    return "group"
+                if args.self_novelty_threshold > 0 and own < args.self_novelty_threshold:
+                    return "self"
+                return None
+
+            ratio, self_ratio = _scores(txt)
+            scope = _failing(ratio, self_ratio)
+            if scope is None:
                 return parsed
 
             log_thinking("novelty_retry",
-                         f"{agent.key}: novelty={ratio:.2f} < {args.novelty_threshold:.2f}, retrying once")
+                         f"{agent.key}: novelty group={ratio:.2f}/{args.novelty_threshold:.2f} "
+                         f"self={self_ratio:.2f}/{args.self_novelty_threshold:.2f} — "
+                         f"failed on {scope}, retrying once")
+
+            # Name the actual failure, so the retry fixes the right problem: the
+            # generic "the group already has this" reads as wrong (and gets
+            # ignored) when what the agent really did was repeat ITSELF.
+            if scope == "self":
+                diagnosis = ("That message re-states a point YOU have already made earlier in this "
+                             "conversation, just worded differently. Rephrasing your own earlier "
+                             "argument is not a contribution. Replace it entirely.\n")
+            else:
+                diagnosis = ("That message restates points the group already has on the table and adds "
+                             "nothing new. Replace it entirely.\n")
+
             retry_messages = messages + [
                 {"role": "assistant", "content": txt},
                 {"role": "user", "content": (
-                    "That message restates points the group already has on the table and adds nothing new. "
-                    "Replace it entirely.\n"
-                    "Contribute exactly one of: a new evaluation dimension, a specific fact from KNOWN USER "
-                    "CONTEXT that nobody has cited yet, a concrete comparison of two options along one named "
-                    "dimension, an elimination with its reason, or a direct challenge to a specific claim "
-                    "someone made.\n"
+                    diagnosis +
+                    "Contribute exactly one of: a concrete comparison of two named options along one "
+                    "dimension, an elimination with its reason, a direct challenge to a specific claim "
+                    "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
+                    "— only if the concrete options are not yet on the table — a new evaluation "
+                    "dimension.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
                     "whose point you are deferring to. Either way, do not ask a question this time. "
                     "Keep the required [MESSAGE]/[MOVE]/[RATIONALE] output format."
@@ -3301,22 +3458,24 @@ def main():
                                         min(temp + 0.15, 1.4), args.max_output_tokens, meta=meta)
             log_generation_meta(agent.key, meta, note="novelty retry")
             retry_parsed = parse_agent_turn(retry_raw)
-            retry_ratio = novelty_ratio(retry_parsed["message"], prior) if retry_parsed["message"] else 0.0
+            retry_ratio, retry_self = _scores(retry_parsed["message"])
 
-            # The retry is the last chance: it must clear the threshold on its
-            # own, or the agent says nothing at all. The old rule kept a retry
-            # whenever it merely scored HIGHER than the original — in
-            # logs/316347 that published 0.50 and 0.52 rewrites of 0.00 turns,
-            # i.e. content the guard itself had flagged as recycled, promoted
-            # purely for being less bad. Silence is an allowed turn (the system
-            # prompt says so explicitly); a rephrased restatement is not.
-            if retry_ratio >= args.novelty_threshold:
-                log_thinking("novelty_retry", f"{agent.key}: retry novelty={retry_ratio:.2f} (kept)")
+            # The retry is the last chance: it must clear BOTH scopes on its own,
+            # or the agent says nothing at all. The old rule kept a retry whenever
+            # it merely scored HIGHER than the original — in logs/316347 that
+            # published 0.50 and 0.52 rewrites of 0.00 turns, i.e. content the
+            # guard itself had flagged as recycled, promoted purely for being less
+            # bad. Silence is an allowed turn (the system prompt says so
+            # explicitly); a rephrased restatement is not.
+            retry_scope = _failing(retry_ratio, retry_self)
+            if retry_scope is None:
+                log_thinking("novelty_retry",
+                             f"{agent.key}: retry novelty group={retry_ratio:.2f} "
+                             f"self={retry_self:.2f} (kept)")
                 return retry_parsed
-            best = max(ratio, retry_ratio)
             log_thinking("novelty_retry",
-                         f"{agent.key}: retry novelty={retry_ratio:.2f}, still below "
-                         f"{args.novelty_threshold:.2f} — turn dropped (best={best:.2f})")
+                         f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "
+                         f"still failing {retry_scope} — turn dropped")
             return {"message": "", "rationale": "", "dropped": True}
 
         def admin_choose_next() -> str:

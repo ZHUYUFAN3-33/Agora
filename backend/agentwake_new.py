@@ -1282,10 +1282,11 @@ def run_user_turn(
     prefer = float(
         prefer_agents if prefer_agents is not None else os.getenv("AGORA_PREFER_AGENTS", "0.85")
     )
+    # CLI argparse default is 0.5 — keep HTTP env fallback aligned (CLI-faithful).
     nov_th = float(
         novelty_threshold
         if novelty_threshold is not None
-        else os.getenv("AGORA_NOVELTY_THRESHOLD", "0.35")
+        else os.getenv("AGORA_NOVELTY_THRESHOLD", "0.5")
     )
 
     key_to_agent = agents

@@ -107,6 +107,8 @@ load_dotenv(os.path.join(os.path.dirname(BASE_DIR), ".env"))
 API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 # Faithful CLI default (Agora-2 backend-dev): prefer_agents=0.85
 PREFER_AGENTS = float(os.getenv("AGORA_PREFER_AGENTS") or "0.85")
+# Faithful CLI default: --novelty_threshold 0.5
+NOVELTY_THRESHOLD = float(os.getenv("AGORA_NOVELTY_THRESHOLD") or "0.5")
 
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
@@ -338,6 +340,13 @@ def _merge_slot_keys_to_session(session: dict, slot_keys: List[str]) -> None:
     session["latest_rationale"] = {k: str(prev_rationale.get(k) or "") for k in slot_keys}
     session["latest_snippet_id"] = {k: prev_snippet_id.get(k) for k in slot_keys}
     session["snippet_counters"] = {k: int(prev_counters.get(k) or 0) for k in slot_keys}
+    # Drop removed agents from turn-routing queues (mid-session roster edits).
+    keyset = set(slot_keys)
+    mq = session.get("mention_queue") or []
+    if isinstance(mq, list):
+        session["mention_queue"] = [k for k in mq if k in keyset]
+    if session.get("last_speaker_key") not in keyset:
+        session["last_speaker_key"] = None
 
 
 def _assemble_cfg_from_runtime(session: dict) -> Dict[str, dict]:
@@ -1051,6 +1060,7 @@ def send_message():
             max_user_gap=max_user_gap,
             max_agent_turns_before_user=max_agent_turns_before_user,
             prefer_agents=PREFER_AGENTS,
+            novelty_threshold=NOVELTY_THRESHOLD,
             persist_chat=lambda msg: _persist_chat_message_db(room_id, msg, session),
             create_response_with_client=create_response_with_client,
         )

@@ -258,6 +258,7 @@ function buildStartAgentsPayload(
   });
 }
 
+
 interface Conversation {
   id: string;
   roomId: string;
@@ -1516,6 +1517,20 @@ function CustomizerModal({
   const cardScrollPosRef = useRef<Record<string, number>>({});
   const pageRef = useRef(page);
   pageRef.current = page;
+
+  // Mid-session add opens this modal in the same paint as new keys — resync local
+  // copies when the roster key set changes so Save cannot drop a just-added agent.
+  // Do NOT depend on agentNames/agentSettings broadly or in-progress edits get wiped.
+  useEffect(() => {
+    setLocalNames({ ...agentNames });
+    setLocalSettings(cloneAgentSettings(agentSettings));
+    if (initialOpenCard && agentKeys.includes(initialOpenCard)) {
+      setSelectedAgent(initialOpenCard);
+    } else {
+      setSelectedAgent((prev) => (agentKeys.includes(prev) ? prev : (agentKeys[0] || "A")));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when roster membership changes
+  }, [agentKeys.join(",")]);
 
   const canEditAdvanced = experimentMode === "full";
   const agentOptions = experimentMode === "single" ? (["A"] as AgentKey[]) : agentKeys;
@@ -3485,13 +3500,16 @@ export default function Chat() {
             agentKeys={
               (currentConv?.settings?.mode ?? experimentMode) === "single"
                 ? ["A"]
-                : (currentConv?.settings?.activeAgentKeys || activeAgentKeys)
+                : activeAgentKeys
             }
             scenarioId={selectedScene?.id || currentConv?.settings?.selectedScene?.id || null}
             uiLang={uiLang}
             onSave={(names, settings) => {
               const mode = currentConv?.settings?.mode ?? experimentMode;
-              const roster = mode === "single" ? (["A"] as AgentKey[]) : (currentConv?.settings?.activeAgentKeys || activeAgentKeys);
+              // Prefer live activeAgentKeys (and ref) — conv.settings can lag one paint behind mid-session add/remove.
+              const roster = mode === "single"
+                ? (["A"] as AgentKey[])
+                : (activeAgentKeysRef.current.length ? activeAgentKeysRef.current : activeAgentKeys);
               if (mode === "full" && currentConv?.roomId) {
                 const changes: Array<{ type: string; agent: string; before: string | null; after: string | null }> = [];
                 roster.forEach((k) => {

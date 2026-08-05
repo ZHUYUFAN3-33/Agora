@@ -148,8 +148,9 @@ def preview_matched_card(
     Preview which topic card a setup hint would bind for UI tags.
     Does NOT use generic_fallback (matches assemble preload: miss → empty).
 
-    Tags are language-filtered (en UI → English keywords only; zh → Chinese).
-    The first tag is a human topic label — NOT the internal card id slug.
+    Tags are topic identity (+ optional source_type), not match-keyword synonyms.
+    The topic label prefers a language-filtered keyword for display, else a
+    humanized card id — keywords themselves stay on card.keywords only.
     """
     hint = (hint or "").strip()
     lang = normalize_lang(lang)
@@ -171,14 +172,14 @@ def preview_matched_card(
     lang_keywords = [kw for kw in keywords if _keyword_for_lang(kw, lang)]
     display_keywords = lang_keywords or keywords
 
-    topic_label = display_keywords[0] if display_keywords else _humanize_card_id(str(card.get("id") or ""))
+    # UI tags = topic identity (+ optional provenance). Match keywords stay in
+    # card.keywords for debugging — they must NOT be dumped as tag chips.
+    humanized = _humanize_card_id(str(card.get("id") or ""))
+    topic_label = (lang_keywords[0] if lang_keywords else "") or humanized or str(card.get("id") or "")
     tags: List[dict] = [{"id": f"topic:{card.get('id')}", "label": topic_label}]
-    for kw in display_keywords:
-        if kw == topic_label:
-            continue
-        tags.append({"id": kw, "label": kw})
-        if len(tags) >= 4:
-            break
+    source_type = (card.get("source_type") or "").strip()
+    if source_type:
+        tags.append({"id": f"source:{source_type}", "label": source_type})
 
     return {
         "matched": True,
@@ -189,7 +190,7 @@ def preview_matched_card(
             "title": topic_label,
             "keywords": display_keywords,
             "keywords_all": keywords,
-            "source_type": card.get("source_type"),
+            "source_type": source_type or card.get("source_type"),
         },
     }
 

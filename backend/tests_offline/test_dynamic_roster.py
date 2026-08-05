@@ -64,6 +64,22 @@ check(not specs_o["A"].get("preloaded_knowledge"), "no hint → no preload on A"
 from stance_knowledge import preview_matched_card
 prev = preview_matched_card("employment", "growth_centered", "job change timing", "en")
 check(prev.get("matched") is True and len(prev.get("tags") or []) > 0, "knowledge preview tags")
+tag_ids = [t.get("id") for t in (prev.get("tags") or [])]
+tag_labels = [t.get("label") for t in (prev.get("tags") or [])]
+card_kws = set((prev.get("card") or {}).get("keywords") or [])
+check(tag_ids[0].startswith("topic:"), "first tag is topic id", tag_ids)
+check(
+    not any(tid in card_kws for tid in tag_ids),
+    "tag ids are not raw keywords",
+    tag_ids,
+)
+# Synonym keywords must not appear as extra chips (topic title may reuse 1st kw as label)
+extra_labels = tag_labels[1:]
+check(
+    not any(lbl in card_kws for lbl in extra_labels),
+    "no keyword-synonym chips after topic",
+    {"tags": tag_labels, "keywords": sorted(card_kws)},
+)
 
 # --- parse + session helpers from app (Flask may init) ---
 try:

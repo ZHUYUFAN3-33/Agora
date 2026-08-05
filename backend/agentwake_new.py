@@ -8,6 +8,7 @@ import random
 import re
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -539,9 +540,21 @@ class ChatAgent:
         # The scene, the intake questions and the user's own input all follow --lang,
         # but nothing here ever told the agent which language to answer in — runs with
         # --lang zh came back in English with Chinese company names spliced in.
-        lang_line = ("Write every message in Chinese (简体中文). Do not switch language mid-message."
-                     if lang == "zh" else
-                     "Write every message in English. Do not switch language mid-message.")
+        if lang == "zh":
+            lang_line = (
+                "Write every message in Chinese (简体中文). "
+                "Do not switch language mid-message."
+            )
+        elif lang == "ja":
+            lang_line = (
+                "Write every message in Japanese (日本語). "
+                "Do not switch language mid-message."
+            )
+        else:
+            lang_line = (
+                "Write every message in English. "
+                "Do not switch language mid-message."
+            )
         others = ", ".join(f"@{v}" for k, v in name_map.items() if k != self.key)
         # Any other agent's name works for the "defer to" example — take the first.
         defer_name = next((v for k, v in name_map.items() if k != self.key), "another bot")
@@ -623,17 +636,24 @@ class ChatAgent:
             "[MESSAGE]\n"
             "your chat message here\n"
             "[/MESSAGE]\n"
+            "[OPTIONS]\n"
+            '[{"id":"o1","label":"short option A"},{"id":"o2","label":"short option B"}]\n'
+            "[/OPTIONS]\n"
             "[RATIONALE]\n"
             "one short sentence: why you said this, given your persona and the current phase goal\n"
             "[/RATIONALE]\n"
-            "The four tags are literal markers, not text: write them in English exactly as shown, "
-            "even though the message inside them is not in English. Do NOT translate them "
-            "(no [消息], no [理由]) — a translated tag is not recognised and your private rationale "
-            "ends up published in the chat.\n"
+            "Tag names are literal markers: write MESSAGE / OPTIONS / RATIONALE in English exactly "
+            "as shown. Do NOT translate them "
+            "(never [消息]/[选项]/[選択肢]/[オプション]/[メッセージ]/[理由]/[根拠]). "
+            "Labels INSIDE OPTIONS must use the same language as the chat message "
+            "(Chinese / English / Japanese as required by LANGUAGE).\n"
+            "Include [OPTIONS] whenever you present 2–6 mutually exclusive choices the user could "
+            "pick (jobs, plans, A/B paths). Omit the whole [OPTIONS]…[/OPTIONS] block when you are "
+            "not offering a selectable set. Max 6 options; each label ≤ 24 characters.\n"
             # Restated here on purpose. The directive at the top is separated from
             # the actual generation by everything above — most of it English — and
             # agents were observed replying wholly in English in zh sessions.
-            f"LANGUAGE, again: {lang_line} This applies to both blocks above.\n"
+            f"LANGUAGE, again: {lang_line} This applies to MESSAGE text and OPTIONS labels.\n"
         )
         return prompt
 
@@ -1113,23 +1133,69 @@ def looks_like_refusal(text: str) -> bool:
 # the rationale log got nothing. Observed live in a zh parent_child session.
 # The prompt now also says not to translate the tags; this is the recovery for
 # when it happens anyway.
-_MSG_NAMES = r"MESSAGE|MSG|消息|訊息|信息"
-_RAT_NAMES = r"RATIONALE|REASON|理由|原因|理由说明"
+# Tag aliases: models sometimes translate markers despite prompt (zh / ja / en).
+_MSG_NAMES = r"MESSAGE|MSG|消息|訊息|信息|メッセージ"
+_RAT_NAMES = r"RATIONALE|REASON|理由|原因|理由说明|根拠|根拠説明"
+_OPT_NAMES = r"OPTIONS|OPTION|CHOICES|选项|選項|選択肢|オプション"
 
 _MESSAGE_TAG_RE = re.compile(rf"\[(?:{_MSG_NAMES})\](.*?)\[/(?:{_MSG_NAMES})\]",
                              re.DOTALL | re.IGNORECASE)
 _RATIONALE_TAG_RE = re.compile(rf"\[(?:{_RAT_NAMES})\](.*?)\[/(?:{_RAT_NAMES})\]",
                                re.DOTALL | re.IGNORECASE)
-_STRAY_TAG_RE = re.compile(rf"\[/?(?:{_MSG_NAMES}|{_RAT_NAMES})\]", re.IGNORECASE)
-# Last resort for the no-tags branch: a rationale block that opened but never
-# closed would otherwise stay in the chat message.
-_TRAILING_RATIONALE_RE = re.compile(rf"\[(?:{_RAT_NAMES})\].*$", re.DOTALL | re.IGNORECASE)
+_OPTIONS_TAG_RE = re.compile(rf"\[(?:{_OPT_NAMES})\](.*?)\[/(?:{_OPT_NAMES})\]",
+                             re.DOTALL | re.IGNORECASE)
+_STRAY_TAG_RE = re.compile(
+    rf"\[/?(?:{_MSG_NAMES}|{_RAT_NAMES}|{_OPT_NAMES})\]", re.IGNORECASE
+)
+# Last resort for the no-tags branch: a rationale/options block that opened but
+# never closed would otherwise stay in the chat message.
+_TRAILING_RATIONALE_RE = re.compile(
+    rf"\[(?:{_RAT_NAMES}|{_OPT_NAMES})\].*$", re.DOTALL | re.IGNORECASE
+)
+
+
+def _parse_options_block(raw_body: str) -> list:
+    """Parse OPTIONS JSON array into [{id, label}, ...] (2–6 items)."""
+    body = (raw_body or "").strip()
+    if not body:
+        return []
+    data = None
+    try:
+        data = json.loads(body)
+    except Exception:
+        start, end = body.find("["), body.rfind("]")
+        if start != -1 and end > start:
+            try:
+                data = json.loads(body[start : end + 1])
+            except Exception:
+                data = None
+    if not isinstance(data, list):
+        return []
+    out = []
+    seen = set()
+    for i, item in enumerate(data):
+        if isinstance(item, str):
+            label = item.strip()
+            oid = f"o{i + 1}"
+        elif isinstance(item, dict):
+            label = str(item.get("label") or item.get("text") or item.get("name") or "").strip()
+            oid = str(item.get("id") or f"o{i + 1}").strip() or f"o{i + 1}"
+        else:
+            continue
+        if not label or oid in seen:
+            continue
+        seen.add(oid)
+        out.append({"id": oid, "label": label[:48]})
+        if len(out) >= 6:
+            break
+    return out if len(out) >= 2 else []
 
 
 def parse_agent_turn(raw: str) -> dict:
     """
-    Splits one LLM generation into the chat-visible message and the private
-    rationale. Both fields come from the SAME generation (never a second call).
+    Splits one LLM generation into the chat-visible message, optional OPTIONS
+    chips payload, and the private rationale. Both MESSAGE/RATIONALE come from
+    the SAME generation (never a second call).
     Tolerant by design: a malformed output must never crash a turn — if the
     tags are missing, the whole raw text becomes the message (stray tag tokens
     stripped so they can't leak into the chat log) and rationale stays empty.
@@ -1137,13 +1203,14 @@ def parse_agent_turn(raw: str) -> dict:
     raw = (raw or "").strip()
     msg_match = _MESSAGE_TAG_RE.search(raw)
     rat_match = _RATIONALE_TAG_RE.search(raw)
+    opt_match = _OPTIONS_TAG_RE.search(raw)
 
     if msg_match:
         message = msg_match.group(1).strip()
     else:
-        # No usable MESSAGE block. Drop anything from an opening RATIONALE tag
-        # onward first — otherwise a half-formed generation publishes the private
-        # rationale — then clear any stray tag tokens from what is left.
+        # No usable MESSAGE block. Drop anything from an opening RATIONALE/OPTIONS
+        # tag onward first — otherwise a half-formed generation publishes private
+        # blocks — then clear any stray tag tokens from what is left.
         message = _STRAY_TAG_RE.sub("", _TRAILING_RATIONALE_RE.sub("", raw)).strip()
 
     rationale = rat_match.group(1).strip() if rat_match else ""
@@ -1151,7 +1218,12 @@ def parse_agent_turn(raw: str) -> dict:
     if len(words) > RATIONALE_MAX_WORDS:
         rationale = " ".join(words[:RATIONALE_MAX_WORDS]) + "..."
 
-    return {"message": message, "rationale": rationale}
+    options = _parse_options_block(opt_match.group(1)) if opt_match else []
+    # Strip a leaked OPTIONS block from the visible message if tags were mangled.
+    if options and _OPTIONS_TAG_RE.search(message):
+        message = _OPTIONS_TAG_RE.sub("", message).strip()
+
+    return {"message": message, "rationale": rationale, "options": options}
 
 
 def enforce_no_refusal(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float,
@@ -1539,20 +1611,33 @@ def run_user_turn(
                 lines.append(sk_block)
         return "\n".join(lines)
 
-    def append_agent(agent: "ChatAgent", txt: str) -> None:
+    def append_agent(agent: "ChatAgent", txt: str, options: Optional[list] = None) -> None:
         txt = sanitize_single_message(txt, agent.name, all_agent_names)
+        opts = options if isinstance(options, list) and len(options) >= 2 else None
+        msg_id = f"m-{uuid.uuid4().hex[:12]}"
         msg = {
+            "id": msg_id,
             "chat_room_id": room_id,
             "time": now_local_iso(),
             "character": agent.name,
             "txt": txt,
         }
+        if opts:
+            msg["options"] = opts
         session.setdefault("history", []).append(msg)
         _append_jsonl(session.get("chat_fp"), msg)
         if persist_chat:
             persist_chat(msg)
         transcript_lines.append(f"{agent.name}: {txt}")
-        responses.append({"agent_key": agent.key, "agent": agent.name, "message": txt})
+        resp = {
+            "agent_key": agent.key,
+            "agent": agent.name,
+            "message": txt,
+            "message_id": msg_id,
+        }
+        if opts:
+            resp["options"] = opts
+        responses.append(resp)
         session.setdefault("has_spoken", {})[agent.key] = True
         agent.spoke += 1
 
@@ -1755,7 +1840,7 @@ def run_user_turn(
                     f"{burst_agent.key} mentioned {agent_mentions} "
                     f"(soft cue, not routed, admin still decides next speaker)",
                 )
-            append_agent(burst_agent, txt)
+            append_agent(burst_agent, txt, options=parsed.get("options") or None)
             session["last_speaker_key"] = burst_agent.key
             maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
         moderator_state["stall"] = False
@@ -1849,7 +1934,7 @@ def run_user_turn(
                 f"{agent.key} mentioned {agent_mentions} "
                 f"(soft cue, not routed, admin still decides next speaker)",
             )
-        append_agent(agent, txt)
+        append_agent(agent, txt, options=parsed.get("options") or None)
         maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
         if stall_triggered:
             stall_burst(trigger_key=agent.key)

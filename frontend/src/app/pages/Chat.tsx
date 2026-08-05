@@ -169,6 +169,8 @@ function AnimatedGuideFrame({
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export type ChatOptionChip = { id: string; label: string };
+
 interface Message {
   id: string;
   role: "user" | "agent" | "system";
@@ -176,6 +178,10 @@ interface Message {
   content: string;
   timestamp: number;
   emotionTagSnapshot?: string | null;
+  /** Structured choice chips from agent [OPTIONS] block */
+  options?: ChatOptionChip[];
+  /** Selected option id within this message's group (locked) */
+  chosenOptionId?: string | null;
 }
 
 function historyTimestamp(raw: string | undefined, index: number, total: number): number {
@@ -838,6 +844,7 @@ const AgentMessage = React.memo(function AgentMessage({
   uiLang = "en",
   highlighted = false,
   highlightToken = 0,
+  onChooseOption,
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
@@ -857,6 +864,7 @@ const AgentMessage = React.memo(function AgentMessage({
   uiLang?: UiLang;
   highlighted?: boolean;
   highlightToken?: number;
+  onChooseOption?: (message: Message, option: ChatOptionChip) => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [infoCardOpen, setInfoCardOpen] = useState(false);
@@ -1065,6 +1073,35 @@ const AgentMessage = React.memo(function AgentMessage({
             ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent", nickname)
             : highlightUserMentions(finalContent, nickname)}
         </p>
+        {(message.options?.length || 0) >= 2 && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            <span className={`w-full text-[9px] text-black/40 ${labelCaseClass(uiLang)}`} style={getUiFont(uiLang)}>
+              {message.chosenOptionId ? t(uiLang, "chat.optionLocked") : t(uiLang, "chat.optionsPickHint")}
+            </span>
+            {message.options!.map((opt) => {
+              const chosen = message.chosenOptionId === opt.id;
+              const locked = !!message.chosenOptionId;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={locked || !onChooseOption}
+                  onClick={() => onChooseOption?.(message, opt)}
+                  className={`px-2.5 py-1 rounded-[6px] text-[11px] border transition-colors ${
+                    chosen
+                      ? "border-black bg-black text-white"
+                      : locked
+                        ? "border-black/10 text-black/35 bg-black/[0.02] cursor-default"
+                        : "border-black/15 text-black/75 hover:border-black/40 hover:bg-black/[0.03]"
+                  }`}
+                  style={getUiFont(uiLang)}
+                >
+                  {chosen ? `✓ ${opt.label}` : opt.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </motion.div>
   );
@@ -2074,6 +2111,8 @@ export default function Chat() {
     convId: string;
     emotionTagSnapshot: string | null;
     isSystem?: boolean;
+    messageId?: string;
+    options?: ChatOptionChip[];
   }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
   const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>(blankAgentSettings());
@@ -2505,6 +2544,68 @@ export default function Chat() {
     void fetchDecisionMap({ extract: true });
   }, [fetchDecisionMap]);
 
+  const handleChooseOption = useCallback(async (message: Message, option: ChatOptionChip) => {
+    const roomId = currentConv?.roomId;
+    const convId = currentConvId;
+    if (!roomId || !convId || message.chosenOptionId) return;
+    const confirmText = t(uiLang, "chat.choseOption", { label: option.label });
+    // Optimistic lock + confirmation bubble
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== convId) return c;
+        const msgs = c.messages.map((m) =>
+          m.id === message.id ? { ...m, chosenOptionId: option.id } : m,
+        );
+        const confirm: Message = {
+          id: `msg-choice-${Date.now()}`,
+          role: "user",
+          content: confirmText,
+          timestamp: Date.now(),
+        };
+        return { ...c, messages: [...msgs, confirm], preview: confirmText, timestamp: "just now" };
+      }),
+    );
+    try {
+      const res = await authFetch(`/decision-map/${roomId}/choices`, {
+        method: "POST",
+        body: JSON.stringify({
+          lang: uiLang,
+          choice_group_id: message.id,
+          option_id: option.id,
+          label: option.label,
+          proposed_by: message.agentKey,
+          options: message.options,
+          confirm_text: confirmText,
+          message_index: currentConv?.messages.findIndex((m) => m.id === message.id) ?? undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Roll back lock on conflict/error
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id !== convId
+              ? c
+              : {
+                  ...c,
+                  messages: c.messages
+                    .filter((m) => m.content !== confirmText || m.role !== "user")
+                    .map((m) => (m.id === message.id ? { ...m, chosenOptionId: null } : m)),
+                },
+          ),
+        );
+        return;
+      }
+      if (data.map) {
+        setDecisionMap(data.map as DecisionMapData);
+      } else if (decisionMapOpen) {
+        void fetchDecisionMap({ extract: false });
+      }
+    } catch {
+      /* keep optimistic UI */
+    }
+  }, [currentConv?.roomId, currentConv?.messages, currentConvId, uiLang, decisionMapOpen, fetchDecisionMap]);
+
   // UI language switch → load/extract for that lang (skipped if same-lang cache still fresh).
   useEffect(() => {
     if (!decisionMapOpen || !currentConv?.roomId) return;
@@ -2864,12 +2965,13 @@ export default function Chat() {
     const delay = isSystem ? 200 : 900;
     const timer = setTimeout(() => {
       const agentMsg: Message = {
-        id: `msg-${Date.now()}-${next.agentKey}`,
+        id: next.messageId || `msg-${Date.now()}-${next.agentKey}`,
         role: isSystem ? "system" : "agent",
         agentKey: isSystem ? undefined : (next.agentKey as AgentKey),
         content: next.content,
         timestamp: Date.now(),
         emotionTagSnapshot: isSystem ? null : next.emotionTagSnapshot,
+        options: next.options && next.options.length >= 2 ? next.options : undefined,
       };
       const names = agentNamesRef.current;
       const previewLabel = isSystem ? "System" : names[next.agentKey as AgentKey];
@@ -3250,7 +3352,8 @@ export default function Chat() {
       const responses: Array<{
         agent_key: string;
         message: string;
-       
+        message_id?: string;
+        options?: ChatOptionChip[];
       }> = data.responses || [];
       if (responses.length === 0) { setTypingKeys([]); }
       else {
@@ -3260,12 +3363,17 @@ export default function Chat() {
             const isSystem = r.agent_key === "system" || r.agent_key === "System";
             const agentKey = (isSystem ? "system" : (r.agent_key || "A")) as AgentKey | "system";
             const currentSetting = !isSystem ? agentSettingsRef.current[agentKey as AgentKey] : null;
+            const opts = Array.isArray(r.options)
+              ? r.options.filter((o) => o && o.id && o.label).map((o) => ({ id: String(o.id), label: String(o.label) }))
+              : undefined;
             return {
               agentKey,
               content: r.message || "",
               convId: convId as string,
               emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
               isSystem,
+              messageId: r.message_id,
+              options: opts && opts.length >= 2 ? opts : undefined,
             };
           });
         const filtered = activeMode === "single"
@@ -3319,15 +3427,22 @@ export default function Chat() {
         setAgentBackendNames((prev) => ({ ...prev, ...runtimeBackendNames }));
       }
       const hist = data.history || [];
+      const choices: Array<{ choice_group_id?: string; option_id?: string }> = data.choices || [];
+      const chosenByGroup = new Map(
+        choices
+          .filter((c) => c.choice_group_id && c.option_id)
+          .map((c) => [String(c.choice_group_id), String(c.option_id)]),
+      );
       const messages: Message[] = hist.map((
-        h: { character: string; txt: string; time?: string },
+        h: { id?: string; character: string; txt: string; time?: string; options?: ChatOptionChip[] },
         i: number,
       ) => {
         const ts = historyTimestamp(h.time, i, hist.length);
-        if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: ts };
+        const mid = h.id || `h-${i}`;
+        if (h.character === "user") return { id: mid, role: "user" as const, content: h.txt, timestamp: ts };
         if (h.character === "system") {
           return {
-            id: `h-${i}`,
+            id: mid,
             role: "system" as const,
             content: h.txt,
             timestamp: ts,
@@ -3335,13 +3450,18 @@ export default function Chat() {
         }
         const agentKey = runtimeMap[h.character] ?? BACKEND_NAME_TO_KEY[h.character] ?? "A";
         const currentSetting = agentSettingsRef.current[agentKey];
+        const opts = Array.isArray(h.options) && h.options.length >= 2
+          ? h.options.map((o) => ({ id: String(o.id), label: String(o.label) }))
+          : undefined;
         return {
-          id: `h-${i}`,
+          id: mid,
           role: "agent" as const,
           agentKey,
           content: h.txt,
           timestamp: ts,
           emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
+          options: opts,
+          chosenOptionId: opts ? (chosenByGroup.get(mid) || null) : null,
         };
       });
       setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, messages } : c));
@@ -3512,25 +3632,37 @@ export default function Chat() {
           if (!res.ok) return;
           const data = await res.json();
           const hist = data.history || [];
+          const choices: Array<{ choice_group_id?: string; option_id?: string }> = data.choices || [];
+          const chosenByGroup = new Map(
+            choices
+              .filter((c) => c.choice_group_id && c.option_id)
+              .map((c) => [String(c.choice_group_id), String(c.option_id)]),
+          );
           const messages: Message[] = hist.map((
-            h: { character: string; txt: string; time?: string },
+            h: { id?: string; character: string; txt: string; time?: string; options?: ChatOptionChip[] },
             i: number,
           ) => {
             const ts = historyTimestamp(h.time, i, hist.length);
+            const mid = h.id || `h-${i}`;
             if (h.character === "user") {
-              return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: ts };
+              return { id: mid, role: "user" as const, content: h.txt, timestamp: ts };
             }
             if (h.character === "system") {
-              return { id: `h-${i}`, role: "system" as const, content: h.txt, timestamp: ts };
+              return { id: mid, role: "system" as const, content: h.txt, timestamp: ts };
             }
             const agentKey = (BACKEND_NAME_TO_KEY[h.character] ?? "A") as AgentKey;
+            const opts = Array.isArray(h.options) && h.options.length >= 2
+              ? h.options.map((o) => ({ id: String(o.id), label: String(o.label) }))
+              : undefined;
             return {
-              id: `h-${i}`,
+              id: mid,
               role: "agent" as const,
               agentKey,
               content: h.txt,
               timestamp: ts,
-                };
+              options: opts,
+              chosenOptionId: opts ? (chosenByGroup.get(mid) || null) : null,
+            };
           });
           setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, messages } : c)));
           if (data.phase) setCurrentPhase(data.phase);
@@ -4459,6 +4591,7 @@ export default function Chat() {
                       uiLang={uiLang}
                       highlighted={isHighlighted}
                       highlightToken={highlightToken}
+                      onChooseOption={handleChooseOption}
                     />
                   );
                 });

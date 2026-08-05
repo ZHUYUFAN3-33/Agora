@@ -33,6 +33,8 @@ from decision_map import (
     extract_cache_fresh,
     append_extract,
     load_latest_extract_meta,
+    build_structured_option_layer,
+    ISSUE_FALLBACK_LABEL,
 )
 
 few = [
@@ -128,6 +130,54 @@ meta_fp = load_latest_extract_meta(tmpdir, "r2", lang="en")
 check(extract_cache_fresh(meta_fp, fp_msgs), "cache fresh when transcript unchanged")
 check(not extract_cache_fresh(meta_fp, fp_msgs2), "cache stale when transcript grows")
 check(not extract_cache_fresh(None, fp_msgs), "no cache → not fresh")
+
+# Structured options + hand choice (no LLM) — labels may be zh / en / ja
+opt_msgs = [
+    {"character": "user", "txt": "どれにする？", "time": "2026-01-01T10:00:00"},
+    {
+        "id": "m-agent-1",
+        "character": "ChatbotA",
+        "txt": "候補は二つです。",
+        "time": "2026-01-01T10:01:00",
+        "options": [
+            {"id": "o1", "label": "東京で残る"},
+            {"id": "o2", "label": "大阪へ転職"},
+        ],
+    },
+    {"character": "ChatbotB", "txt": "安定も見て", "time": "2026-01-01T10:02:00"},
+    {"character": "ChatbotC", "txt": "成長も", "time": "2026-01-01T10:03:00"},
+    {"character": "user", "txt": "成長寄り", "time": "2026-01-01T10:04:00"},
+]
+layer = build_structured_option_layer(
+    opt_msgs,
+    [{"id": "c1", "choice_group_id": "m-agent-1", "option_id": "o1", "label": "東京で残る", "message_index": 1}],
+    lang="ja",
+)
+check(len(layer["options"]) >= 2, "structured options from chips", str(layer["options"]))
+check(any(o.get("status") == "chosen" for o in layer["options"]), "hand choice marks chosen")
+check(any(o.get("status") == "rejected" for o in layer["options"]), "siblings marked rejected")
+check(any(e.get("type") == "chooses" for e in layer["edges"]), "chooses edge present")
+check(layer["issues"][0]["label"] == ISSUE_FALLBACK_LABEL["ja"], "ja issue fallback label")
+
+assembled = assemble_smart_map(
+    room_id="r-opt",
+    msgs=opt_msgs,
+    lang="ja",
+    choices=[{"id": "c1", "choice_group_id": "m-agent-1", "option_id": "o1", "label": "東京で残る", "message_index": 1}],
+    fresh=None,
+)
+check(any(o.get("status") == "chosen" for o in assembled.get("options") or []),
+      "assemble keeps hand-chosen option without LLM")
+check(any(e.get("type") == "chooses" for e in assembled.get("edges") or []),
+      "assemble exposes chooses edge")
+
+zh_layer = build_structured_option_layer(
+    [{"id": "m1", "character": "A", "txt": "x", "options": [{"id": "o1", "label": "留下"}, {"id": "o2", "label": "跳槽"}]}],
+    [],
+    lang="zh",
+)
+check(zh_layer["issues"][0]["label"] == ISSUE_FALLBACK_LABEL["zh"], "zh issue fallback label")
+check(zh_layer["options"][0]["label"] == "留下", "zh option labels preserved")
 
 if failures:
     print(f"\n{len(failures)} failure(s)")

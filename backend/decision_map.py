@@ -30,10 +30,17 @@ MIN_USER_MSGS = 2
 MIN_AGENT_MSGS = 3
 MIN_TOTAL_MSGS = 6
 
-IBIS_EDGE_TYPES = frozenset({"emerged_from", "supports", "opposes"})
+IBIS_EDGE_TYPES = frozenset({"emerged_from", "supports", "opposes", "chooses"})
 ISSUE_STATUSES = frozenset({"open", "leaning", "settled"})
+OPTION_STATUSES = frozenset({"open", "leaning", "chosen", "rejected"})
 
 LABEL_MAX = 48
+
+ISSUE_FALLBACK_LABEL = {
+    "zh": "当前抉择",
+    "en": "Current choice",
+    "ja": "いまの選択",
+}
 
 IBIS_PROMPT = {
     "zh": (
@@ -59,6 +66,7 @@ IBIS_PROMPT = {
         "5) settled 需有收敛信号，否则 open/leaning。\n"
         "6) badge 可填人设立场名，但 text 必须来自发言（用中文表述）。\n"
         "7) 若提供已有地图摘要，尽量复用已有 id，只更新变化；字段仍须中文。\n"
+        "8) 不要编造 options 或 chooses；选项与手选由系统结构化层提供。\n"
     ),
     "en": (
         "Extract an IBIS-style decision map from this deliberation. Use only the text; invent nothing.\n"
@@ -83,6 +91,32 @@ IBIS_PROMPT = {
         "5) settled only with convergence signals; else open/leaning.\n"
         "6) badge may be a persona stance id; text must come from speech.\n"
         "7) If a prior map summary is provided, reuse ids and patch changes.\n"
+        "8) Do not invent options or chooses; structured selection is supplied separately.\n"
+    ),
+    "ja": (
+        "この熟議から IBIS 風の意思決定マップを抽出する。原文のみに依拠し、捏造禁止。\n"
+        "【言語】ユーザー向けフィールドはすべて日本語で書く："
+        "issues.label、issues.summary、claims.text、room_leaning.direction、room_leaning.strength。"
+        "原文が中国語／英語でも日本語で要約する。"
+        "speaker は元の名前のままでよい。status / edge.type / phase の列挙コードは英語のまま。\n"
+        "厳密に JSON オブジェクト1つだけを出力（コードフェンスなし）：\n"
+        "{\n"
+        '  "issues": [{"id":"issue_1","label":"短い標題","parent_id":null,'
+        '"status":"open|leaning|settled","winning_claim_id":null,"phase":"Exploration|Structuring|Narrowing|Convergence|null","summary":"議題の一言"}],\n'
+        '  "claims": [{"id":"claim_1","issue_id":"issue_1","speaker":"userまたは役名",'
+        '"text":"検証可能な主張一句（日本語）","badge":null,"message_indexes":[0]}],\n'
+        '  "edges": [{"id":"e1","type":"emerged_from|supports|opposes","from":"…","to":"…"}],\n'
+        '  "room_leaning": {"direction":"場の傾向一句（日本語）または空","strength":"明確|傾向|未定"}\n'
+        "}\n"
+        "規則：\n"
+        "1) 各 claim に message_indexes を1つ以上（0始まり）。根拠のない主張は禁止。\n"
+        "2) 同一 speaker・同一 issue の繰り返しはマージし indexes を和集合。\n"
+        "3) issues はだいたい 1–4。枝は parent_id + emerged_from。\n"
+        "4) supports/opposes は原文に明確な賛否がある claim→claim のみ。\n"
+        "5) settled は収束の根拠がある時だけ。なければ open/leaning。\n"
+        "6) badge にスタンス名可。text は発言由来で日本語。\n"
+        "7) 既存マップ要約があれば id を再利用し差分更新。フィールドは日本語。\n"
+        "8) options や chooses を捏造しない（構造化選択は別レイヤ）。\n"
     ),
 }
 
@@ -429,6 +463,7 @@ def empty_map(room_id: str, lang: str = "en", *, insufficient: bool = False) -> 
         "lang": normalize_lang(lang),
         "issues": [],
         "claims": [],
+        "options": [],
         "edges": [],
         "annotations": [],
         "phase_spine": [],
@@ -440,6 +475,266 @@ def empty_map(room_id: str, lang: str = "en", *, insufficient: bool = False) -> 
         "topics": [],
         "stances": [],
         "conclusions": [],
+    }
+
+
+def choices_log_path(log_dir: str, room_id: str) -> str:
+    return os.path.join(log_dir, f"{room_id}_choices.jsonl")
+
+
+def load_choices(log_dir: str, room_id: str) -> List[dict]:
+    path = choices_log_path(log_dir, room_id)
+    if not os.path.exists(path):
+        return []
+    out: List[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and row.get("option_id"):
+                    out.append(row)
+    except OSError:
+        return []
+    return out
+
+
+def append_choice(log_dir: str, room_id: str, choice: dict) -> dict:
+    os.makedirs(log_dir, exist_ok=True)
+    path = choices_log_path(log_dir, room_id)
+    row = {
+        "id": str(choice.get("id") or f"ch-{uuid.uuid4().hex[:10]}"),
+        "time": datetime.now().isoformat(timespec="seconds"),
+        "choice_group_id": str(choice.get("choice_group_id") or ""),
+        "option_id": str(choice.get("option_id") or ""),
+        "label": _truncate(str(choice.get("label") or ""), 48),
+        "proposed_by": choice.get("proposed_by"),
+        "message_index": choice.get("message_index"),
+        "selection_message_index": choice.get("selection_message_index"),
+        "options": choice.get("options") if isinstance(choice.get("options"), list) else None,
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
+def choice_for_group(choices: List[dict], group_id: str) -> Optional[dict]:
+    gid = str(group_id or "")
+    if not gid:
+        return None
+    for c in reversed(choices or []):
+        if str(c.get("choice_group_id") or "") == gid:
+            return c
+    return None
+
+
+def _msg_options(m: dict) -> List[dict]:
+    """Read options from a chat history row (jsonl or DB clarifying_question)."""
+    raw = m.get("options")
+    if not raw and isinstance(m.get("clarifying_question"), dict):
+        raw = m["clarifying_question"].get("options")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for i, item in enumerate(raw):
+        if isinstance(item, str) and item.strip():
+            out.append({"id": f"o{i + 1}", "label": _truncate(item.strip(), 48)})
+        elif isinstance(item, dict):
+            label = str(item.get("label") or item.get("text") or "").strip()
+            if not label:
+                continue
+            oid = str(item.get("id") or f"o{i + 1}").strip() or f"o{i + 1}"
+            out.append({"id": oid, "label": _truncate(label, 48)})
+    return out if len(out) >= 2 else []
+
+
+def build_structured_option_layer(
+    msgs: List[dict],
+    choices: List[dict],
+    *,
+    lang: str = "en",
+    intake_options: Optional[List[Any]] = None,
+) -> dict:
+    """
+    Deterministic Option + chooses layer from chat chips / choice log / intake.
+    Does not invent claims.
+    """
+    lang = normalize_lang(lang)
+    issue_id = "issue_choice"
+    issue_label = ISSUE_FALLBACK_LABEL.get(lang) or ISSUE_FALLBACK_LABEL["en"]
+    options: List[dict] = []
+    opt_ids: set = set()
+    edges: List[dict] = []
+    claims: List[dict] = []
+    chosen_ids: set = set()
+
+    def add_option(
+        oid: str,
+        label: str,
+        *,
+        proposed_by: str,
+        indexes: List[int],
+        status: str = "open",
+        group_id: Optional[str] = None,
+    ) -> None:
+        if oid in opt_ids:
+            # Upgrade status if newly chosen
+            if status == "chosen":
+                for o in options:
+                    if o["id"] == oid:
+                        o["status"] = "chosen"
+                        chosen_ids.add(oid)
+            return
+        st = status if status in OPTION_STATUSES else "open"
+        options.append({
+            "id": oid,
+            "issue_id": issue_id,
+            "label": _truncate(label, 40),
+            "summary": None,
+            "proposed_by": proposed_by,
+            "status": st,
+            "message_indexes": indexes,
+            "choice_group_id": group_id,
+        })
+        opt_ids.add(oid)
+        if st == "chosen":
+            chosen_ids.add(oid)
+
+    # Intake seeds (map-only; proposed_by=intake)
+    for i, item in enumerate(intake_options or []):
+        if isinstance(item, str) and item.strip():
+            add_option(f"intake_{i + 1}", item.strip(), proposed_by="intake", indexes=[])
+        elif isinstance(item, dict):
+            label = str(item.get("label") or item.get("text") or item.get("name") or "").strip()
+            if label:
+                add_option(
+                    str(item.get("id") or f"intake_{i + 1}"),
+                    label,
+                    proposed_by="intake",
+                    indexes=[],
+                )
+
+    # Agent message option groups
+    for mi, m in enumerate(msgs or []):
+        opts = _msg_options(m)
+        if not opts:
+            continue
+        group_id = str(m.get("id") or f"msg-{mi}")
+        speaker = _msg_character(m) or "agent"
+        for o in opts:
+            add_option(
+                f"{group_id}:{o['id']}",
+                o["label"],
+                proposed_by=speaker,
+                indexes=[mi],
+                group_id=group_id,
+            )
+
+    # Apply hand selections (truth source)
+    for ch in choices or []:
+        gid = str(ch.get("choice_group_id") or "")
+        oid_raw = str(ch.get("option_id") or "")
+        label = str(ch.get("label") or "").strip()
+        if not oid_raw:
+            continue
+        # Prefer namespaced id from group
+        full_id = f"{gid}:{oid_raw}" if gid and f"{gid}:{oid_raw}" in opt_ids else None
+        if not full_id:
+            # Match by suffix or recreate from choice payload options
+            for o in options:
+                if o["id"].endswith(f":{oid_raw}") or o["id"] == oid_raw:
+                    full_id = o["id"]
+                    break
+        if not full_id and isinstance(ch.get("options"), list):
+            for o in ch["options"]:
+                if isinstance(o, dict) and str(o.get("id")) == oid_raw:
+                    full_id = f"{gid}:{oid_raw}" if gid else oid_raw
+                    add_option(
+                        full_id,
+                        str(o.get("label") or label or oid_raw),
+                        proposed_by=str(ch.get("proposed_by") or "agent"),
+                        indexes=_coerce_indexes([ch.get("message_index")], len(msgs)) if msgs else [],
+                        group_id=gid or None,
+                    )
+                    break
+        if not full_id:
+            full_id = f"{gid}:{oid_raw}" if gid else oid_raw
+            add_option(
+                full_id,
+                label or oid_raw,
+                proposed_by=str(ch.get("proposed_by") or "agent"),
+                indexes=_coerce_indexes([ch.get("message_index")], len(msgs)) if msgs else [],
+                status="chosen",
+                group_id=gid or None,
+            )
+        else:
+            add_option(
+                full_id,
+                label or full_id,
+                proposed_by="user",
+                indexes=_coerce_indexes([ch.get("message_index")], len(msgs)) if msgs else [],
+                status="chosen",
+                group_id=gid or None,
+            )
+
+        sel_idx = ch.get("selection_message_index")
+        indexes = _coerce_indexes(
+            [sel_idx if sel_idx is not None else ch.get("message_index")],
+            len(msgs),
+        ) if msgs else []
+        sel_id = f"sel-{ch.get('id') or full_id}"
+        claims.append({
+            "id": sel_id,
+            "issue_id": issue_id,
+            "speaker": "user",
+            "text": label or full_id,
+            "badge": "selection",
+            "message_indexes": indexes,
+        })
+        edges.append({
+            "id": f"e-chooses-{sel_id}-{full_id}",
+            "type": "chooses",
+            "from": sel_id,
+            "to": full_id,
+        })
+
+    # Mark non-chosen siblings in a chosen group as rejected (still visible)
+    chosen_groups = {
+        o.get("choice_group_id")
+        for o in options
+        if o.get("status") == "chosen" and o.get("choice_group_id")
+    }
+    for o in options:
+        if o.get("status") == "chosen":
+            continue
+        if o.get("choice_group_id") and o["choice_group_id"] in chosen_groups:
+            o["status"] = "rejected"
+
+    if not options and not claims:
+        return {"issues": [], "options": [], "claims": [], "edges": []}
+
+    winning = next((o["id"] for o in options if o.get("status") == "chosen"), None)
+    status = "settled" if winning else "open"
+    return {
+        "issues": [{
+            "id": issue_id,
+            "label": issue_label,
+            "parent_id": None,
+            "status": status,
+            "winning_claim_id": None,
+            "winning_option_id": winning,
+            "phase": None,
+            "summary": None,
+        }],
+        "options": options[:12],
+        "claims": claims[:24],
+        "edges": edges,
+        "room_leaning": None,
     }
 
 
@@ -458,10 +753,11 @@ def _coerce_indexes(raw: Any, msg_count: int) -> List[int]:
 
 
 def normalize_ibis(data: Optional[dict], *, msg_count: int = 0) -> dict:
-    """Clean LLM / cached payload into IBIS schema."""
+    """Clean LLM / cached / structured payload into IBIS schema."""
     data = data if isinstance(data, dict) else {}
     issues_in = data.get("issues") or data.get("topics") or []
     claims_in = data.get("claims") or data.get("stances") or []
+    options_in = data.get("options") or []
     edges_in = data.get("edges") or []
 
     issues: List[dict] = []
@@ -481,10 +777,45 @@ def normalize_ibis(data: Optional[dict], *, msg_count: int = 0) -> dict:
             "parent_id": t.get("parent_id"),
             "status": status,
             "winning_claim_id": t.get("winning_claim_id"),
+            "winning_option_id": t.get("winning_option_id"),
             "phase": t.get("phase"),
             "summary": _truncate(str(t.get("summary") or ""), 80) or None,
         })
         issue_ids.add(iid)
+
+    options: List[dict] = []
+    option_ids: set = set()
+    for o in options_in:
+        if not isinstance(o, dict):
+            continue
+        oid = str(o.get("id") or "").strip() or f"opt_{uuid.uuid4().hex[:8]}"
+        issue_id = o.get("issue_id")
+        if issue_id and issue_id not in issue_ids and issues:
+            issue_id = issues[0]["id"]
+        if not issue_id:
+            continue
+        label = (o.get("label") or o.get("text") or "").strip()
+        if not label:
+            continue
+        status = str(o.get("status") or "open").strip().lower()
+        if status not in OPTION_STATUSES:
+            status = "open"
+        indexes = (
+            _coerce_indexes(o.get("message_indexes"), msg_count)
+            if msg_count
+            else list(o.get("message_indexes") or [])
+        )
+        options.append({
+            "id": oid,
+            "issue_id": issue_id,
+            "label": _truncate(label, 40),
+            "summary": _truncate(str(o.get("summary") or ""), 80) or None,
+            "proposed_by": str(o.get("proposed_by") or "agent"),
+            "status": status,
+            "message_indexes": indexes,
+            "choice_group_id": o.get("choice_group_id"),
+        })
+        option_ids.add(oid)
 
     claims: List[dict] = []
     claim_ids: set = set()
@@ -501,8 +832,9 @@ def normalize_ibis(data: Optional[dict], *, msg_count: int = 0) -> dict:
         if not text:
             continue
         indexes = _coerce_indexes(c.get("message_indexes"), msg_count) if msg_count else list(c.get("message_indexes") or [])
-        # Drop claims with no evidence when we know msg_count
-        if msg_count and not indexes:
+        # Selection claims may have empty indexes; keep them. Other claims need evidence when msg_count known.
+        is_selection = (c.get("badge") == "selection") or str(cid).startswith("sel-")
+        if msg_count and not indexes and not is_selection:
             continue
         claims.append({
             "id": cid,
@@ -533,9 +865,17 @@ def normalize_ibis(data: Optional[dict], *, msg_count: int = 0) -> dict:
         if et == "emerged_from":
             if frm not in issue_ids or to not in issue_ids:
                 continue
-        else:
-            if frm not in claim_ids or to not in claim_ids:
+        elif et == "chooses":
+            if frm not in claim_ids or to not in option_ids:
                 continue
+        elif et in ("supports", "opposes"):
+            # claim→claim or claim→option
+            if frm not in claim_ids:
+                continue
+            if to not in claim_ids and to not in option_ids:
+                continue
+        else:
+            continue
         eid = str(e.get("id") or f"e-{et}-{frm}-{to}")
         if eid in seen_e:
             continue
@@ -567,6 +907,7 @@ def normalize_ibis(data: Optional[dict], *, msg_count: int = 0) -> dict:
     return {
         "issues": issues[:6],
         "claims": claims[:24],
+        "options": options[:12],
         "edges": edges,
         "room_leaning": leaning,
     }
@@ -605,6 +946,7 @@ def merge_ibis_maps(base: dict, overlay: Optional[dict], *, msg_count: int = 0) 
     return {
         "issues": merge_list("issues"),
         "claims": merge_list("claims"),
+        "options": merge_list("options"),
         "edges": edges,
         "room_leaning": leaning,
     }
@@ -735,10 +1077,20 @@ def assemble_smart_map(
     cached: Optional[dict] = None,
     fresh: Optional[dict] = None,
     agents: Optional[List[dict]] = None,
+    choices: Optional[List[dict]] = None,
+    intake_options: Optional[List[Any]] = None,
 ) -> dict:
     """Assemble API payload. Caller decides whether to LLM; this never invents claims."""
     lang = normalize_lang(lang)
-    insufficient = not enough_messages(msgs)
+    # Structured options/choices can render even before LLM threshold.
+    structured = build_structured_option_layer(
+        msgs or [],
+        choices or [],
+        lang=lang,
+        intake_options=intake_options,
+    )
+    has_structured = bool(structured.get("options") or structured.get("claims"))
+    insufficient = not enough_messages(msgs) and not has_structured
     phase_spine = build_phase_spine(msgs, phase_changes)
     annotations = list(user_annotations or [])
 
@@ -756,12 +1108,35 @@ def assemble_smart_map(
         "lang": lang,
         "issues": [],
         "claims": [],
+        "options": [],
         "edges": [],
         "room_leaning": None,
     }
     merged = merge_ibis_maps(base, cached, msg_count=len(msgs))
     if fresh:
         merged = merge_ibis_maps(merged, fresh, msg_count=len(msgs))
+    # Structured hand-choices win over LLM for options / chooses / selection claims.
+    if has_structured:
+        merged = merge_ibis_maps(merged, structured, msg_count=len(msgs))
+        # Never let LLM overwrite chosen status on structured options
+        chosen = {
+            o["id"]
+            for o in (structured.get("options") or [])
+            if o.get("status") == "chosen"
+        }
+        if chosen:
+            opts = []
+            for o in merged.get("options") or []:
+                if o["id"] in chosen:
+                    opts.append({**o, "status": "chosen"})
+                else:
+                    opts.append(o)
+            merged["options"] = opts
+            for iss in merged.get("issues") or []:
+                if iss.get("id") == "issue_choice" or not iss.get("winning_option_id"):
+                    iss["winning_option_id"] = next(iter(chosen), None)
+                    if iss.get("winning_option_id"):
+                        iss["status"] = "settled"
     merged = apply_overall_leaning(merged, overall)
 
     return {
@@ -769,13 +1144,14 @@ def assemble_smart_map(
         "lang": lang,
         "issues": merged.get("issues") or [],
         "claims": merged.get("claims") or [],
+        "options": merged.get("options") or [],
         "edges": merged.get("edges") or [],
         "annotations": annotations,
         "phase_spine": phase_spine,
         "room_leaning": merged.get("room_leaning"),
         "agents": [{"key": a.get("key"), "name": a.get("name"), "stance": a.get("stance")} for a in (agents or [])],
         "insufficient": False,
-        "extracted": bool(cached or fresh),
+        "extracted": bool(cached or fresh or has_structured),
         "topics": [],
         "stances": [],
         "conclusions": [],

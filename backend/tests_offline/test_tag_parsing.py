@@ -61,4 +61,34 @@ _sp = aw.ChatAgent("A", "ChatbotA", "(role)").system_prompt(
 check("prompt instructs that the tags stay in English",
       "Do NOT translate them" in _sp and "[消息]" in _sp, _sp[-400:])
 
+# OPTIONS: English tags + zh / ja aliases; labels keep chat language.
+OPTS_EN = '[{"id":"o1","label":"Stay"},{"id":"o2","label":"Switch"}]'
+OPTS_ZH = '[{"id":"o1","label":"留下"},{"id":"o2","label":"跳槽"}]'
+OPTS_JA = '[{"id":"o1","label":"残る"},{"id":"o2","label":"転職する"}]'
+
+p = aw.parse_agent_turn(
+    f"[MESSAGE]\nPick one.\n[/MESSAGE]\n[OPTIONS]\n{OPTS_EN}\n[/OPTIONS]\n[RATIONALE]\nr\n[/RATIONALE]"
+)
+check("OPTIONS english tags parse", len(p["options"]) == 2 and p["options"][0]["label"] == "Stay",
+      repr(p["options"]))
+check("OPTIONS stripped from message", "OPTIONS" not in p["message"] and "Stay" not in p["message"],
+      repr(p["message"]))
+
+p = aw.parse_agent_turn(
+    f"[消息]\n选一个。\n[/消息]\n[选项]\n{OPTS_ZH}\n[/选项]\n[理由]\nr\n[/理由]"
+)
+check("OPTIONS chinese alias tags parse",
+      len(p["options"]) == 2 and p["options"][1]["label"] == "跳槽", repr(p["options"]))
+
+p = aw.parse_agent_turn(
+    f"[メッセージ]\nどれにする？\n[/メッセージ]\n[選択肢]\n{OPTS_JA}\n[/選択肢]\n[根拠]\nr\n[/根拠]"
+)
+check("OPTIONS japanese alias tags parse",
+      len(p["options"]) == 2 and p["options"][0]["label"] == "残る", repr(p["options"]))
+check("japanese MESSAGE captured", p["message"] == "どれにする？", repr(p["message"]))
+
+_sp_ja = aw.ChatAgent("A", "ChatbotA", "(role)").system_prompt(
+    scene="(s)", name_map={"A": "ChatbotA"}, lang="ja")
+check("ja session asks for Japanese messages", "日本語" in _sp_ja, _sp_ja[:500])
+
 _ck.finish("TAG PARSING CHECKS PASSED")

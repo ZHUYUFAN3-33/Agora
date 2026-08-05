@@ -578,11 +578,15 @@ def _persist_chat_message_db(
                     title=_room_title_for_session(session, room_id),
                     phase=((session or {}).get("moderator_state") or {}).get("state") or "Exploration",
                 )
+        cq = None
+        opts = msg.get("options")
+        if isinstance(opts, list) and len(opts) >= 2:
+            cq = {"options": opts}
         store.append_chat_message(
             room_id,
             character=str(msg.get("character") or ""),
             txt=str(msg.get("txt") or ""),
-            clarifying_question=None,
+            clarifying_question=cq,
             created_at=str(msg.get("time") or "") or None,
         )
     except Exception as e:
@@ -833,7 +837,11 @@ def start_chat():
 
 def normalize_lang_safe(lang: str) -> str:
     lang = (lang or "zh").lower()
-    return "zh" if lang.startswith("zh") else "en"
+    if lang.startswith("zh"):
+        return "zh"
+    if lang.startswith("ja"):
+        return "ja"
+    return "en"
 
 
 @app.route('/api/roster', methods=['POST'])
@@ -1132,6 +1140,7 @@ def get_history(room_id):
             if not auth or (auth["user_id"] != owner and not auth.get("is_admin")):
                 return jsonify({"error": "Forbidden"}), 403
         session_agents, _, _ = _make_session_agents(session)
+        from decision_map import load_choices
         return jsonify({
             "room_id": room_id,
             "mode": session.get("mode", "full"),
@@ -1140,6 +1149,7 @@ def get_history(room_id):
                 for slot in _session_slot_keys(session)
             ],
             "history": session["history"],
+            "choices": load_choices(LOG_DIR, room_id),
             "known_facts": list(session["known_user_facts"].values()),
             "phase": (session.get("moderator_state") or {}).get("state"),
             "phase_changes": _phase_changes_for_room(room_id),
@@ -1159,17 +1169,24 @@ def get_history(room_id):
     msgs = store.list_chat_messages(room_id)
     history = []
     for m in msgs:
-        history.append({
+        row = {
             "character": m["character"],
             "txt": m["txt"],
             "time": m.get("created_at"),
             "chat_room_id": room_id,
-        })
+        }
+        cq = m.get("clarifying_question")
+        if isinstance(cq, dict) and isinstance(cq.get("options"), list):
+            row["options"] = cq["options"]
+            row["clarifying_question"] = cq
+        history.append(row)
+    from decision_map import load_choices
     return jsonify({
         "room_id": room_id,
         "mode": "full",
         "active_agents": [],
         "history": history,
+        "choices": load_choices(LOG_DIR, room_id),
         "known_facts": [],
         "phase": room.get("phase"),
         "phase_changes": _phase_changes_for_room(room_id),
@@ -1484,7 +1501,7 @@ def get_decision_map(room_id):
         return err
 
     lang = (request.args.get("lang") or "en").strip().lower()
-    if lang not in ("en", "zh"):
+    if lang not in ("en", "zh", "ja"):
         lang = "en"
     # Default smart on; extract=1 forces a (re)run when messages suffice
     smart = (request.args.get("smart") or "1").strip().lower() not in ("0", "false", "no")
@@ -1508,6 +1525,7 @@ def get_decision_map(room_id):
         load_latest_extract_meta,
         extract_cache_fresh,
         load_user_annotations,
+        load_choices,
         extract_ibis_llm,
         append_extract,
         empty_map,
@@ -1519,6 +1537,13 @@ def get_decision_map(room_id):
     phase_changes = _phase_changes_for_room(room_id)
     overall = load_summary_overall(LOG_DIR, room_id)
     user_annotations = load_user_annotations(LOG_DIR, room_id)
+    choices = load_choices(LOG_DIR, room_id)
+    intake_options = None
+    if room_id in chat_sessions:
+        agora2 = chat_sessions[room_id].get("agora2") or {}
+        intake = agora2.get("intake") or {}
+        if isinstance(intake.get("options"), list):
+            intake_options = intake.get("options")
     # Prefer same-UI-lang cache so zh/en maps don't overwrite each other.
     cached_meta = load_latest_extract_meta(LOG_DIR, room_id, lang=lang) if smart else None
     cached = cached_meta["map"] if cached_meta else None
@@ -1552,8 +1577,10 @@ def get_decision_map(room_id):
         cached=cached,
         fresh=fresh,
         agents=agents,
+        choices=choices,
+        intake_options=intake_options,
     )
-    if fresh or cached:
+    if fresh or cached or payload.get("options"):
         payload["extracted"] = True
     payload["extract_skipped"] = bool(do_extract and not need_extract and cached)
     return jsonify(payload)
@@ -1630,7 +1657,7 @@ def decision_map_extract(room_id):
 
     body = request.get_json(silent=True) or {}
     lang = (body.get("lang") or request.args.get("lang") or "en").strip().lower()
-    if lang not in ("en", "zh"):
+    if lang not in ("en", "zh", "ja"):
         lang = "en"
 
     msgs, agents, _scenario_type = _load_room_msgs_and_agents(room_id, ctx or {})
@@ -1654,6 +1681,16 @@ def decision_map_extract(room_id):
     if not msgs:
         return jsonify(empty_map(room_id, lang, insufficient=True))
 
+    from decision_map import load_choices as _load_choices
+
+    def _intake_opts():
+        if room_id in chat_sessions:
+            intake = (chat_sessions[room_id].get("agora2") or {}).get("intake") or {}
+            if isinstance(intake.get("options"), list):
+                return intake.get("options")
+        return None
+
+    choices = _load_choices(LOG_DIR, room_id)
     if not enough_messages(msgs):
         payload = assemble_smart_map(
             room_id=room_id,
@@ -1663,6 +1700,8 @@ def decision_map_extract(room_id):
             overall=load_summary_overall(LOG_DIR, room_id),
             user_annotations=load_user_annotations(LOG_DIR, room_id),
             agents=agents,
+            choices=choices,
+            intake_options=_intake_opts(),
         )
         return jsonify(payload)
 
@@ -1689,9 +1728,109 @@ def decision_map_extract(room_id):
         cached=cached,
         fresh=fresh,
         agents=agents,
+        choices=choices,
+        intake_options=_intake_opts(),
     )
     payload["extracted"] = True
     return jsonify(payload)
+
+
+@app.route('/api/decision-map/<room_id>/choices', methods=['GET', 'POST'])
+def decision_map_choices(room_id):
+    """Hand-selected option chips — structured truth for the Decision Map."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    ctx, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
+    from decision_map import (
+        load_choices,
+        append_choice,
+        choice_for_group,
+        assemble_smart_map,
+        load_summary_overall,
+        load_user_annotations,
+        load_latest_extract,
+    )
+
+    if request.method == "GET":
+        return jsonify({"room_id": room_id, "choices": load_choices(LOG_DIR, room_id)})
+
+    body = request.get_json(silent=True) or {}
+    option_id = (body.get("option_id") or "").strip()
+    label = (body.get("label") or "").strip()
+    choice_group_id = (body.get("choice_group_id") or "").strip()
+    if not option_id or not label:
+        return jsonify({"error": "option_id and label required"}), 400
+    if choice_for_group(load_choices(LOG_DIR, room_id), choice_group_id):
+        return jsonify({"error": "This option group was already chosen"}), 409
+
+    # Optional: append a visible user confirmation into chat history
+    confirm_txt = (body.get("confirm_text") or "").strip()
+    selection_message_index = None
+    if room_id in chat_sessions and confirm_txt:
+        session = chat_sessions[room_id]
+        user_msg = {
+            "chat_room_id": room_id,
+            "time": now_local_iso(),
+            "character": "user",
+            "txt": confirm_txt,
+            "choice": {
+                "choice_group_id": choice_group_id,
+                "option_id": option_id,
+                "label": label,
+            },
+        }
+        append_jsonl(session["chat_fp"], user_msg)
+        session["history"].append(user_msg)
+        _persist_chat_message_db(room_id, user_msg, session)
+        selection_message_index = len(session["history"]) - 1
+
+    row = append_choice(
+        LOG_DIR,
+        room_id,
+        {
+            "choice_group_id": choice_group_id,
+            "option_id": option_id,
+            "label": label,
+            "proposed_by": body.get("proposed_by"),
+            "message_index": body.get("message_index"),
+            "selection_message_index": selection_message_index
+            if selection_message_index is not None
+            else body.get("selection_message_index"),
+            "options": body.get("options"),
+        },
+    )
+
+    # Return updated map slice so the client can refresh without full extract
+    msgs, agents, _ = _load_room_msgs_and_agents(room_id, ctx or {})
+    if not msgs and room_id in chat_sessions:
+        msgs = list(chat_sessions[room_id].get("history") or [])
+    intake_options = None
+    if room_id in chat_sessions:
+        intake = (chat_sessions[room_id].get("agora2") or {}).get("intake") or {}
+        if isinstance(intake.get("options"), list):
+            intake_options = intake.get("options")
+    lang = (body.get("lang") or "en").strip().lower()
+    if lang not in ("en", "zh", "ja"):
+        lang = "en"
+    payload = assemble_smart_map(
+        room_id=room_id,
+        msgs=msgs or [],
+        phase_changes=_phase_changes_for_room(room_id),
+        lang=lang,
+        overall=load_summary_overall(LOG_DIR, room_id),
+        user_annotations=load_user_annotations(LOG_DIR, room_id),
+        cached=load_latest_extract(LOG_DIR, room_id, lang=lang),
+        fresh=None,
+        agents=agents,
+        choices=load_choices(LOG_DIR, room_id),
+        intake_options=intake_options,
+    )
+    return jsonify({"choice": row, "map": payload, "selection_message_index": selection_message_index})
 
 
 @app.route('/api/health', methods=['GET'])

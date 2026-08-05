@@ -1,9 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { motion } from "motion/react";
 import { getUiFont, labelCaseClass, t, type UiLang } from "../i18n/ui";
-import type { DecisionMapClaim, DecisionMapData, DecisionMapEdge, DecisionMapIssue } from "./DecisionMapPanel";
+import type {
+  DecisionMapClaim,
+  DecisionMapData,
+  DecisionMapEdge,
+  DecisionMapIssue,
+  DecisionMapOption,
+} from "./DecisionMapPanel";
 
-export type CanvasNodeKind = "issue" | "claim";
+export type CanvasNodeKind = "issue" | "claim" | "option";
 
 export type CanvasNode = {
   id: string;
@@ -36,6 +42,10 @@ const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 1.8;
 const CLAIM_W = 200;
 const CLAIM_H = 72;
+const OPTION_W = 148;
+const OPTION_H = 52;
+const OPTION_GAP = 12;
+const OPTION_BAND_GAP = 28;
 const GAP_X = 120;
 const GAP_Y = 36;
 const FRAME_PAD_X = 36;
@@ -43,14 +53,16 @@ const FRAME_PAD_Y = 28;
 const FRAME_HEADER = 44;
 
 function statusColor(status?: string): string {
-  if (status === "settled") return "#059669";
+  if (status === "settled" || status === "chosen") return "#059669";
   if (status === "leaning") return "#1560a8";
+  if (status === "rejected") return "rgba(0,0,0,0.22)";
   return "rgba(0,0,0,0.35)";
 }
 
 function edgeStroke(type: string): { stroke: string; dash?: string; width: number } {
   if (type === "supports") return { stroke: "#059669", width: 1.75 };
   if (type === "opposes") return { stroke: "#dc2626", width: 1.75 };
+  if (type === "chooses") return { stroke: "#b45309", width: 2.25 };
   return { stroke: "rgba(0,0,0,0.28)", width: 1.3, dash: "5 3" };
 }
 
@@ -119,6 +131,7 @@ export function layoutIbisMap(
   if (!data) return { frames: [], nodes: [] };
   const issues = data.issues || [];
   const claims = data.claims || [];
+  const options = data.options || [];
   const allEdges = data.edges || [];
   const nodes: CanvasNode[] = [];
   const frames: FrameLayout[] = [];
@@ -140,6 +153,7 @@ export function layoutIbisMap(
   const baseX = 64;
 
   ordered.forEach((issue, ii) => {
+    const mineOpts = options.filter((o) => o.issue_id === issue.id);
     const mine = claims.filter((c) => c.issue_id === issue.id);
     const localEdges = allEdges.filter(
       (e) =>
@@ -149,26 +163,45 @@ export function layoutIbisMap(
     );
     const layers = mine.length ? layerClaims(mine, localEdges) : [[]];
 
-    // Position claims in world space first (relative), then place frame around them
+    // Options band (top row) — relative coords
+    const optRel: { id: string; x: number; y: number; option: DecisionMapOption }[] = [];
+    mineOpts.forEach((o, oi) => {
+      optRel.push({
+        id: o.id,
+        x: oi * (OPTION_W + OPTION_GAP),
+        y: 0,
+        option: o,
+      });
+    });
+    const optBandH = mineOpts.length ? OPTION_H + OPTION_BAND_GAP : 0;
+    const optBandW = mineOpts.length
+      ? mineOpts.length * OPTION_W + Math.max(0, mineOpts.length - 1) * OPTION_GAP
+      : 0;
+
+    // Claims layered below the options band
     const rel: { id: string; x: number; y: number; claim: DecisionMapClaim }[] = [];
     layers.forEach((layer, li) => {
       const colH = layer.length * CLAIM_H + Math.max(0, layer.length - 1) * GAP_Y;
       layer.forEach((c, ri) => {
         const x = li * (CLAIM_W + GAP_X);
-        const y = ri * (CLAIM_H + GAP_Y) - colH / 2 + CLAIM_H / 2;
+        const y = optBandH + ri * (CLAIM_H + GAP_Y) - colH / 2 + CLAIM_H / 2;
         rel.push({ id: c.id, x, y, claim: c });
       });
     });
 
     let minRX = 0;
     let minRY = 0;
-    let maxRX = CLAIM_W;
-    let maxRY = CLAIM_H;
-    if (rel.length) {
-      minRX = Math.min(...rel.map((r) => r.x));
-      minRY = Math.min(...rel.map((r) => r.y));
-      maxRX = Math.max(...rel.map((r) => r.x + CLAIM_W));
-      maxRY = Math.max(...rel.map((r) => r.y + CLAIM_H));
+    let maxRX = Math.max(CLAIM_W, optBandW || CLAIM_W);
+    let maxRY = Math.max(CLAIM_H, optBandH || CLAIM_H);
+    const allBoxes = [
+      ...optRel.map((r) => ({ x: r.x, y: r.y, w: OPTION_W, h: OPTION_H })),
+      ...rel.map((r) => ({ x: r.x, y: r.y, w: CLAIM_W, h: CLAIM_H })),
+    ];
+    if (allBoxes.length) {
+      minRX = Math.min(...allBoxes.map((r) => r.x));
+      minRY = Math.min(...allBoxes.map((r) => r.y));
+      maxRX = Math.max(...allBoxes.map((r) => r.x + r.w));
+      maxRY = Math.max(...allBoxes.map((r) => r.y + r.h));
     }
     const contentW = Math.max(CLAIM_W, maxRX - minRX);
     const contentH = Math.max(CLAIM_H, maxRY - minRY);
@@ -182,7 +215,6 @@ export function layoutIbisMap(
     const frameX = baseX + (isBranch ? 48 : 0) + (ii % 2) * 16;
     const frameY = cursorY;
 
-    // Center content block inside frame
     const originX = frameX + FRAME_PAD_X + (frameW - FRAME_PAD_X * 2 - contentW) / 2 - minRX;
     const originY = frameY + FRAME_HEADER + FRAME_PAD_Y + (frameH - FRAME_HEADER - FRAME_PAD_Y * 2 - contentH) / 2 - minRY;
 
@@ -208,6 +240,23 @@ export function layoutIbisMap(
       messageIndexes: [],
       issueId: issue.id,
       staggerIndex: stagger++,
+    });
+
+    optRel.forEach((r) => {
+      nodes.push({
+        id: r.option.id,
+        kind: "option",
+        label: r.option.label,
+        detail: r.option.proposed_by || undefined,
+        status: r.option.status || "open",
+        x: originX + r.x,
+        y: originY + r.y,
+        w: OPTION_W,
+        h: OPTION_H,
+        messageIndexes: r.option.message_indexes || [],
+        issueId: r.option.issue_id,
+        staggerIndex: stagger++,
+      });
     });
 
     rel.forEach((r) => {
@@ -277,7 +326,14 @@ export function DecisionMapCanvas({
   } | null>(null);
 
   const layoutKey = useMemo(
-    () => (data?.issues || []).map((i) => i.id).join("|") + "::" + (data?.claims || []).length,
+    () =>
+      (data?.issues || []).map((i) => i.id).join("|") +
+      "::" +
+      (data?.claims || []).length +
+      "::" +
+      (data?.options || []).length +
+      "::" +
+      (data?.options || []).map((o) => o.status).join(","),
     [data],
   );
   useEffect(() => {
@@ -299,10 +355,11 @@ export function DecisionMapCanvas({
 
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   const claimNodes = nodes.filter((n) => n.kind === "claim");
+  const optionNodes = nodes.filter((n) => n.kind === "option");
 
   const edges = useMemo(() => {
     const list = (data?.edges || []).filter((e) =>
-      e.type === "supports" || e.type === "opposes" || e.type === "emerged_from",
+      e.type === "supports" || e.type === "opposes" || e.type === "emerged_from" || e.type === "chooses",
     ) as DecisionMapEdge[];
     return list.filter((e) => byId.has(e.from) && byId.has(e.to));
   }, [data, byId]);
@@ -419,7 +476,7 @@ export function DecisionMapCanvas({
   };
 
   const startNodeDrag = (e: React.PointerEvent, node: CanvasNode) => {
-    if (node.kind !== "claim") return;
+    if (node.kind !== "claim" && node.kind !== "option") return;
     e.stopPropagation();
     dragRef.current = {
       mode: "node",
@@ -592,6 +649,70 @@ export function DecisionMapCanvas({
             );
           })}
         </svg>
+
+        {optionNodes.map((node) => {
+          const selected = selectedId === node.id;
+          const chosen = node.status === "chosen";
+          const rejected = node.status === "rejected";
+          const delay = 0.08 + node.staggerIndex * 0.03;
+          return (
+            <motion.button
+              key={node.id}
+              type="button"
+              data-map-node={node.id}
+              initial={enterReady ? { opacity: 0, scale: 0.94, y: -4 } : false}
+              animate={enterReady ? { opacity: rejected ? 0.55 : 1, scale: 1, y: 0 } : { opacity: 0 }}
+              transition={{ duration: 0.24, delay: enterReady ? delay : 0, ease: [0.22, 1, 0.36, 1] }}
+              onPointerDown={(e) => startNodeDrag(e, node)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect(node.id, "option");
+              }}
+              className={`absolute z-[3] text-left rounded-[8px] border bg-white overflow-hidden ${
+                chosen
+                  ? "border-black/55 shadow-[0_0_0_2px_rgba(0,0,0,0.08),0_6px_16px_rgba(0,0,0,0.08)]"
+                  : selected
+                    ? "border-black/35 ring-2 ring-black/10"
+                    : "border-black/12 hover:border-black/25 shadow-[0_1px_0_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.05)]"
+              }`}
+              style={{
+                left: node.x,
+                top: node.y,
+                width: node.w,
+                height: node.h,
+                fontFamily: (font as CSSProperties).fontFamily,
+                cursor: "grab",
+                borderWidth: chosen ? 2.5 : 1,
+              }}
+            >
+              <div
+                className="h-[3px]"
+                style={{ background: statusColor(node.status) }}
+              />
+              <div className="px-2 py-1.5 h-[calc(100%-3px)] flex flex-col justify-center">
+                <div className="flex items-center justify-between gap-1">
+                  <p className={`text-[9px] text-black/35 ${labelCaseClass(lang)}`}>{t(lang, "map.options")}</p>
+                  {chosen && (
+                    <span className={`text-[8px] text-emerald-700 ${labelCaseClass(lang)}`}>
+                      {t(lang, "map.status.chosen")}
+                    </span>
+                  )}
+                  {rejected && (
+                    <span className={`text-[8px] text-black/35 ${labelCaseClass(lang)}`}>
+                      {t(lang, "map.status.rejected")}
+                    </span>
+                  )}
+                </div>
+                <p
+                  className={`text-[12px] truncate leading-snug ${rejected ? "text-black/45" : "text-black"}`}
+                  style={font as CSSProperties}
+                >
+                  {node.label}
+                </p>
+              </div>
+            </motion.button>
+          );
+        })}
 
         {claimNodes.map((node) => {
           const selected = selectedId === node.id;

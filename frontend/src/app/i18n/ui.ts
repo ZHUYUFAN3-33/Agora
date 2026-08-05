@@ -352,6 +352,17 @@ const en: Dict = {
   "map.errorLoad": "Failed to load decision map",
   "map.errorExtract": "Extract failed",
   "map.edge.opposes": "opposes",
+  "map.options": "Options",
+  "map.status.chosen": "chosen",
+  "map.status.rejected": "not chosen",
+  "map.param.proposedBy": "Proposed by",
+  "map.param.optionStatus": "Option status",
+  "map.legend.chosen": "chosen",
+  "map.legend.supports": "supports",
+  "map.legend.opposes": "opposes",
+  "chat.choseOption": "Chose: {label}",
+  "chat.optionsPickHint": "Tap an option",
+  "chat.optionLocked": "Already chosen",
 };
 
 const zh: Dict = {
@@ -628,6 +639,17 @@ const zh: Dict = {
   "map.errorLoad": "决策地图加载失败",
   "map.errorExtract": "抽取失败",
   "map.edge.opposes": "反对",
+  "map.options": "选项",
+  "map.status.chosen": "已选",
+  "map.status.rejected": "未选",
+  "map.param.proposedBy": "提出者",
+  "map.param.optionStatus": "选项状态",
+  "map.legend.chosen": "已选",
+  "map.legend.supports": "支持",
+  "map.legend.opposes": "反对",
+  "chat.choseOption": "选择了：{label}",
+  "chat.optionsPickHint": "点选一个选项",
+  "chat.optionLocked": "已选择",
 };
 
 const TABLES: Record<UiLang, Dict> = { en, zh };

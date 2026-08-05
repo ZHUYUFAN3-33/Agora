@@ -13,6 +13,7 @@ export type DecisionMapIssue = {
   parent_id?: string | null;
   status: "open" | "leaning" | "settled" | string;
   winning_claim_id?: string | null;
+  winning_option_id?: string | null;
   phase?: string | null;
   summary?: string | null;
 };
@@ -26,9 +27,20 @@ export type DecisionMapClaim = {
   message_indexes: number[];
 };
 
+export type DecisionMapOption = {
+  id: string;
+  issue_id: string;
+  label: string;
+  summary?: string | null;
+  proposed_by?: string | null;
+  status?: "open" | "leaning" | "chosen" | "rejected" | string;
+  message_indexes?: number[];
+  choice_group_id?: string | null;
+};
+
 export type DecisionMapEdge = {
   id: string;
-  type: "emerged_from" | "supports" | "opposes" | string;
+  type: "emerged_from" | "supports" | "opposes" | "chooses" | string;
   from: string;
   to: string;
 };
@@ -53,6 +65,7 @@ export type DecisionMapData = {
   lang: string;
   issues: DecisionMapIssue[];
   claims: DecisionMapClaim[];
+  options?: DecisionMapOption[];
   edges: DecisionMapEdge[];
   annotations: DecisionMapAnnotation[];
   phase_spine: DecisionMapPhaseSpine[];
@@ -136,6 +149,10 @@ export function DecisionMapPanel({
     () => data?.claims?.find((x) => x.id === selectedNodeId) || null,
     [data, selectedNodeId],
   );
+  const selectedOption = useMemo(
+    () => data?.options?.find((x) => x.id === selectedNodeId) || null,
+    [data, selectedNodeId],
+  );
 
   const claimById = useMemo(() => {
     const m = new Map<string, DecisionMapClaim>();
@@ -164,9 +181,10 @@ export function DecisionMapPanel({
   }, [data?.edges, selectedClaim, claimById]);
 
   const parentIssue = useMemo(() => {
-    if (!selectedClaim) return null;
-    return data?.issues?.find((i) => i.id === selectedClaim.issue_id) || null;
-  }, [data?.issues, selectedClaim]);
+    const child = selectedClaim || selectedOption;
+    if (!child) return null;
+    return data?.issues?.find((i) => i.id === child.issue_id) || null;
+  }, [data?.issues, selectedClaim, selectedOption]);
 
   const winningClaim = useMemo(() => {
     if (!selectedIssue?.winning_claim_id) return null;
@@ -346,7 +364,7 @@ export function DecisionMapPanel({
 
               {/* TD-style parameter panel (top-right) */}
               <AnimatePresence>
-                {(selectedIssue || selectedClaim) && !insufficient && (
+                {(selectedIssue || selectedClaim || selectedOption) && !insufficient && (
                   <motion.aside
                     key={selectedNodeId || "params"}
                     initial={{ opacity: 0, x: 16 }}
@@ -369,7 +387,17 @@ export function DecisionMapPanel({
                     </div>
 
                     <div className="divide-y divide-black/8 text-[11px]">
-                      <ParamRow lang={lang} label={t(lang, "map.param.type")} value={selectedIssue ? t(lang, "map.issues") : t(lang, "map.claims")} />
+                      <ParamRow
+                        lang={lang}
+                        label={t(lang, "map.param.type")}
+                        value={
+                          selectedIssue
+                            ? t(lang, "map.issues")
+                            : selectedOption
+                              ? t(lang, "map.options")
+                              : t(lang, "map.claims")
+                        }
+                      />
 
                       {selectedIssue && (
                         <>
@@ -453,6 +481,49 @@ export function DecisionMapPanel({
                           <ClaimLinkBlock lang={lang} titleKey="map.param.opposedBy" claims={claimLinks.opposedBy} onPick={setSelectedNodeId} />
                         </>
                       )}
+
+                      {selectedOption && (
+                        <>
+                          <ParamRow lang={lang} label={t(lang, "map.param.label")} value={selectedOption.label} />
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.proposedBy")}
+                            value={selectedOption.proposed_by || t(lang, "map.param.none")}
+                          />
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.optionStatus")}
+                            value={
+                              t(lang, `map.status.${selectedOption.status || "open"}`) ===
+                              `map.status.${selectedOption.status || "open"}`
+                                ? selectedOption.status || "open"
+                                : t(lang, `map.status.${selectedOption.status || "open"}`)
+                            }
+                          />
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.issue")}
+                            value={parentIssue?.label || selectedOption.issue_id}
+                            onJump={
+                              parentIssue
+                                ? () => {
+                                    setSelectedNodeId(parentIssue.id);
+                                    onSelectTopic(parentIssue.id);
+                                  }
+                                : undefined
+                            }
+                          />
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.evidence")}
+                            value={
+                              selectedOption.message_indexes?.length
+                                ? selectedOption.message_indexes.join(", ")
+                                : t(lang, "map.param.none")
+                            }
+                          />
+                        </>
+                      )}
                     </div>
 
                     <div className="sticky bottom-0 px-2.5 py-2 border-t border-black/10 bg-[#e6e6e4]/95 flex flex-wrap gap-1.5">
@@ -465,7 +536,16 @@ export function DecisionMapPanel({
                           {t(lang, "map.jumpEvidence")}
                         </button>
                       )}
-                      {selectedClaim && parentIssue && (
+                      {selectedOption && (selectedOption.message_indexes?.length || 0) > 0 && (
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded-[3px] bg-black text-white text-[10px] hover:bg-black/85"
+                          onClick={() => onJumpIndexes(selectedOption.message_indexes || [])}
+                        >
+                          {t(lang, "map.jumpEvidence")}
+                        </button>
+                      )}
+                      {(selectedClaim || selectedOption) && parentIssue && (
                         <button
                           type="button"
                           className="px-2 py-1 rounded-[3px] border border-black/15 bg-white text-[10px] text-black/70 hover:bg-black/[0.04]"

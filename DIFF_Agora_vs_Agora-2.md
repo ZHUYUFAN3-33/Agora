@@ -1,6 +1,6 @@
 # DIFF: Agora `backend/` vs Kourakulsy/Agora-2 `agora_backend/`
 
-Updated: 2026-08-05  
+Updated: 2026-08-06  
 Upstream pin: `agora2/backend-dev` @ `44c518c` (prompt update).
 
 ## Current integration shape
@@ -23,6 +23,16 @@ React → Flask app.py
 - ChatAgent prompt: WHAT COUNTS priority order, tag-language restatement
 - Bilingual tag parsing, `looks_like_refusal` / `enforce_no_refusal`
 - Offline tests: refusal/language, tag parsing, stance pool scaling, …
+- (2026-08-06, both CLI and HTTP paths) self-novelty second scope
+  (`--self_novelty_threshold` 0.35 / window 6; HTTP env `AGORA_SELF_NOVELTY_THRESHOLD`),
+  convergence gate (`admin3_convergence_gated`), `STANCE_PHASE_FOCUS` per-turn focus
+  line, roster `— represents X` stance labels, scenario-aware `ANCHOR_EXAMPLES`
+  anchor nudge + DOMAIN BACKGROUND caveat, full CONSENSUS WARNING wording.
+  HTTP-only parity fixes: `agent.spoke` persisted in `session["spoke_counts"]`
+  (Admin-1 STATS now session-lifetime), weight-hint / related-cards keyed on the
+  real state (Concluded no longer counts as Convergence), queued @mentions
+  survive a mid-burst Concluded latch, question budget no longer suppressed in
+  Concluded. Offline suite: 17/17.
 
 ## Still product-only in this repo
 

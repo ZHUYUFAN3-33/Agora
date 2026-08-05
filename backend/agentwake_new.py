@@ -26,7 +26,9 @@ except ImportError:
     HAVE_AGORA_CONTEXT = False
 
 try:
-    from stance import assign_stance, stance_enabled, get_stance_text, get_convergence_weight_hint
+    from stance import (assign_stance, stance_enabled, get_stance_text,
+                        get_convergence_weight_hint, get_stance_phase_focus,
+                        get_stance_label)
     HAVE_STANCE = True
 except ImportError:
     HAVE_STANCE = False
@@ -877,6 +879,18 @@ def get_phase_prompt(state: str, mode: str, decision: str, stall: bool) -> str:
 # session handing the work back and forth. Questions are genuinely useful while
 # the option space is still open and actively harmful once it is time to commit,
 # so the allowance is tied to the deliberation phase.
+# Which KNOWN USER CONTEXT details the "anchor your message" nudge should point
+# at, per scenario. Keyed by scenario_type; unknown/None scenarios fall back to a
+# neutral phrasing at the call site, so a new scenario needs no entry to work.
+ANCHOR_EXAMPLES: Dict[str, str] = {
+    "employment":
+        "a ranked priority, the deadline, a named option and its salary/level/location, "
+        "the career stage",
+    "parent_child":
+        "the child's age, what the child actually said, the parent's stated worry, the "
+        "deadline, how much say the child was given",
+}
+
 QUESTION_BUDGET: Dict[str, str] = {
     "Exploration":
         "You may ask AT MOST ONE question this turn, and only to fill a gap the KNOWN USER CONTEXT "
@@ -1012,30 +1026,6 @@ def validate_persona_uniqueness(agent_configs: Dict[str, dict], info_path: str) 
         detail = "\n".join(f"  - {p}" for p in problems)
         print(f"ERROR: {info_path} defines duplicate agents:\n{detail}", file=sys.stderr)
         sys.exit(2)
-
-ADMIN3_SYSTEM = """You are the deliberation moderator for a group decision chat.
-Read the transcript and classify where the conversation actually is right now.
-
-STATES (mutually exclusive, pick exactly one):
-- Exploration  : fewer than 2 concrete options/components on the table
-- Structuring  : 2+ options exist but key trade-offs are not yet compared
-- Narrowing    : trade-offs are clear but the group has not converged yet
-- Convergence  : the group is aligned on 1-2 candidates or a final plan
-
-DECISION MODE (infer from topic):
-- Selection (S) : choosing one item from a set  (e.g. which product, which restaurant)
-- Package  (P)  : assembling a multi-part plan  (e.g. travel itinerary, policy bundle)
-
-STALL flag: set to true only if the conversation has been circling the same points
-without making observable progress.
-
-Output ONLY this block, no other text:
-[Moderator]
-mode: <S|P>
-state: <Exploration|Structuring|Narrowing|Convergence>
-stall: <true|false>
-goal: <one sentence describing what needs to happen this turn>
-[/Moderator]"""
 
 ADMIN3_SYSTEM = """You are the deliberation moderator for a group decision chat.
 Read the transcript and classify where the conversation actually is right now.
@@ -1346,6 +1336,8 @@ def run_user_turn(
     prefer_agents: Optional[float] = None,
     novelty_threshold: Optional[float] = None,
     novelty_window: int = 10,
+    self_novelty_threshold: Optional[float] = None,
+    self_novelty_window: int = 6,
     persist_chat: Optional[Callable[[dict], None]] = None,
     create_response_with_client: Optional[CreateFn] = None,
 ) -> Dict[str, Any]:
@@ -1359,6 +1351,12 @@ def run_user_turn(
         novelty_threshold
         if novelty_threshold is not None
         else os.getenv("AGORA_NOVELTY_THRESHOLD", "0.5")
+    )
+    # Second novelty scope (self-repetition); CLI argparse default is 0.35.
+    self_nov_th = float(
+        self_novelty_threshold
+        if self_novelty_threshold is not None
+        else os.getenv("AGORA_SELF_NOVELTY_THRESHOLD", "0.35")
     )
 
     key_to_agent = agents
@@ -1391,6 +1389,17 @@ def run_user_turn(
         for slot in agent_keys
     }
 
+    # Short "represents X" phrase per agent, for the generated cast list in the
+    # prompt roster (CLI-faithful). Empty for scenarios that use no stances.
+    stance_labels: Dict[str, str] = {}
+    if HAVE_STANCE:
+        for key in agent_keys:
+            label = get_stance_label(
+                scenario_type, agent_configs.get(key, {}).get("stance"), lang
+            )
+            if label:
+                stance_labels[key] = label
+
     moderator_state = session.setdefault(
         "moderator_state", {"mode": None, "state": "Exploration", "stall": False, "goal": ""}
     )
@@ -1408,6 +1417,7 @@ def run_user_turn(
     session.setdefault("latest_snippet_id", {k: None for k in agent_keys})
     session.setdefault("snippet_counters", {k: 0 for k in agent_keys})
     session.setdefault("agent_knowledge_hit_history", {k: [] for k in agent_keys})
+    session.setdefault("spoke_counts", {k: 0 for k in agent_keys})
     # Ensure keys exist even if session was created with a fixed A/B/C dict.
     for k in agent_keys:
         session["memory_snippets"].setdefault(k, [])
@@ -1416,6 +1426,13 @@ def run_user_turn(
         session["latest_snippet_id"].setdefault(k, None)
         session["snippet_counters"].setdefault(k, 0)
         session["agent_knowledge_hit_history"].setdefault(k, [])
+        session["spoke_counts"].setdefault(k, 0)
+    # ChatAgent objects are rebuilt per HTTP request, so their spoke counters
+    # start at 0 every turn — but Admin-1's STATS line ("Spoke counts: ...") is
+    # meant to describe the whole session (CLI keeps one ChatAgent per session).
+    # Restore the session-lifetime counts before scheduling.
+    for a in agent_list:
+        a.spoke = int(session["spoke_counts"].get(a.key, 0))
 
     stance_knowledge_data = load_stance_knowledge() if HAVE_STANCE_KNOWLEDGE else None
 
@@ -1562,32 +1579,49 @@ def run_user_turn(
         if s.get("goal"):
             lines.append(f"Current goal: {s['goal']}")
         lines.append(f"Your task this turn: {assignment}")
+
+        # The generic task above is keyed on (state, mode, decision_style), so all
+        # agents get one of the same SHAPE. This line is keyed on STANCE, and is
+        # what makes the three voices produce structurally different content
+        # instead of three phrasings of the same evaluation dimension.
+        if HAVE_STANCE:
+            focus = get_stance_phase_focus(
+                scenario_type, agent_configs.get(agent_key, {}).get("stance"),
+                lookup_state, lang)
+            if focus:
+                lines.append(f"What only YOU should be putting on the table this turn: {focus}")
+
         budget = QUESTION_BUDGET.get(lookup_state)
-        if budget and not s.get("stall") and s.get("state") != CONCLUDED_STATE:
+        if budget and not s.get("stall"):
             lines.append(budget)
         if known_context or domain_background:
+            # The examples have to match the scenario (CLI-faithful): a fixed
+            # employment wording pointed parent_child sessions at details that
+            # do not exist in their KNOWN USER CONTEXT.
+            anchor_examples = ANCHOR_EXAMPLES.get(
+                scenario_type, "a stated constraint, the deadline, a named option, a ranked priority")
             lines.append(
                 "Anchor this message to the user's actual case: name at least one specific detail "
-                "from KNOWN USER CONTEXT. A statement that would read the same for any user is not "
-                "a contribution. Do not re-ask for anything already listed there as filled in."
+                f"from KNOWN USER CONTEXT ({anchor_examples}). A statement that would read the same for "
+                "any user is not a contribution. "
+                "Do not re-ask for anything already listed there as filled in. "
+                "If DOMAIN BACKGROUND is present, use it only to support analysis; it does not "
+                "replace understanding the user's actual, specific situation, and it must not be "
+                "treated as a source of concrete numbers or facts beyond what it states."
             )
         recent = [ln for ln in transcript_lines[-6:] if not ln.lower().startswith("user:")]
         if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
             lines.append(
                 "CONSENSUS WARNING: the last several messages contained no real disagreement. "
                 "Before adding anything, state plainly where your stance differs from where the "
-                "group is heading, and what that direction costs the interest you represent."
+                "group is heading, and what that direction costs the interest you represent. "
+                "If you genuinely agree, name the specific sacrifice you are accepting to get there."
             )
-        try:
-            from stance import get_convergence_weight_hint
-
-            if lookup_state == "Convergence":
-                stance = agent_configs.get(agent_key, {}).get("stance")
-                weight_hint = get_convergence_weight_hint(scenario_type, intake_data, stance, lang)
-                if weight_hint:
-                    lines.append(f"Stance weighting for this closing stage: {weight_hint}")
-        except Exception:
-            pass
+        if HAVE_STANCE and s.get("state") == "Convergence":
+            stance = agent_configs.get(agent_key, {}).get("stance")
+            weight_hint = get_convergence_weight_hint(scenario_type, intake_data, stance, lang)
+            if weight_hint:
+                lines.append(f"Stance weighting for this closing stage: {weight_hint}")
 
         # Stance Knowledge — DYNAMIC channel + related_cards A-OR-B expand
         # (repeat hit of same card, or Convergence / Concluded).
@@ -1605,7 +1639,7 @@ def run_user_turn(
                 knowledge=stance_knowledge_data,
                 hit_history=session["agent_knowledge_hit_history"],
                 agent_key=agent_key,
-                deliberation_state=lookup_state,
+                deliberation_state=s.get("state", "Exploration"),
             )
             if sk_block:
                 lines.append(sk_block)
@@ -1640,6 +1674,7 @@ def run_user_turn(
         responses.append(resp)
         session.setdefault("has_spoken", {})[agent.key] = True
         agent.spoke += 1
+        session.setdefault("spoke_counts", {})[agent.key] = agent.spoke
 
     def run_moderator(allow_state_change: bool = True) -> None:
         history = clamp_history(transcript_lines, max_history_chars)
@@ -1689,6 +1724,26 @@ def run_user_turn(
             )
             parsed = dict(parsed)
             parsed["state"] = prev_state
+
+        # Convergence gate (deterministic, not asked of the LLM — CLI-faithful):
+        # the group must not close before some substantive disagreement is on
+        # record; otherwise it is held at Structuring with an explicit
+        # instruction to surface the conflict.
+        if parsed["state"] == "Convergence" and prev_state not in ("Convergence", CONCLUDED_STATE):
+            agent_lines = [ln for ln in transcript_lines if not ln.lower().startswith("user:")]
+            if not any(has_disagreement(ln) for ln in agent_lines):
+                log_moderator(
+                    "admin3_convergence_gated",
+                    f"{prev_state} -> Convergence withheld: no substantive disagreement "
+                    f"on record yet across {len(agent_lines)} agent turns.",
+                )
+                parsed = dict(parsed)
+                parsed["state"] = "Structuring"
+                parsed["goal"] = (
+                    "Before closing: no one has actually disagreed yet. Each agent must "
+                    "name where its own stance conflicts with where the group is heading, "
+                    "and what that direction costs the interest it represents."
+                )
 
         if (
             parsed["state"] == "Convergence"
@@ -1743,28 +1798,68 @@ def run_user_turn(
             run_moderator(allow_state_change=allow)
 
     def enforce_novelty(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float) -> dict:
+        """Two-scope novelty guard (CLI-faithful): group (vs the recent window,
+        all speakers) and self (vs this agent's OWN last N messages). Failing
+        EITHER triggers one corrective retry; the retry must clear BOTH scopes
+        or the turn is dropped. nov_th <= 0 is the master off switch for the
+        whole guard; self_nov_th <= 0 turns off only the self scope."""
         txt = parsed.get("message") or ""
         if nov_th <= 0 or not transcript_lines or not txt:
             return parsed
-        prior = transcript_lines[-novelty_window:]
-        ratio = novelty_ratio(txt, prior)
-        if ratio >= nov_th:
+
+        own_prefix = f"{agent.name}: "
+
+        def _scores(message: str) -> tuple:
+            """(group_ratio, self_ratio). self_ratio is 1.0 until this agent
+            has spoken at least once (nothing of its own to repeat yet)."""
+            if not message:
+                return 0.0, 0.0
+            group = novelty_ratio(message, transcript_lines[-novelty_window:])
+            own = [ln[len(own_prefix):] for ln in transcript_lines
+                   if ln.startswith(own_prefix)][-self_novelty_window:]
+            return group, (novelty_ratio(message, own) if own else 1.0)
+
+        def _failing(group: float, own: float):
+            """Which scope (if any) this message fails, as a short label."""
+            if nov_th > 0 and group < nov_th:
+                return "group"
+            if self_nov_th > 0 and own < self_nov_th:
+                return "self"
+            return None
+
+        ratio, self_ratio = _scores(txt)
+        scope = _failing(ratio, self_ratio)
+        if scope is None:
             return parsed
+
         log_thinking(
             "novelty_retry",
-            f"{agent.key}: novelty={ratio:.2f} < {nov_th:.2f}, retrying once",
+            f"{agent.key}: novelty group={ratio:.2f}/{nov_th:.2f} "
+            f"self={self_ratio:.2f}/{self_nov_th:.2f} — failed on {scope}, retrying once",
         )
+
+        # Name the actual failure, so the retry fixes the right problem: the
+        # generic "the group already has this" reads as wrong (and gets
+        # ignored) when what the agent really did was repeat ITSELF.
+        if scope == "self":
+            diagnosis = ("That message re-states a point YOU have already made earlier in this "
+                         "conversation, just worded differently. Rephrasing your own earlier "
+                         "argument is not a contribution. Replace it entirely.\n")
+        else:
+            diagnosis = ("That message restates points the group already has on the table and adds "
+                         "nothing new. Replace it entirely.\n")
+
         retry_messages = messages + [
             {"role": "assistant", "content": txt},
             {
                 "role": "user",
                 "content": (
-                    "That message restates points the group already has on the table and adds nothing new. "
-                    "Replace it entirely.\n"
-                    "Contribute exactly one of: a new evaluation dimension, a specific fact from KNOWN USER "
-                    "CONTEXT that nobody has cited yet, a concrete comparison of two options along one named "
-                    "dimension, an elimination with its reason, or a direct challenge to a specific claim "
-                    "someone made.\n"
+                    diagnosis +
+                    "Contribute exactly one of: a concrete comparison of two named options along one "
+                    "dimension, an elimination with its reason, a direct challenge to a specific claim "
+                    "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
+                    "— only if the concrete options are not yet on the table — a new evaluation "
+                    "dimension.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
                     "whose point you are deferring to. Either way, do not ask a question this time. "
                     "Keep the required [MESSAGE]/[RATIONALE] output format."
@@ -1773,15 +1868,21 @@ def run_user_turn(
         ]
         retry_raw = create(client_chat, retry_messages, min(temp + 0.15, 1.4), max_output_tokens)
         retry_parsed = parse_agent_turn(retry_raw)
-        retry_ratio = (
-            novelty_ratio(retry_parsed["message"], prior) if retry_parsed.get("message") else 0.0
-        )
-        if retry_ratio >= nov_th:
-            log_thinking("novelty_retry", f"{agent.key}: retry novelty={retry_ratio:.2f} (kept)")
+        retry_ratio, retry_self = _scores(retry_parsed.get("message") or "")
+
+        # The retry is the last chance: it must clear BOTH scopes on its own,
+        # or the agent says nothing at all (CLI-faithful drop rule).
+        retry_scope = _failing(retry_ratio, retry_self)
+        if retry_scope is None:
+            log_thinking(
+                "novelty_retry",
+                f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f} (kept)",
+            )
             return retry_parsed
         log_thinking(
             "novelty_retry",
-            f"{agent.key}: retry novelty={retry_ratio:.2f}, still below {nov_th:.2f} — turn dropped",
+            f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "
+            f"still failing {retry_scope} — turn dropped",
         )
         return {"message": "", "rationale": "", "dropped": True}
 
@@ -1821,6 +1922,7 @@ def run_user_turn(
                         lang=lang,
                         session_memory_text=session_memory_text,
                         preloaded_knowledge_text=pk,
+                        stance_labels=stance_labels,
                     )
                     + get_memory_context(burst_agent.key),
                 },
@@ -1893,6 +1995,7 @@ def run_user_turn(
                     lang=lang,
                     session_memory_text=session_memory_text,
                     preloaded_knowledge_text=pk,
+                    stance_labels=stance_labels,
                 )
                 + get_memory_context(agent.key),
             },
@@ -2058,8 +2161,9 @@ def run_user_turn(
             )
             force_intro = not bool((session.get("has_spoken") or {}).get(key))
             agent_turn(key_to_agent[key], force_intro=force_intro, mention_trigger=True)
-            if moderator_state.get("state") == CONCLUDED_STATE:
-                break
+            # CLI-faithful: queued mentions are honored even if the moderator
+            # latched to Concluded mid-burst — the loop re-checks the queue
+            # first, and only an EMPTY queue lets Concluded stop the burst.
             continue
 
         if moderator_state.get("state") == CONCLUDED_STATE:
@@ -2133,6 +2237,20 @@ def main():
                     help="How many recent transcript lines the novelty check compares against. Short "
                          "enough that a deliberate callback to something said 20 turns ago isn't "
                          "penalized. Default 10")
+    ap.add_argument("--self_novelty_threshold", type=float, default=0.35,
+                    help="Second novelty scope: how much of a reply must be new relative to THIS "
+                         "agent's own recent messages (not the whole room). Catches cross-turn "
+                         "self-repetition, which --novelty_threshold structurally cannot: with 3 "
+                         "agents an agent's own turns are only every third line, so a 10-line "
+                         "all-speaker window holds just 2-3 of them and anything older could be "
+                         "re-served in new wording unflagged. Lower than --novelty_threshold on "
+                         "purpose — scoring one voice against its own accumulated vocabulary yields "
+                         "structurally lower ratios. 0 disables this scope; --novelty_threshold 0 "
+                         "still disables the whole guard including this one. Default 0.35")
+    ap.add_argument("--self_novelty_window", type=int, default=6,
+                    help="How many of the agent's OWN past messages the self-novelty scope compares "
+                         "against. Bounded so an agent isn't scored against an ever-growing pile of "
+                         "its own vocabulary (which would eventually reject everything). Default 6")
 
     # ---- Scenario information layer (Profile + Intake + Domain Background) ----
     ap.add_argument("--scenario_type", default=None, choices=["employment", "parent_child"],
@@ -2301,6 +2419,16 @@ def main():
             hint, args.lang, stance_knowledge_data, include_header=False,
         ) if hint else ""
 
+    # Short "represents X" phrase per agent, for the generated cast list in the
+    # prompt roster. Empty for scenarios that use no stances.
+    stance_labels: Dict[str, str] = {}
+    if HAVE_STANCE:
+        for key in agent_keys:
+            label = get_stance_label(args.scenario_type,
+                                     agent_configs.get(key, {}).get("stance"), args.lang)
+            if label:
+                stance_labels[key] = label
+
     agents: List[ChatAgent] = [
         ChatAgent(k, f"Chatbot{k}", role_texts[k]) for k in agent_keys
     ]
@@ -2435,15 +2563,31 @@ def main():
             lines.append(f"Current goal: {s['goal']}")
         lines.append(f"Your task this turn: {assignment}")
 
+        # The generic task above is keyed on (state, mode, decision_style), so all
+        # agents get one of the same SHAPE. This line is keyed on STANCE, and is
+        # what makes the three voices produce structurally different content
+        # instead of three phrasings of the same evaluation dimension.
+        if HAVE_STANCE:
+            focus = get_stance_phase_focus(
+                args.scenario_type, agent_configs.get(agent_key, {}).get("stance"),
+                lookup_state, args.lang)
+            if focus:
+                lines.append(f"What only YOU should be putting on the table this turn: {focus}")
+
         budget = QUESTION_BUDGET.get(lookup_state)
         if budget and not s["stall"]:
             lines.append(budget)
 
         if known_context or domain_background:
+            # The examples have to match the scenario. They used to be hardcoded
+            # to the employment case ("salary/level/location, the career stage"),
+            # which in a parent_child session pointed the model at details that
+            # do not exist in its KNOWN USER CONTEXT.
+            anchor_examples = ANCHOR_EXAMPLES.get(
+                args.scenario_type, "a stated constraint, the deadline, a named option, a ranked priority")
             lines.append(
                 "Anchor this message to the user's actual case: name at least one specific detail "
-                "from KNOWN USER CONTEXT (a ranked priority, the deadline, a named option and its "
-                "salary/level/location, the career stage). A statement that would read the same for "
+                f"from KNOWN USER CONTEXT ({anchor_examples}). A statement that would read the same for "
                 "any user is not a contribution. "
                 "Do not re-ask for anything already listed there as filled in. "
                 "If DOMAIN BACKGROUND is present, use it only to support analysis; it does not "
@@ -2680,6 +2824,25 @@ def main():
             parsed = dict(parsed)
             parsed["state"] = prev_state
 
+        # Convergence gate (deterministic, not asked of the LLM): three agents
+        # holding three opposed stances must not close before they have actually
+        # disagreed even once. Without this the group "converges" on turn 5 by
+        # agreeing with each other — which is the premature-convergence failure,
+        # and also what precedes the model refusing a turn outright once the chat
+        # slides into telling the user what to do about an already-settled choice.
+        # Held at Structuring with an explicit instruction to surface the conflict.
+        if parsed["state"] == "Convergence" and prev_state not in ("Convergence", CONCLUDED_STATE):
+            agent_lines = [ln for ln in transcript_lines if not ln.startswith("user:")]
+            if not any(has_disagreement(ln) for ln in agent_lines):
+                log_moderator("admin3_convergence_gated",
+                              f"{prev_state} -> Convergence withheld: no substantive disagreement "
+                              f"on record yet across {len(agent_lines)} agent turns.")
+                parsed = dict(parsed)
+                parsed["state"] = "Structuring"
+                parsed["goal"] = ("Before closing: no one has actually disagreed yet. Each agent must "
+                                  "name where its own stance conflicts with where the group is heading, "
+                                  "and what that direction costs the interest it represents.")
+
         # Terminal-state latch (deterministic, not asked of the LLM): the group
         # reaching Convergence twice in a row with no user input in between
         # means the discussion is finished, not that it needs another round of
@@ -2771,7 +2934,8 @@ def main():
                     known_context=known_context, domain_background=domain_background,
                     stance_text=get_stance_block(burst_agent.key), lang=args.lang,
                     session_memory_text=session_memory_text,
-                    preloaded_knowledge_text=agent_configs[burst_agent.key].get("preloaded_knowledge", ""))
+                    preloaded_knowledge_text=agent_configs[burst_agent.key].get("preloaded_knowledge", ""),
+                    stance_labels=stance_labels)
                     + get_memory_context(burst_agent.key)},
                 {"role": "user", "content": user_prompt},
             ]
@@ -2918,7 +3082,8 @@ def main():
                     known_context=known_context, domain_background=domain_background,
                     stance_text=get_stance_block(agent.key), lang=args.lang,
                     session_memory_text=session_memory_text,
-                    preloaded_knowledge_text=agent_configs[agent.key].get("preloaded_knowledge", ""))
+                    preloaded_knowledge_text=agent_configs[agent.key].get("preloaded_knowledge", ""),
+                    stance_labels=stance_labels)
                     + get_memory_context(agent.key)},
                 {"role": "user", "content": user_prompt},
             ]
@@ -2992,26 +3157,82 @@ def main():
             A returned dict with "dropped": True means the agent stays silent
             this turn — see the end of this function for why keeping a failed
             retry was worse than dropping it.
+
+            TWO SCOPES, because one was not enough. The original check compared
+            only against transcript_lines[-novelty_window:] — the last N lines
+            from ALL speakers. With three agents taking turns, an agent's own
+            previous message is roughly every third line, so a 10-line window
+            held only its own last 2-3 turns. Anything it had argued before that
+            fell out of the window and could be re-served in new wording without
+            ever being flagged — the observed "cross-turn self-repetition". So a
+            message is now scored twice:
+              group : vs the recent window, all speakers  -> echoing the room
+              self  : vs this agent's OWN last N messages -> repeating yourself
+            Failing EITHER triggers the corrective retry. The self scope needs
+            its own, lower threshold: it compares against a single voice's
+            accumulated vocabulary, so its scores run structurally lower than the
+            group scope's and reusing the same number would silence everyone.
             """
             txt = parsed["message"]
-            if args.novelty_threshold <= 0 or not transcript_lines or not txt:
+            if not transcript_lines or not txt:
                 return parsed
-            prior = transcript_lines[-args.novelty_window:]
-            ratio = novelty_ratio(txt, prior)
-            if ratio >= args.novelty_threshold:
+            # --novelty_threshold 0 stays the documented master off switch for the
+            # whole guard (both scopes), so existing "disable novelty" invocations
+            # keep meaning that. --self_novelty_threshold 0 turns off only the
+            # self scope.
+            if args.novelty_threshold <= 0:
+                return parsed
+
+            own_prefix = f"{agent.name}: "
+
+            def _scores(message: str) -> tuple:
+                """(group_ratio, self_ratio). self_ratio is 1.0 until this agent
+                has spoken at least once (nothing of its own to repeat yet)."""
+                if not message:
+                    return 0.0, 0.0
+                group = novelty_ratio(message, transcript_lines[-args.novelty_window:])
+                own = [ln[len(own_prefix):] for ln in transcript_lines
+                       if ln.startswith(own_prefix)][-args.self_novelty_window:]
+                return group, (novelty_ratio(message, own) if own else 1.0)
+
+            def _failing(group: float, own: float):
+                """Which scope (if any) this message fails, as a short label."""
+                if args.novelty_threshold > 0 and group < args.novelty_threshold:
+                    return "group"
+                if args.self_novelty_threshold > 0 and own < args.self_novelty_threshold:
+                    return "self"
+                return None
+
+            ratio, self_ratio = _scores(txt)
+            scope = _failing(ratio, self_ratio)
+            if scope is None:
                 return parsed
 
             log_thinking("novelty_retry",
-                         f"{agent.key}: novelty={ratio:.2f} < {args.novelty_threshold:.2f}, retrying once")
+                         f"{agent.key}: novelty group={ratio:.2f}/{args.novelty_threshold:.2f} "
+                         f"self={self_ratio:.2f}/{args.self_novelty_threshold:.2f} — "
+                         f"failed on {scope}, retrying once")
+
+            # Name the actual failure, so the retry fixes the right problem: the
+            # generic "the group already has this" reads as wrong (and gets
+            # ignored) when what the agent really did was repeat ITSELF.
+            if scope == "self":
+                diagnosis = ("That message re-states a point YOU have already made earlier in this "
+                             "conversation, just worded differently. Rephrasing your own earlier "
+                             "argument is not a contribution. Replace it entirely.\n")
+            else:
+                diagnosis = ("That message restates points the group already has on the table and adds "
+                             "nothing new. Replace it entirely.\n")
+
             retry_messages = messages + [
                 {"role": "assistant", "content": txt},
                 {"role": "user", "content": (
-                    "That message restates points the group already has on the table and adds nothing new. "
-                    "Replace it entirely.\n"
-                    "Contribute exactly one of: a new evaluation dimension, a specific fact from KNOWN USER "
-                    "CONTEXT that nobody has cited yet, a concrete comparison of two options along one named "
-                    "dimension, an elimination with its reason, or a direct challenge to a specific claim "
-                    "someone made.\n"
+                    diagnosis +
+                    "Contribute exactly one of: a concrete comparison of two named options along one "
+                    "dimension, an elimination with its reason, a direct challenge to a specific claim "
+                    "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
+                    "— only if the concrete options are not yet on the table — a new evaluation "
+                    "dimension.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
                     "whose point you are deferring to. Either way, do not ask a question this time. "
                     "Keep the required [MESSAGE]/[RATIONALE] output format."
@@ -3022,22 +3243,24 @@ def main():
                                         min(temp + 0.15, 1.4), args.max_output_tokens, meta=meta)
             log_generation_meta(agent.key, meta, note="novelty retry")
             retry_parsed = parse_agent_turn(retry_raw)
-            retry_ratio = novelty_ratio(retry_parsed["message"], prior) if retry_parsed["message"] else 0.0
+            retry_ratio, retry_self = _scores(retry_parsed["message"])
 
-            # The retry is the last chance: it must clear the threshold on its
-            # own, or the agent says nothing at all. The old rule kept a retry
-            # whenever it merely scored HIGHER than the original — in
-            # logs/316347 that published 0.50 and 0.52 rewrites of 0.00 turns,
-            # i.e. content the guard itself had flagged as recycled, promoted
-            # purely for being less bad. Silence is an allowed turn (the system
-            # prompt says so explicitly); a rephrased restatement is not.
-            if retry_ratio >= args.novelty_threshold:
-                log_thinking("novelty_retry", f"{agent.key}: retry novelty={retry_ratio:.2f} (kept)")
+            # The retry is the last chance: it must clear BOTH scopes on its own,
+            # or the agent says nothing at all. The old rule kept a retry whenever
+            # it merely scored HIGHER than the original — in logs/316347 that
+            # published 0.50 and 0.52 rewrites of 0.00 turns, i.e. content the
+            # guard itself had flagged as recycled, promoted purely for being less
+            # bad. Silence is an allowed turn (the system prompt says so
+            # explicitly); a rephrased restatement is not.
+            retry_scope = _failing(retry_ratio, retry_self)
+            if retry_scope is None:
+                log_thinking("novelty_retry",
+                             f"{agent.key}: retry novelty group={retry_ratio:.2f} "
+                             f"self={retry_self:.2f} (kept)")
                 return retry_parsed
-            best = max(ratio, retry_ratio)
             log_thinking("novelty_retry",
-                         f"{agent.key}: retry novelty={retry_ratio:.2f}, still below "
-                         f"{args.novelty_threshold:.2f} — turn dropped (best={best:.2f})")
+                         f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "
+                         f"still failing {retry_scope} — turn dropped")
             return {"message": "", "rationale": "", "dropped": True}
 
         def admin_choose_next() -> str:

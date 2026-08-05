@@ -18,6 +18,9 @@ from _harness import bootstrap, Checker
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 aw = bootstrap("agentwake_related_")
 shutil.copytree(os.path.join(BACKEND, "background_templates"), "background_templates")
+# stance_templates/ holds the stance definitions (assignment, prompt text,
+# per-phase focus, labels) that stance.py reads at cwd-relative paths.
+shutil.copytree(os.path.join(BACKEND, "stance_templates"), "stance_templates")
 shutil.copytree(os.path.join(BACKEND, "scenes"), "scenes")
 
 _ck = Checker(); check = _ck.check
@@ -57,7 +60,10 @@ def _run(inputs, moderator_state):
             return "stub."
         if sysc.startswith("You are ChatbotA"):
             a_prompts.append(sysc)
-        return "[MESSAGE]\nok\n[/MESSAGE]\n[RATIONALE]\nr\n[/RATIONALE]"
+        # "我不同意" is a _DISAGREEMENT_MARKERS hit. The Convergence gate holds the
+        # group at Structuring until some disagreement is on record, and trigger B
+        # below needs the session to actually be in Convergence.
+        return "[MESSAGE]\n我不同意，理由如下\n[/MESSAGE]\n[RATIONALE]\nr\n[/RATIONALE]"
     aw.create_response = fake
 
     with open("info3.jsonl", "w", encoding="utf-8") as f:

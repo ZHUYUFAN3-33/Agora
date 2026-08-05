@@ -20,7 +20,9 @@ check = _ck.check  # keep the familiar check(name, cond, detail) call site
 # ---------------------------------------------------------------- unit tests
 # 1. parse_agent_turn
 p = aw.parse_agent_turn("[MESSAGE]\nhello there\n[/MESSAGE]\n[RATIONALE]\nbecause reasons\n[/RATIONALE]")
-check("parse: tagged", p == {"message": "hello there", "rationale": "because reasons"}, repr(p))
+# "options" is a product-side extension (option chips); empty list when the
+# generation carries no [OPTIONS] block.
+check("parse: tagged", p == {"message": "hello there", "rationale": "because reasons", "options": []}, repr(p))
 
 p = aw.parse_agent_turn("no tags at all, just text")
 check("parse: untagged fallback", p["message"] == "no tags at all, just text" and p["rationale"] == "", repr(p))
@@ -36,7 +38,7 @@ check("parse: rationale capped at 30 words + ellipsis",
       and "w30" not in p["rationale"], repr(p["rationale"]))
 
 p = aw.parse_agent_turn("")
-check("parse: empty input no crash", p == {"message": "", "rationale": ""}, repr(p))
+check("parse: empty input no crash", p == {"message": "", "rationale": "", "options": []}, repr(p))
 
 # 2. mention helpers
 keys5 = ["A", "B", "C", "D", "E"]

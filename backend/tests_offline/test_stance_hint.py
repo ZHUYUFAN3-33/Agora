@@ -18,6 +18,9 @@ from _harness import bootstrap, Checker
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 aw = bootstrap("agentwake_hint_")
 shutil.copytree(os.path.join(BACKEND, "background_templates"), "background_templates")
+# stance_templates/ holds the stance definitions (assignment, prompt text,
+# per-phase focus, labels) that stance.py reads at cwd-relative paths.
+shutil.copytree(os.path.join(BACKEND, "stance_templates"), "stance_templates")
 shutil.copytree(os.path.join(BACKEND, "scenes"), "scenes")
 # decision/emotion presets are needed for the build_agent_spec unit check.
 shutil.copytree(os.path.join(BACKEND, "decision"), "decision")

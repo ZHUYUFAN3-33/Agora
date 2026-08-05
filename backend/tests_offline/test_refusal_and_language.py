@@ -44,17 +44,22 @@ for t in ("我不同意选项A，因为它牺牲了孩子的自主性。",
     check(f"not a refusal: {t[:34]!r}", not aw.looks_like_refusal(t))
 
 
-# ------------------------------------- unit: decision presets lose the examples
+# ------------------------------------- unit: decision presets carry no template
+# The presets were rewritten from telegraphic spec sheets (whose STRUCTURAL
+# EXAMPLES block was reproduced near-verbatim in English by a zh session — the
+# original failure) into natural-language thinking-style profiles that contain
+# no worked example at all. The strip-at-splice-time guard stays in place for
+# any legacy preset, but on the shipped files there is nothing left to strip:
+# assert the leak vector is gone at the SOURCE, and that splicing still works.
 import agent_assembly as aa
 for name in ("Spontaneous", "Rational", "Dependent", "Intuitive", "Avoidant"):
     raw = aa.load_decision_text(name)
     spliced = aa.assemble_role_text(name, "Joy")
-    check(f"{name}: STRUCTURAL EXAMPLES present in the source file",
-          "STRUCTURAL EXAMPLES" in raw)
-    check(f"{name}: worked example is stripped from the spliced role_text",
-          "STRUCTURAL EXAMPLES" not in spliced, spliced[:200])
-    check(f"{name}: structural requirements survive the strip",
-          "CONTRIBUTION REQUIREMENT" in spliced and "CONSTRAINTS" in spliced)
+    check(f"{name}: no worked-example block left in the source file",
+          "STRUCTURAL EXAMPLES" not in raw and "Example format:" not in raw)
+    check(f"{name}: decision block survives splicing",
+          f"[Decision Block: {name}]" in spliced and "HOW YOU DECIDE" in spliced,
+          spliced[:200])
 check("the English 'act now' template no longer reaches role_text",
       "act now" not in aa.assemble_role_text("Spontaneous", "Joy"))
 

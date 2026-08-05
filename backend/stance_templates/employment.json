@@ -23,6 +23,10 @@
           "zh": "针对已摆上桌的每个具体选项，说出它能积累的可迁移能力，以及这份积累能不能被下一个雇主验证。不要停留在“有成长空间”这种说法。",
           "en": "For each concrete option on the table, state the transferable capability it builds and whether that growth can be verified by the next employer. Do not settle for 'there is room to grow'."
         },
+        "Narrowing": {
+          "zh": "淘汰选项时守住成长底线：如果快要胜出的选项在能力积累上明显更弱，现在就说出你反对的理由和它牺牲掉的职业积累；如果你同意某个淘汰，说出这个淘汰在成长维度上放弃了什么。",
+          "en": "As options get eliminated, hold the growth line: if the option about to win is clearly weaker on capability building, say so now and name the career accumulation it sacrifices. If you agree with an elimination, state what it gives up on the growth dimension."
+        },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及这个结论在职业积累上放弃了什么。如果多数意见偏向稳妥，先把放弃的成长说清楚。",
           "en": "State which concrete option you back and what career accumulation the conclusion forgoes. If the majority leans safe, spell out the forgone growth first."
@@ -47,6 +51,10 @@
           "zh": "逐个选项评估最坏情况：如果6个月后这条路走不通，用户手上还剩什么。对“成长空间”类说法追问它是不是可验证的保障。",
           "en": "Assess the worst case per option: if this path fails in six months, what is the user left holding. Push back on 'growth potential' claims by asking whether they are verifiable guarantees."
         },
+        "Narrowing": {
+          "zh": "在淘汰阶段做压力测试：对每个还在桌上的选项问一遍“最坏情况发生时用户扛不扛得住”，主动要求淘汰经不起下行情景的那个，并给出具体的风险理由，而不是笼统的“不稳定”。",
+          "en": "Stress-test the survivors: for each option still on the table, ask whether the user could absorb its worst case. Push to eliminate the one that fails the downside scenario, giving the specific risk as your reason — not a vague 'it is unstable'."
+        },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及这个结论下用户实际承担的风险敞口。如果缓冲不足以支撑多数意见，现在就说。",
           "en": "State which concrete option you back and the risk exposure the user actually carries under it. If their buffer cannot support the majority view, say so now."
@@ -70,6 +78,10 @@
         "Structuring": {
           "zh": "针对每个具体选项，量化它会拿走多少本该属于生活的时间和精力（每周小时数、恢复时间、家庭影响），让它和薪酬成长可比。",
           "en": "For each concrete option, quantify how much time and energy it takes from life outside work (weekly hours, recovery time, family impact), so it is comparable with pay and growth."
+        },
+        "Narrowing": {
+          "zh": "淘汰前把生活账核一遍：按每周实际占用的时间精力给还在桌上的选项排个序。如果即将胜出的选项生活成本最高，现在就点名，不要等到收尾阶段才提。",
+          "en": "Before anything is eliminated, run the life ledger: rank the surviving options by the weekly time and energy they actually consume. If the option about to win carries the highest life cost, name it now — not at the close."
         },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及这个结论要求用户在生活上长期让渡什么。不要为了达成一致而把生活成本轻描淡写。",

@@ -7,8 +7,11 @@ move the group INTO Convergence once some substantive disagreement is on record
 (has_disagreement over the agent turns); otherwise it is held at Structuring with
 a goal telling them to surface the conflict.
 
-  - agents never disagree  -> Convergence withheld, state stays Structuring
-  - agents do disagree     -> Convergence goes through as before
+  - agents never disagree            -> Convergence withheld, stays Structuring
+  - agents disagree (marker wording) -> Convergence goes through as before
+  - agents disagree only via [MOVE]  -> Convergence goes through: the gate reads
+    the self-report too, so politely-worded pushback that never uses marker
+    vocabulary still counts as the disagreement it is
 """
 import builtins, io, json, os, sys
 
@@ -21,7 +24,7 @@ AGREEABLE = "这个方向听起来不错，我也这么想，补充一点细节"
 DISAGREEING = "我不同意这个方向，问题在于它牺牲了另一边的核心诉求"
 
 
-def _run(agent_body):
+def _run(agent_body, move=""):
     def fake(model, messages, temperature, max_output_tokens, meta=None):
         if meta is not None:
             meta["status"] = "completed"
@@ -34,7 +37,8 @@ def _run(agent_body):
             return "[Moderator]\nmode: S\nstate: Convergence\nstall: false\ngoal: g\n[/Moderator]"
         if messages[0]["role"] == "user" and "Distill" in messages[-1]["content"]:
             return "stub."
-        return f"[MESSAGE]\n{agent_body}\n[/MESSAGE]\n[RATIONALE]\nr\n[/RATIONALE]"
+        tail = f"\n[MOVE]\n{move}\n[/MOVE]" if move else ""
+        return f"[MESSAGE]\n{agent_body}\n[/MESSAGE]{tail}\n[RATIONALE]\nr\n[/RATIONALE]"
     aw.create_response = fake
 
     with open("info3.jsonl", "w", encoding="utf-8") as f:
@@ -64,6 +68,11 @@ check("agreeable session: never latches to Concluded",
 # --- with disagreement: Convergence proceeds as before ---------------------
 chars = _run(DISAGREEING)
 check("disagreeing session: Convergence is NOT gated",
+      "admin3_convergence_gated" not in chars, str(chars[:8]))
+
+# --- disagreement reported only through [MOVE]: gate opens too --------------
+chars = _run(AGREEABLE, move="challenge @ChatbotB")
+check("move-only disagreement: Convergence is NOT gated",
       "admin3_convergence_gated" not in chars, str(chars[:8]))
 
 _ck.finish("CONVERGENCE GATE CHECKS PASSED")

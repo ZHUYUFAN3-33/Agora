@@ -480,6 +480,45 @@ def has_disagreement(text: str) -> bool:
     low = text.lower()
     return any(m in low for m in _DISAGREEMENT_MARKERS)
 
+
+# Structured self-report of what a turn DOES, emitted by the agent itself in a
+# [MOVE] block (see system_prompt's OUTPUT FORMAT). The marker list above stays
+# as the fallback for turns that omit or garble the block — markers can only
+# ever under-count (they were calibrated to fire on unambiguous opposition
+# wording alone), so the two signals are OR-ed, never traded off.
+#
+# WHY SELF-REPORT: the consensus guard and the convergence gate both need to
+# know "did anyone actually push back". Detecting that from surface wording is
+# brittle in exactly the way the marker comment above documents — real
+# disagreement phrased politely goes unseen, so the guard nags a group that IS
+# arguing, and three simultaneous "state your disagreement plainly" nudges come
+# back as three near-identical formal objections. The model already knows what
+# its own message is doing; asking it to say so costs a few tokens and gives a
+# reliable signal.
+AGENT_MOVES = ("challenge", "extend", "new_point", "concede", "clarify")
+
+
+def normalize_move(body: str) -> str:
+    """First recognised move keyword in a [MOVE] block body, or "".
+
+    Tolerant on purpose: the block may carry an @target ("challenge @ChatbotB"),
+    stray punctuation, or a hyphen/space variant ("new point"). Anything that
+    does not resolve to a known move is treated as no self-report at all, so a
+    garbled block silently degrades to the marker fallback instead of crashing
+    or mislabelling the turn.
+    """
+    low = (body or "").strip().lower().replace("-", "_").replace(" ", "_")
+    for move in AGENT_MOVES:
+        if move in low:
+            return move
+    return ""
+
+
+def turn_is_challenge(move: str, text: str) -> bool:
+    """One turn's 'someone actually pushed back' signal: self-report OR markers."""
+    return move == "challenge" or has_disagreement(text)
+
+
 # -------------------------------
 # info.jsonl loader
 # -------------------------------
@@ -609,6 +648,19 @@ class ChatAgent:
             f"push back. \"This feels heavy\" on its own says nothing; \"the 3-week deadline is what worries "
             f"me here — that's not enough time to verify their growth claims\" is the same emotion doing work.\n"
             f"Never reuse the same emotional phrase twice in a session; vary the wording every time.\n"
+            f"\n=== CONVERSATIONAL STYLE ===\n"
+            f"This is a group chat between people, not an exchange of position papers.\n"
+            f"- Usual length is 2-4 sentences. Vary it: a sharp one-liner when one point lands harder "
+            f"than three, longer only when you are actually comparing named options.\n"
+            f"- Open by engaging with what the LAST SPEAKER actually said — in your own words, not "
+            f"\"I agree with X's point about Y\". Then add your piece.\n"
+            f"- Never open two messages the same way, and never introduce yourself or restate your role "
+            f"(\"as the voice of stability...\") — who you are should be obvious from WHAT you argue.\n"
+            f"- No bullet lists, numbered lists, or headings inside a chat message, unless you are "
+            f"laying two named options side by side and prose would genuinely obscure the comparison.\n"
+            f"- The task under DELIBERATION STATE is your objective for the turn, not a worksheet. Fold "
+            f"it into a natural reply to the conversation; a message that reads like a direct answer to "
+            f"an instruction nobody else can see has failed this rule.\n"
         )
         if stance_text:
             prompt += (
@@ -617,6 +669,10 @@ class ChatAgent:
                 f"converging on an option your stance would not choose, say so explicitly and name what is "
                 f"being sacrificed. Accept a conclusion only after you have stated the cost it imposes on "
                 f"the interest you represent.\n"
+                f"PRIORITY WHEN YOUR LAYERS CONFLICT: this stance decides WHAT you defend; your decision "
+                f"style only shapes HOW you argue it; your emotion only shapes the TONE. A style that "
+                f"prefers simplicity or consensus is never a reason to stay quiet while the interest you "
+                f"represent is being traded away.\n"
             )
         # Preloaded background from the user's setup hint — fixed for the whole
         # session. Distinct title from the per-turn "=== BACKGROUND KNOWLEDGE ==="
@@ -639,12 +695,24 @@ class ChatAgent:
             "[OPTIONS]\n"
             '[{"id":"o1","label":"short option A"},{"id":"o2","label":"short option B"}]\n'
             "[/OPTIONS]\n"
+            "[MOVE]\n"
+            "one word for what this message DOES, optionally plus who it responds to, e.g. "
+            "\"challenge @ChatbotB\". Exactly one of: challenge (you dispute a specific claim "
+            "someone made) / extend (you build on someone's point with something they did not "
+            "say) / new_point (you raise something not aimed at anyone) / concede (you accept "
+            "a cost or genuinely adjust your position) / clarify (you answer a question or "
+            "supply facts).\n"
+            "[/MOVE]\n"
             "[RATIONALE]\n"
             "one short sentence: why you said this, given your persona and the current phase goal\n"
             "[/RATIONALE]\n"
-            "Tag names are literal markers: write MESSAGE / OPTIONS / RATIONALE in English exactly "
-            "as shown. Do NOT translate them "
-            "(never [消息]/[选项]/[選択肢]/[オプション]/[メッセージ]/[理由]/[根拠]). "
+            "Tag names are literal markers: write MESSAGE / OPTIONS / MOVE / RATIONALE in English "
+            "exactly as shown. Do NOT translate them "
+            "(never [消息]/[选项]/[選択肢]/[オプション]/[メッセージ]/[动作]/[理由]/[根拠]) — a "
+            "translated tag is not recognised and your private blocks end up published in the chat. "
+            "Only the MESSAGE and OPTIONS blocks are shown to the others; MOVE and RATIONALE are "
+            "private. Report the move honestly — an agreeable message labelled \"challenge\" defeats "
+            "its purpose.\n"
             "Labels INSIDE OPTIONS must use the same language as the chat message "
             "(Chinese / English / Japanese as required by LANGUAGE).\n"
             "Include [OPTIONS] whenever you present 2–6 mutually exclusive choices the user could "
@@ -724,141 +792,187 @@ PHASE_PROMPTS: Dict[tuple, str] = {
     # S mode: user needs must be understood before options can be meaningful.
     # Each prompt has two steps: if needs are unclear, ask first; only propose
     # options once the transcript contains enough user context to justify them.
+    #
+    # WORDING NOTE (all phases): these are written as the OUTCOME the turn
+    # should leave behind, not as an imperative script. Command-style tasks
+    # ("Eliminate one option. State the reason.") made agents answer the
+    # instruction instead of each other — every message read like a worksheet
+    # entry. The outcome framing plus the CONVERSATIONAL STYLE rule ("fold the
+    # task into a natural reply") is what keeps the turn a message in a chat.
 
     ("Exploration", "S", "Spontaneous"):
-        "Check the transcript: if the user's core needs (use case, priorities, constraints) are not yet clear, "
-        "ask ONE direct question to uncover the most important missing piece. "
-        "Only if needs are already established: name the strongest option that fits and give one reason.",
+        "If the user's core needs (use case, priorities, constraints) are still unclear from the "
+        "transcript, what's missing most is one direct question that uncovers them. Once needs are "
+        "established, the group should hear which option you'd bet on and the one reason why.",
 
     ("Exploration", "P", "Spontaneous"):
-        "Name one component or policy lever that must be part of any solution. One item, one reason.",
+        "Put one component or policy lever on the table that any solution will need — the one you'd "
+        "fight for, with its reason.",
 
     ("Exploration", "S", "Rational"):
-        "Check the transcript: if key requirements (use case, budget range, constraints) have not been stated, "
-        "identify the single most critical information gap and ask the user to fill it. "
-        "Only if requirements are already clear: define the decision objective and list what is still needed to compare options fairly.",
+        "If key requirements (use case, budget range, constraints) haven't been stated yet, the most "
+        "useful thing you can get is the single most critical missing piece — ask the user for it. "
+        "Once requirements are clear, the group needs the decision objective pinned down and a sense "
+        "of what is still missing before options can be compared fairly.",
 
     ("Exploration", "P", "Rational"):
-        "Define the decision objective, then identify the functional components any complete package must address.",
+        "The group needs the decision objective pinned down, plus the functional components any "
+        "complete package has to cover.",
 
     ("Exploration", "S", "Avoidant"):
-        "Check the transcript: if the user's situation is still vague, ask one simple question to clarify "
-        "the most basic requirement — keep it low-pressure. "
-        "Only if the situation is already clear: name the two most obvious options without evaluating them.",
+        "If the user's situation is still vague, one simple, low-pressure question about the most "
+        "basic requirement is the right move. Once it's clear, the group just needs the two most "
+        "obvious options named — evaluation can wait.",
 
     ("Exploration", "P", "Avoidant"):
-        "Name the two most essential components of a solution — keep it simple, just enough to give the group a starting structure.",
+        "The group needs a simple starting structure: the two most essential components, nothing more.",
 
     ("Exploration", "S", "Dependent"):
-        "Check the transcript: if the user's needs or preferences have not been expressed, "
-        "ask one question that invites the user to share what matters most to them. "
-        "Only if needs are already known: ask the group a question that surfaces a concrete option no one has mentioned yet.",
+        "If the user hasn't said what matters most to them yet, draw that out — one question that "
+        "invites it. Once their needs are known, surface a concrete option nobody has mentioned by "
+        "asking the group about it.",
 
     ("Exploration", "P", "Dependent"):
-        "Ask which component or constraint the group considers non-negotiable — get at least one anchor on the table.",
+        "Get at least one anchor on the table: which component or constraint does the group consider "
+        "non-negotiable?",
 
     ("Exploration", "S", "Intuitive"):
-        "Check the transcript: if the user's situation and priorities are not yet clear, "
-        "ask one question that feels natural given what has been said so far — something that will reveal what the user actually values. "
-        "Only if the picture is already clear: state which option direction feels most aligned and briefly say why.",
+        "If the user's situation and priorities are still fuzzy, ask the one question that would "
+        "reveal what they actually value — something natural given what's been said. Once the picture "
+        "is clear, the group should hear which direction feels most aligned to you and briefly why.",
 
     ("Exploration", "P", "Intuitive"):
-        "State which combination of components feels most naturally fitted to the problem, and say what that fit is based on.",
+        "The group should hear which combination of components feels naturally fitted to the problem "
+        "— and what that sense of fit is based on.",
 
     # ════════════════════════════════════════════════════════════════════════
     # STRUCTURING — build the comparison framework
     # ════════════════════════════════════════════════════════════════════════
 
     ("Structuring", "S", "Spontaneous"):
-        "Name the single most important trade-off between the options already on the table. One trade-off, stated clearly.",
+        "By the time you're done, the single most important trade-off between the options on the "
+        "table should be on the record — plainly, not buried in qualifiers.",
     ("Structuring", "P", "Spontaneous"):
-        "Identify the sharpest tension between two components in the package so far — name what you gain and what you give up.",
+        "The sharpest tension between two components in the package so far needs naming: what is "
+        "gained, what is given up.",
 
     ("Structuring", "S", "Rational"):
-        "Introduce one evaluation dimension not yet discussed and apply it explicitly to at least two of the current options.",
+        "The comparison is missing a dimension — bring in one that hasn't been discussed and show "
+        "what it says about at least two of the current options.",
     ("Structuring", "P", "Rational"):
-        "Introduce one evaluation dimension — such as cost, feasibility, or risk — and assess at least two components against it.",
+        "Bring one evaluation dimension into play — cost, feasibility, risk — and let it sort at "
+        "least two components.",
 
     ("Structuring", "S", "Avoidant"):
-        "Pick the two most similar options and name the single clearest difference between them. Just the difference, nothing more.",
+        "The two most similar options are blurring together; the clearest single difference between "
+        "them is what the group needs from you. Just that difference.",
     ("Structuring", "P", "Avoidant"):
-        "Identify the two components with the most overlap and state what distinguishes them — keep the framework simple.",
+        "Two components overlap heavily — what actually distinguishes them is worth one plain "
+        "statement. Keep the framework simple.",
 
     ("Structuring", "S", "Dependent"):
-        "Reflect back what dimensions the group has used so far and ask which one should carry the most weight.",
+        "The group has been comparing along several dimensions without weighing them. Reflect back "
+        "what's been used so far and get an answer on which one should carry the most weight.",
     ("Structuring", "P", "Dependent"):
-        "Reflect on which components have the most consensus so far and ask the group to confirm or challenge that read.",
+        "Say where you see the most consensus among the components so far — and get the group to "
+        "confirm or attack that read.",
 
     ("Structuring", "S", "Intuitive"):
-        "State which evaluation dimension feels most relevant given the group's actual priorities, and show how it applies to the options.",
+        "The group should hear which evaluation dimension feels most decisive given what people "
+        "actually care about here — and how the options look through it.",
     ("Structuring", "P", "Intuitive"):
-        "Say which components feel like they belong together naturally and explain what makes that combination coherent.",
+        "Some components belong together and some don't. Say which combination coheres for you, and "
+        "what makes it cohere.",
 
     # ════════════════════════════════════════════════════════════════════════
     # NARROWING — eliminate weaker candidates
     # ════════════════════════════════════════════════════════════════════════
 
     ("Narrowing", "S", "Spontaneous"):
-        "Eliminate one option from the table. State the single reason it loses and do not reopen it.",
+        "One option should be off the table by the end of your message — named, with the single "
+        "reason it loses. Don't reopen it afterwards.",
     ("Narrowing", "P", "Spontaneous"):
-        "Drop one component or approach that is not pulling its weight. Give one reason and move on.",
+        "One component or approach isn't pulling its weight; the group needs it dropped, with the "
+        "one reason, so the debate can move on.",
 
     ("Narrowing", "S", "Rational"):
-        "Summarize the comparative evidence so far and identify which option has the stronger overall case based on the dimensions already established.",
+        "The evidence so far points somewhere. The group needs your read: which option has the "
+        "stronger overall case on the dimensions already established, and why.",
     ("Narrowing", "P", "Rational"):
-        "Assess which components have cleared the evidence bar and which have not — recommend dropping the weakest one with justification.",
+        "Some components have cleared the evidence bar and some haven't. The weakest one should be "
+        "recommended out, with the justification on record.",
 
     ("Narrowing", "S", "Avoidant"):
-        "Identify which option carries the least risk given what the group knows, and confirm you can accept it as the leading candidate.",
+        "Given what the group knows, one option carries the least risk. Say which, and whether you "
+        "can genuinely accept it as the leading candidate.",
     ("Narrowing", "P", "Avoidant"):
-        "Identify the component combination that minimizes downside exposure and say whether it is enough to move forward.",
+        "The group needs to know which component combination keeps the downside smallest — and "
+        "whether that's enough for you to move forward on.",
 
     ("Narrowing", "S", "Dependent"):
-        "State which option has accumulated the most support in this discussion and commit to backing it as the leading candidate.",
+        "Support has been accumulating unevenly. Say which option has earned the most of it in this "
+        "discussion — and commit to backing it, out loud.",
     ("Narrowing", "P", "Dependent"):
-        "Identify which components the group seems aligned on and propose locking them in so the remaining debate can narrow.",
+        "The components the group already agrees on are worth locking in — propose that, so the "
+        "remaining debate has a smaller surface.",
 
     ("Narrowing", "S", "Intuitive"):
-        "State which option fits best right now given everything discussed, and name what you would need to change your mind.",
+        "Everything discussed so far adds up to a best fit for you. Name it — and name what would "
+        "have to be true for you to change your mind.",
     ("Narrowing", "P", "Intuitive"):
-        "Say which component combination feels most coherent as a whole package, and identify the one piece still creating doubt.",
+        "One combination hangs together as a package; one piece still creates doubt. The group "
+        "should hear both from you.",
 
     # ════════════════════════════════════════════════════════════════════════
     # CONVERGENCE — finalize recommendation and next step
     # ════════════════════════════════════════════════════════════════════════
 
     ("Convergence", "S", "Spontaneous"):
-        "State the final recommendation in one sentence. Name the immediate first action to act on it.",
+        "The group needs your final call in one sentence — and the immediate first action that "
+        "makes it real.",
     ("Convergence", "P", "Spontaneous"):
-        "State the final package in one sentence. Name the first implementation step.",
+        "The final package in one sentence, plus the first implementation step. That's the whole job.",
 
     ("Convergence", "S", "Rational"):
-        "Confirm the chosen option with a one-line justification that names the key trade-off the group is accepting.",
+        "The chosen option should leave this turn confirmed, with a one-line justification that "
+        "names the key trade-off the group is accepting by picking it.",
     ("Convergence", "P", "Rational"):
-        "Confirm the final package composition and state the primary trade-off the group has accepted in choosing it.",
+        "The final package composition needs confirming — together with the primary trade-off the "
+        "group has accepted in choosing it.",
 
     ("Convergence", "S", "Avoidant"):
-        "Confirm the chosen option is reversible or low-commitment enough to act on, then give your sign-off.",
+        "Your closing check matters here: is the chosen option reversible or low-commitment enough "
+        "to actually act on? Say so — that check is your sign-off.",
     ("Convergence", "P", "Avoidant"):
-        "Confirm the package can be adjusted after initial implementation if needed, then give your sign-off.",
+        "Your closing check: can the package be adjusted after initial implementation if something "
+        "breaks? Answer that, and you've signed off.",
 
     ("Convergence", "S", "Dependent"):
-        "Endorse the group's chosen option and propose one concrete next step that moves the decision into action.",
+        "The group's choice deserves your endorsement in your own words — plus one concrete next "
+        "step that moves it from decided to done.",
     ("Convergence", "P", "Dependent"):
-        "Endorse the final package and propose a concrete first step toward implementation.",
+        "Endorse the final package as your own position, and give the group a concrete first step "
+        "toward implementation.",
 
     ("Convergence", "S", "Intuitive"):
-        "Confirm the chosen option feels right given the full discussion, and name any remaining watch-out the group should monitor.",
+        "Does the chosen option still feel right against the whole discussion? Say so honestly — "
+        "and name the one remaining watch-out the group should keep an eye on.",
     ("Convergence", "P", "Intuitive"):
-        "Confirm the package feels coherent as a whole, and name the one assumption it depends on that should be watched.",
+        "Say whether the package coheres as a whole for you, and name the one assumption it leans "
+        "on that should be watched.",
 }
 
 STALL_PROMPTS: Dict[str, str] = {
-    "Spontaneous": "The discussion is stuck. Pick the strongest option or component and defend it in two sentences — force the group to react.",
-    "Rational":    "The discussion is stuck. Stop adding dimensions. Summarize what the evidence already supports and name the leading candidate.",
-    "Avoidant":    "The discussion is stuck. Identify the lowest-risk path forward and say you are willing to move on it.",
-    "Dependent":   "The discussion is stuck. Stop waiting for consensus — state your own preference clearly, even if you are uncertain.",
-    "Intuitive":   "The discussion is stuck. State which direction feels right based on everything so far and push the group to commit.",
+    "Spontaneous": "The discussion is going in circles. What breaks it is a bet: the strongest option "
+                   "or component, defended in two sentences the others have to react to.",
+    "Rational":    "The discussion is going in circles — more dimensions won't fix that. What the "
+                   "evidence already supports, and which candidate leads on it, is the way out.",
+    "Avoidant":    "The discussion is going in circles. The lowest-risk path forward exists; naming it "
+                   "and saying you're willing to move on it is what unsticks the group.",
+    "Dependent":   "The discussion is going in circles, and waiting for consensus is feeding the "
+                   "circle. Your own preference, stated plainly even if uncertain, is the contribution.",
+    "Intuitive":   "The discussion is going in circles. Which direction feels right, given everything "
+                   "so far? Saying it and pushing the group to commit is what this turn is for.",
 }
 
 def get_phase_prompt(state: str, mode: str, decision: str, stall: bool) -> str:
@@ -1137,6 +1251,10 @@ def looks_like_refusal(text: str) -> bool:
 _MSG_NAMES = r"MESSAGE|MSG|消息|訊息|信息|メッセージ"
 _RAT_NAMES = r"RATIONALE|REASON|理由|原因|理由说明|根拠|根拠説明"
 _OPT_NAMES = r"OPTIONS|OPTION|CHOICES|选项|選項|選択肢|オプション"
+# Kept deliberately identical to the naturalness branch's list (no zh-TW/extra
+# ja variants) so [MOVE] recognition is bit-for-bit the behaviour that layer was
+# tuned against. See README "Known deviations" before widening it.
+_MOVE_NAMES = r"MOVE|动作|行动|アクション"
 
 _MESSAGE_TAG_RE = re.compile(rf"\[(?:{_MSG_NAMES})\](.*?)\[/(?:{_MSG_NAMES})\]",
                              re.DOTALL | re.IGNORECASE)
@@ -1144,13 +1262,15 @@ _RATIONALE_TAG_RE = re.compile(rf"\[(?:{_RAT_NAMES})\](.*?)\[/(?:{_RAT_NAMES})\]
                                re.DOTALL | re.IGNORECASE)
 _OPTIONS_TAG_RE = re.compile(rf"\[(?:{_OPT_NAMES})\](.*?)\[/(?:{_OPT_NAMES})\]",
                              re.DOTALL | re.IGNORECASE)
+_MOVE_TAG_RE = re.compile(rf"\[(?:{_MOVE_NAMES})\](.*?)\[/(?:{_MOVE_NAMES})\]",
+                          re.DOTALL | re.IGNORECASE)
 _STRAY_TAG_RE = re.compile(
-    rf"\[/?(?:{_MSG_NAMES}|{_RAT_NAMES}|{_OPT_NAMES})\]", re.IGNORECASE
+    rf"\[/?(?:{_MSG_NAMES}|{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES})\]", re.IGNORECASE
 )
-# Last resort for the no-tags branch: a rationale/options block that opened but
-# never closed would otherwise stay in the chat message.
+# Last resort for the no-tags branch: a private block (rationale, options or
+# move) that opened but never closed would otherwise stay in the chat message.
 _TRAILING_RATIONALE_RE = re.compile(
-    rf"\[(?:{_RAT_NAMES}|{_OPT_NAMES})\].*$", re.DOTALL | re.IGNORECASE
+    rf"\[(?:{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES})\].*$", re.DOTALL | re.IGNORECASE
 )
 
 
@@ -1204,13 +1324,15 @@ def parse_agent_turn(raw: str) -> dict:
     msg_match = _MESSAGE_TAG_RE.search(raw)
     rat_match = _RATIONALE_TAG_RE.search(raw)
     opt_match = _OPTIONS_TAG_RE.search(raw)
+    move_match = _MOVE_TAG_RE.search(raw)
 
     if msg_match:
         message = msg_match.group(1).strip()
     else:
-        # No usable MESSAGE block. Drop anything from an opening RATIONALE/OPTIONS
-        # tag onward first — otherwise a half-formed generation publishes private
-        # blocks — then clear any stray tag tokens from what is left.
+        # No usable MESSAGE block. Drop anything from an opening
+        # RATIONALE/OPTIONS/MOVE tag onward first — otherwise a half-formed
+        # generation publishes private blocks — then clear any stray tag tokens
+        # from what is left.
         message = _STRAY_TAG_RE.sub("", _TRAILING_RATIONALE_RE.sub("", raw)).strip()
 
     rationale = rat_match.group(1).strip() if rat_match else ""
@@ -1222,8 +1344,20 @@ def parse_agent_turn(raw: str) -> dict:
     # Strip a leaked OPTIONS block from the visible message if tags were mangled.
     if options and _OPTIONS_TAG_RE.search(message):
         message = _OPTIONS_TAG_RE.sub("", message).strip()
+    # Same for a leaked MOVE block — it is private and must never reach the chat.
+    if _MOVE_TAG_RE.search(message):
+        message = _MOVE_TAG_RE.sub("", message).strip()
 
-    return {"message": message, "rationale": rationale, "options": options}
+    # Missing or unrecognised MOVE degrades to "" — callers fall back to the
+    # marker scan (turn_is_challenge), never to a guess.
+    move_body = move_match.group(1).strip() if move_match else ""
+    return {
+        "message": message,
+        "rationale": rationale,
+        "options": options,
+        "move": normalize_move(move_body),
+        "move_detail": " ".join(move_body.split())[:80],
+    }
 
 
 def enforce_no_refusal(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float,
@@ -1247,7 +1381,7 @@ def enforce_no_refusal(agent: "ChatAgent", messages: List[dict], parsed: dict, t
             "Reply again, in character. Do not instruct the user to do anything and do not "
             "speak as if the matter is settled — state what your assigned perspective "
             "weighs, name the trade-off it sees, and leave the choice with the user. "
-            "Keep the required [MESSAGE]/[RATIONALE] output format, tags in English."
+            "Keep the required [MESSAGE]/[MOVE]/[RATIONALE] output format, tags in English."
         )},
     ]
     retry_raw = create_fn(retry_messages, min(temp + 0.1, 1.4), max_output_tokens)
@@ -1408,6 +1542,27 @@ def run_user_turn(
     session.setdefault("latest_snippet_id", {k: None for k in agent_keys})
     session.setdefault("snippet_counters", {k: 0 for k in agent_keys})
     session.setdefault("agent_knowledge_hit_history", {k: [] for k in agent_keys})
+    # Challenge tracking, fed by each turn's [MOVE] self-report OR the marker
+    # scan (turn_is_challenge). Two consumers:
+    #   - the consensus guard in get_phase_context(), which used to re-issue
+    #     its warning to EVERY speaker until someone hit a marker phrase —
+    #     producing 2-3 near-identical formal objections in a row. Now it
+    #     nudges one agent, then stays quiet for a few lines to let that
+    #     nudge land before re-arming.
+    #   - the convergence gate in run_moderator(), which no longer depends on
+    #     the disagreement being phrased in marker vocabulary.
+    # Line values are indices into transcript_lines; -999 = never.
+    #
+    # SESSION-SCOPED, unlike the CLI's local dict: run_user_turn() returns after
+    # each user turn, so a local would reset the counter and both cooldowns on
+    # every HTTP call — the guard would re-fire every turn and the gate would
+    # never see a challenge. transcript_lines is rebuilt from session history at
+    # the top of each call, so the stored line indices stay comparable.
+    challenge_tracker = session.setdefault(
+        "challenge_tracker", {"count": 0, "last_challenge_line": -999, "last_nudge_line": -999}
+    )
+    for _ck, _cv in (("count", 0), ("last_challenge_line", -999), ("last_nudge_line", -999)):
+        challenge_tracker.setdefault(_ck, _cv)
     # Ensure keys exist even if session was created with a fixed A/B/C dict.
     for k in agent_keys:
         session["memory_snippets"].setdefault(k, [])
@@ -1561,7 +1716,9 @@ def run_user_turn(
             lines.append(f"Phase: {s['state']}")
         if s.get("goal"):
             lines.append(f"Current goal: {s['goal']}")
-        lines.append(f"Your task this turn: {assignment}")
+        # "Goal", not "task": paired with the CONVERSATIONAL STYLE rule that the
+        # objective gets folded into a natural reply, not answered like a form.
+        lines.append(f"Your goal this turn: {assignment}")
         budget = QUESTION_BUDGET.get(lookup_state)
         if budget and not s.get("stall") and s.get("state") != CONCLUDED_STATE:
             lines.append(budget)
@@ -1571,12 +1728,25 @@ def run_user_turn(
                 "from KNOWN USER CONTEXT. A statement that would read the same for any user is not "
                 "a contribution. Do not re-ask for anything already listed there as filled in."
             )
+        # TARGETED, not broadcast — see the identical guard in main(). One
+        # speaker is nudged, then the guard stays quiet for a few lines so the
+        # nudge can land instead of producing a chain of near-identical formal
+        # objections. Challenge detection runs on the [MOVE] self-report OR the
+        # marker scan (challenge_tracker), so polite pushback counts too.
         recent = [ln for ln in transcript_lines[-6:] if not ln.lower().startswith("user:")]
-        if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
+        lines_since_challenge = len(transcript_lines) - challenge_tracker["last_challenge_line"]
+        lines_since_nudge = len(transcript_lines) - challenge_tracker["last_nudge_line"]
+        if (len(recent) >= 4
+                and not any(has_disagreement(ln) for ln in recent)
+                and lines_since_challenge > 6
+                and lines_since_nudge >= 3):
+            challenge_tracker["last_nudge_line"] = len(transcript_lines)
             lines.append(
-                "CONSENSUS WARNING: the last several messages contained no real disagreement. "
-                "Before adding anything, state plainly where your stance differs from where the "
-                "group is heading, and what that direction costs the interest you represent."
+                "CONSENSUS WARNING: the last several messages contained no real disagreement, and "
+                "you are the one being asked to break that. Somewhere in this reply — woven in "
+                "naturally, not as a formal objection — say where your stance differs from where "
+                "the group is heading and what that direction costs the interest you represent. "
+                "If you genuinely agree, name the specific sacrifice you are accepting to get there."
             )
         try:
             from stance import get_convergence_weight_hint
@@ -1641,6 +1811,18 @@ def run_user_turn(
         session.setdefault("has_spoken", {})[agent.key] = True
         agent.spoke += 1
 
+    def record_turn_move(agent_key: str, parsed: dict, txt: str) -> None:
+        """Log a published turn's self-reported move and feed challenge_tracker.
+
+        Called AFTER append_agent, so last_challenge_line points at the line the
+        challenge actually landed on. Dropped turns never reach this."""
+        move = parsed.get("move") or ""
+        if move:
+            log_agent_event(agent_key, "move", parsed.get("move_detail") or move)
+        if turn_is_challenge(move, txt):
+            challenge_tracker["count"] += 1
+            challenge_tracker["last_challenge_line"] = len(transcript_lines)
+
     def run_moderator(allow_state_change: bool = True) -> None:
         history = clamp_history(transcript_lines, max_history_chars)
         roles_summary = build_roles_summary(agent_list)
@@ -1689,6 +1871,30 @@ def run_user_turn(
             )
             parsed = dict(parsed)
             parsed["state"] = prev_state
+
+        # Convergence gate (deterministic, not asked of the LLM): three agents
+        # holding three opposed stances must not close before they have actually
+        # disagreed even once. Without this the group "converges" on turn 5 by
+        # agreeing with each other — which is the premature-convergence failure,
+        # and also what precedes the model refusing a turn outright once the chat
+        # slides into telling the user what to do about an already-settled choice.
+        # Held at Structuring with an explicit instruction to surface the conflict.
+        # Disagreement counts through EITHER channel: the [MOVE] self-report
+        # (challenge_tracker — catches politely-worded pushback the marker list
+        # deliberately ignores) or the marker scan over the transcript (catches
+        # turns whose MOVE block was missing or garbled).
+        if parsed["state"] == "Convergence" and prev_state not in ("Convergence", CONCLUDED_STATE):
+            agent_lines = [ln for ln in transcript_lines if not ln.lower().startswith("user:")]
+            if (challenge_tracker["count"] == 0
+                    and not any(has_disagreement(ln) for ln in agent_lines)):
+                log_moderator("admin3_convergence_gated",
+                              f"{prev_state} -> Convergence withheld: no substantive disagreement "
+                              f"on record yet across {len(agent_lines)} agent turns.")
+                parsed = dict(parsed)
+                parsed["state"] = "Structuring"
+                parsed["goal"] = ("Before closing: no one has actually disagreed yet. Each agent must "
+                                  "name where its own stance conflicts with where the group is heading, "
+                                  "and what that direction costs the interest it represents.")
 
         if (
             parsed["state"] == "Convergence"
@@ -1767,7 +1973,7 @@ def run_user_turn(
                     "someone made.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
                     "whose point you are deferring to. Either way, do not ask a question this time. "
-                    "Keep the required [MESSAGE]/[RATIONALE] output format."
+                    "Keep the required [MESSAGE]/[MOVE]/[RATIONALE] output format."
                 ),
             },
         ]
@@ -1841,6 +2047,7 @@ def run_user_turn(
                     f"(soft cue, not routed, admin still decides next speaker)",
                 )
             append_agent(burst_agent, txt, options=parsed.get("options") or None)
+            record_turn_move(burst_agent.key, parsed, txt)
             session["last_speaker_key"] = burst_agent.key
             maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
         moderator_state["stall"] = False
@@ -1935,6 +2142,7 @@ def run_user_turn(
                 f"(soft cue, not routed, admin still decides next speaker)",
             )
         append_agent(agent, txt, options=parsed.get("options") or None)
+        record_turn_move(agent.key, parsed, txt)
         maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
         if stall_triggered:
             stall_burst(trigger_key=agent.key)
@@ -2348,6 +2556,22 @@ def main():
         "goal":  "",
     }
 
+    # Challenge tracking, fed by each turn's [MOVE] self-report OR the marker
+    # scan (turn_is_challenge). Two consumers:
+    #   - the consensus guard in get_phase_context(), which used to re-issue
+    #     its warning to EVERY speaker until someone hit a marker phrase —
+    #     producing 2-3 near-identical formal objections in a row. Now it
+    #     nudges one agent, then stays quiet for a few lines to let that
+    #     nudge land before re-arming.
+    #   - the convergence gate in run_moderator(), which no longer depends on
+    #     the disagreement being phrased in marker vocabulary.
+    # Line values are indices into transcript_lines; -999 = never.
+    challenge_tracker = {
+        "count": 0,
+        "last_challenge_line": -999,
+        "last_nudge_line": -999,
+    }
+
     # Memory snippet chains: one independent LINEAR chain per agent (not a
     # tree) — each new snippet's parent_id points at that agent's previous one.
     snippet_counters: Dict[str, int] = {k: 0 for k in agent_keys}
@@ -2417,6 +2641,18 @@ def main():
     def log_memory(record: dict):
         write_jsonl_line(memory_fp, record)
 
+    def record_turn_move(agent_key: str, parsed: dict, txt: str):
+        """Log a published turn's self-reported move and feed challenge_tracker.
+
+        Called AFTER log_chat, so last_challenge_line points at the line the
+        challenge actually landed on. Dropped turns never reach this."""
+        move = parsed.get("move") or ""
+        if move:
+            log_agent_event(agent_key, "move", parsed.get("move_detail") or move)
+        if turn_is_challenge(move, txt):
+            challenge_tracker["count"] += 1
+            challenge_tracker["last_challenge_line"] = len(transcript_lines)
+
     def get_phase_context(agent_key: str) -> str:
         s = moderator_state
         decision = agent_configs[agent_key]["decision"]
@@ -2433,7 +2669,9 @@ def main():
             lines.append(f"Phase: {s['state']}")
         if s["goal"]:
             lines.append(f"Current goal: {s['goal']}")
-        lines.append(f"Your task this turn: {assignment}")
+        # "Goal", not "task": paired with the CONVERSATIONAL STYLE rule that the
+        # objective gets folded into a natural reply, not answered like a form.
+        lines.append(f"Your goal this turn: {assignment}")
 
         budget = QUESTION_BUDGET.get(lookup_state)
         if budget and not s["stall"]:
@@ -2457,12 +2695,27 @@ def main():
         # agent, which is precisely the voice that should have been defending the
         # other one. The stance text alone did not hold against the model's pull
         # toward agreeableness, so the drift is detected and named explicitly.
+        #
+        # TARGETED, not broadcast: the warning goes to ONE speaker, then stays
+        # quiet for a few lines to let the nudge land. Issuing it to every
+        # consecutive speaker (the old behavior) produced a chain of
+        # near-identical "I must state my disagreement" turns — synchronized
+        # objection reads as fake as synchronized agreement. Challenge detection
+        # runs on the [MOVE] self-report OR the marker scan (challenge_tracker),
+        # so politely-worded pushback also counts as pushback.
         recent = [ln for ln in transcript_lines[-6:] if not ln.startswith("user:")]
-        if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
+        lines_since_challenge = len(transcript_lines) - challenge_tracker["last_challenge_line"]
+        lines_since_nudge = len(transcript_lines) - challenge_tracker["last_nudge_line"]
+        if (len(recent) >= 4
+                and not any(has_disagreement(ln) for ln in recent)
+                and lines_since_challenge > 6
+                and lines_since_nudge >= 3):
+            challenge_tracker["last_nudge_line"] = len(transcript_lines)
             lines.append(
-                "CONSENSUS WARNING: the last several messages contained no real disagreement. "
-                "Before adding anything, state plainly where your stance differs from where the "
-                "group is heading, and what that direction costs the interest you represent. "
+                "CONSENSUS WARNING: the last several messages contained no real disagreement, and "
+                "you are the one being asked to break that. Somewhere in this reply — woven in "
+                "naturally, not as a formal objection — say where your stance differs from where "
+                "the group is heading and what that direction costs the interest you represent. "
                 "If you genuinely agree, name the specific sacrifice you are accepting to get there."
             )
         if HAVE_STANCE and s["state"] == "Convergence":
@@ -2680,6 +2933,30 @@ def main():
             parsed = dict(parsed)
             parsed["state"] = prev_state
 
+        # Convergence gate (deterministic, not asked of the LLM): three agents
+        # holding three opposed stances must not close before they have actually
+        # disagreed even once. Without this the group "converges" on turn 5 by
+        # agreeing with each other — which is the premature-convergence failure,
+        # and also what precedes the model refusing a turn outright once the chat
+        # slides into telling the user what to do about an already-settled choice.
+        # Held at Structuring with an explicit instruction to surface the conflict.
+        # Disagreement counts through EITHER channel: the [MOVE] self-report
+        # (challenge_tracker — catches politely-worded pushback the marker list
+        # deliberately ignores) or the marker scan over the transcript (catches
+        # turns whose MOVE block was missing or garbled).
+        if parsed["state"] == "Convergence" and prev_state not in ("Convergence", CONCLUDED_STATE):
+            agent_lines = [ln for ln in transcript_lines if not ln.startswith("user:")]
+            if (challenge_tracker["count"] == 0
+                    and not any(has_disagreement(ln) for ln in agent_lines)):
+                log_moderator("admin3_convergence_gated",
+                              f"{prev_state} -> Convergence withheld: no substantive disagreement "
+                              f"on record yet across {len(agent_lines)} agent turns.")
+                parsed = dict(parsed)
+                parsed["state"] = "Structuring"
+                parsed["goal"] = ("Before closing: no one has actually disagreed yet. Each agent must "
+                                  "name where its own stance conflicts with where the group is heading, "
+                                  "and what that direction costs the interest it represents.")
+
         # Terminal-state latch (deterministic, not asked of the LLM): the group
         # reaching Convergence twice in a row with no user input in between
         # means the discussion is finished, not that it needs another round of
@@ -2791,6 +3068,7 @@ def main():
                                 f"(soft cue, not routed, admin still decides next speaker)")
             print(f"{burst_agent.name}> {txt}")
             log_chat(burst_agent.name, txt)
+            record_turn_move(burst_agent.key, parsed, txt)
             last_speaker_key = burst_agent.key
             maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
 
@@ -2966,6 +3244,7 @@ def main():
 
             print(f"{agent.name}> {txt}")
             log_chat(agent.name, txt)
+            record_turn_move(agent.key, parsed, txt)
             maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
 
             # After the triggering agent speaks, run the burst for remaining agents
@@ -3014,7 +3293,7 @@ def main():
                     "someone made.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
                     "whose point you are deferring to. Either way, do not ask a question this time. "
-                    "Keep the required [MESSAGE]/[RATIONALE] output format."
+                    "Keep the required [MESSAGE]/[MOVE]/[RATIONALE] output format."
                 )},
             ]
             meta: dict = {}

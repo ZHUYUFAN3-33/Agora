@@ -102,13 +102,28 @@ cd backend && python3 tests_offline/run_all.py
 | `test_self_novelty` | 真代码缺口：`enforce_novelty()` 只有 group 尺度（`transcript_lines[-novelty_window:]`），没有 per-agent 的 self 尺度 | 从 `776f5bf` 逐字移植双尺度实现（CLI 侧与基准逐字节一致），web 侧同步一遍 |
 | `test_stance_pool_scaling` | 真代码缺口：`build_system_prompt()` 的 `stance_labels` 参数、roster 的 `— represents X` 分支、`stance.get_stance_label()` 都写好了，但**全仓库零调用点** | 两条循环各接上一遍 |
 
-移植带来的两个新参数（默认值取自 `776f5bf`）：`--self_novelty_threshold`（0.35）、
-`--self_novelty_window`（6）；web 侧对应 `AGORA_SELF_NOVELTY_THRESHOLD`。
+移植带来的两个新参数：`--self_novelty_threshold`（0.35）、`--self_novelty_window`（6）；
+web 侧对应 `AGORA_SELF_NOVELTY_THRESHOLD`。
 
-> ⚠️ 一并从 `776f5bf` 带过来的还有**新颖度重试提示词的改写**：诊断语句现在区分「重复了别人」
-> 与「重复了你自己」，且候选贡献清单重新排序为「具体比较 → 排除 → 反驳 → 引用用户事实 →
-> （仅当具体选项尚未上桌时）新评估维度」。这是 prompt 文本变化，没有任何测试覆盖它，
-> 但不带过来就会与基准分叉。
+**注意这两处缺口都不属于自然度层。** 用 `git log -S` 在 Agora-2 上定位过，它们连同下面那条
+prompt 改写都出自 **`68513b5`**（"Stance knowledge, cross-session memory, and prompt-architecture
+fixes"），位于自然度层三个 commit 之下。本分支的基准 `776f5bf` 是分支尖端，它的**树**自然包含
+`68513b5` 的成果 —— 「忠实于 `776f5bf`」指的是那棵树的全部内容，不只是最上面几个 commit 的增量。
+
+> ⚠️ 同样出自 `68513b5`、**没有任何测试覆盖**的一项：**新颖度重试提示词的改写**。这段文字是
+> agent 被新颖度守卫拦下后收到的「重写指令」，正常发言看不到。两处变化：
+>
+> 1. **诊断分岔**。原来无论哪种重复都统一说「群体里已有这个观点」；现在自我尺度挂了会改说
+>    "re-states a point **YOU** have already made"。新加的 self 尺度专抓「换个说法重复自己」，
+>    沿用旧文案等于把病诊错，模型会去比对别人说了什么、发现没冲突、然后照样重复自己。
+> 2. **候选清单重排**：「具体比较两个已命名选项 → 排除并说明理由 → 反驳某人的具体主张 →
+>    引用没人提过的用户事实 →（**仅当具体选项尚未上桌时**）新评估维度」。原来「新评估维度」
+>    排在**第一位**且无条件。`68513b5` 的提交说明写明了原因：它是当时三处把 agent 推向抽象
+>    维度的来源里**最强的一处**。后果是审议永远停在铺开框架的阶段 —— 考量清单越列越长，
+>    却没人真的比较选项、排除选项或反驳谁。降位加锁是把 agent 从发散推向收敛。
+>
+> 守卫**何时触发**有测试（`test_self_novelty` 验证两个尺度都在），**触发后说什么**没有断言 ——
+> 这段文字随便改，21 个测试照样全绿。改动它请回到 Agora-2 改，否则两边再次分叉。
 
 ---
 

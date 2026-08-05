@@ -1306,10 +1306,19 @@ def session_summary(room_id):
         lang = "en"
 
     try:
-        from transcript_summary import build as build_summary
-        text = build_summary(chat_path, lang)
+        from transcript_summary import build_result as build_summary_result
+        result = build_summary_result(chat_path, lang)
+        text = result.get("markdown") or ""
+        overall = result.get("overall")
+        segments = result.get("segments") or []
     except Exception as e:
         return jsonify({"error": f"Summary failed: {e}"}), 502
+
+    try:
+        from decision_map import save_summary_overall
+        save_summary_overall(LOG_DIR, room_id, overall, lang)
+    except Exception as cache_err:
+        print(f"⚠ summary overall cache failed: {cache_err}")
 
     memory_record = None
     session = chat_sessions.get(room_id) or {}
@@ -1376,9 +1385,296 @@ def session_summary(room_id):
         "room_id": room_id,
         "lang": lang,
         "markdown": text,
+        "overall": overall,
+        "segments": segments,
         "memory_saved": bool(memory_record),
         "memory": memory_record,
     })
+
+
+def _authorize_room_read(room_id: str) -> Tuple[Optional[dict], Optional[tuple]]:
+    """Return (room_context, error_response). error_response is (jsonify(...), status)."""
+    if room_id in chat_sessions:
+        session = chat_sessions[room_id]
+        owner = session.get("user_id")
+        if owner and HAVE_USER_STORE:
+            auth = get_user_store().resolve_token(_bearer_token())
+            if not auth or (auth["user_id"] != owner and not auth.get("is_admin")):
+                return None, (jsonify({"error": "Forbidden"}), 403)
+        return {"source": "memory", "session": session, "room": None}, None
+
+    if not HAVE_USER_STORE:
+        return None, (jsonify({"error": "Session not found"}), 404)
+    store = get_user_store()
+    room = store.get_chat_room(room_id)
+    if not room:
+        # Allow log-only rooms (export/summary style) when jsonl exists
+        chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+        if os.path.exists(chat_path):
+            return {"source": "log", "session": None, "room": None}, None
+        return None, (jsonify({"error": "Session not found"}), 404)
+    auth = store.resolve_token(_bearer_token())
+    if not auth or (auth["user_id"] != room["user_id"] and not auth.get("is_admin")):
+        return None, (jsonify({"error": "Forbidden"}), 403)
+    return {"source": "db", "session": None, "room": room}, None
+
+
+def _load_room_msgs_and_agents(room_id: str, ctx: dict) -> Tuple[List[dict], List[dict], Optional[str]]:
+    """History rows + agent payload + scenario_type for decision map."""
+    session = ctx.get("session")
+    room = ctx.get("room")
+    scenario_type = None
+    agents: List[dict] = []
+    msgs: List[dict] = []
+
+    if session is not None:
+        msgs = list(session.get("history") or [])
+        scenario_type = session.get("scenario_type")
+        session_agents, _, _ = _make_session_agents(session)
+        agents = _agents_payload_for_session(session, session_agents)
+        return msgs, agents, scenario_type
+
+    if room is not None and HAVE_USER_STORE:
+        scenario_type = room.get("scenario_type")
+        store = get_user_store()
+        for m in store.list_chat_messages(room_id):
+            msgs.append({
+                "character": m["character"],
+                "txt": m["txt"],
+                "time": m.get("created_at"),
+                "chat_room_id": room_id,
+            })
+        # Re-derive default stances when roster is not persisted on history
+        try:
+            from stance import list_stances, assign_stance
+            keys = ["A", "B", "C"]
+            if list_stances(scenario_type):
+                agents = [
+                    {
+                        "key": k,
+                        "name": f"Chatbot{k}",
+                        "stance": assign_stance(scenario_type, k, keys),
+                    }
+                    for k in keys
+                ]
+        except Exception:
+            agents = []
+        return msgs, agents, scenario_type
+
+    # Log-only fallback
+    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    if os.path.exists(chat_path):
+        try:
+            from transcript_summary import load_jsonl
+            msgs = load_jsonl(chat_path)
+        except Exception:
+            msgs = []
+    return msgs, agents, scenario_type
+
+
+@app.route('/api/decision-map/<room_id>', methods=['GET'])
+def get_decision_map(room_id):
+    """IBIS Decision Map: open with smart=1&extract=1 to LLM-extract (if enough messages)."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    ctx, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
+    lang = (request.args.get("lang") or "en").strip().lower()
+    if lang not in ("en", "zh"):
+        lang = "en"
+    # Default smart on; extract=1 forces a (re)run when messages suffice
+    smart = (request.args.get("smart") or "1").strip().lower() not in ("0", "false", "no")
+    do_extract = (request.args.get("extract") or "").strip().lower() in ("1", "true", "yes")
+
+    msgs, agents, scenario_type = _load_room_msgs_and_agents(room_id, ctx or {})
+    if not msgs:
+        chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+        if os.path.exists(chat_path):
+            try:
+                from transcript_summary import load_jsonl
+                msgs = load_jsonl(chat_path)
+            except Exception:
+                pass
+
+    from decision_map import (
+        assemble_smart_map,
+        enough_messages,
+        load_summary_overall,
+        load_latest_extract,
+        load_user_annotations,
+        extract_ibis_llm,
+        append_extract,
+        empty_map,
+    )
+
+    if not msgs:
+        return jsonify(empty_map(room_id, lang, insufficient=True))
+
+    phase_changes = _phase_changes_for_room(room_id)
+    overall = load_summary_overall(LOG_DIR, room_id)
+    user_annotations = load_user_annotations(LOG_DIR, room_id)
+    cached = load_latest_extract(LOG_DIR, room_id) if smart else None
+    fresh = None
+
+    if smart and do_extract and enough_messages(msgs):
+        try:
+            fresh = extract_ibis_llm(
+                msgs, lang, agent_module.create_response, prior=cached,
+            )
+            if fresh:
+                append_extract(LOG_DIR, room_id, fresh)
+        except Exception as ex:
+            print(f"⚠ decision-map extract failed: {ex}")
+
+    payload = assemble_smart_map(
+        room_id=room_id,
+        msgs=msgs,
+        phase_changes=phase_changes,
+        lang=lang,
+        overall=overall,
+        user_annotations=user_annotations,
+        cached=cached,
+        fresh=fresh,
+        agents=agents,
+    )
+    if fresh or cached:
+        payload["extracted"] = True
+    return jsonify(payload)
+
+
+@app.route('/api/decision-map/<room_id>/annotations', methods=['GET', 'POST', 'DELETE'])
+def decision_map_annotations(room_id):
+    """User / layer annotation CRUD for the Decision Map."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    ctx, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
+    from decision_map import (
+        load_user_annotations,
+        add_user_annotation,
+        delete_user_annotation,
+        promote_layer_annotations,
+        save_user_annotations,
+    )
+
+    if request.method == "GET":
+        return jsonify({"room_id": room_id, "annotations": load_user_annotations(LOG_DIR, room_id)})
+
+    body = request.get_json(silent=True) or {}
+
+    if request.method == "DELETE":
+        ann_id = (body.get("id") or request.args.get("id") or "").strip()
+        if not ann_id:
+            return jsonify({"error": "Missing annotation id"}), 400
+        ok = delete_user_annotation(LOG_DIR, room_id, ann_id)
+        if not ok:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({"ok": True, "id": ann_id})
+
+    # POST: single annotation or promote layer spans
+    if body.get("promote_layers"):
+        promoted = promote_layer_annotations(body.get("layers") or [])
+        existing = load_user_annotations(LOG_DIR, room_id)
+        existing_ids = {a.get("id") for a in existing}
+        for item in promoted:
+            if item["id"] not in existing_ids:
+                existing.append(item)
+        save_user_annotations(LOG_DIR, room_id, existing)
+        return jsonify({"ok": True, "annotations": existing, "added": len(promoted)})
+
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Missing text"}), 400
+    item = add_user_annotation(
+        LOG_DIR,
+        room_id,
+        text=text,
+        target_id=body.get("target_id"),
+        message_indexes=body.get("message_indexes") or [],
+        kind=body.get("kind") or "user",
+    )
+    return jsonify({"ok": True, "annotation": item}), 201
+
+
+@app.route('/api/decision-map/<room_id>/extract', methods=['POST'])
+def decision_map_extract(room_id):
+    """Force IBIS LLM extract (or return insufficient if too few messages)."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    ctx, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
+    body = request.get_json(silent=True) or {}
+    lang = (body.get("lang") or request.args.get("lang") or "en").strip().lower()
+    if lang not in ("en", "zh"):
+        lang = "en"
+
+    msgs, agents, _scenario_type = _load_room_msgs_and_agents(room_id, ctx or {})
+    if not msgs:
+        chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+        if os.path.exists(chat_path):
+            from transcript_summary import load_jsonl
+            msgs = load_jsonl(chat_path)
+
+    from decision_map import (
+        assemble_smart_map,
+        enough_messages,
+        load_summary_overall,
+        load_user_annotations,
+        load_latest_extract,
+        extract_ibis_llm,
+        append_extract,
+        empty_map,
+    )
+
+    if not msgs:
+        return jsonify(empty_map(room_id, lang, insufficient=True))
+
+    if not enough_messages(msgs):
+        payload = assemble_smart_map(
+            room_id=room_id,
+            msgs=msgs,
+            phase_changes=_phase_changes_for_room(room_id),
+            lang=lang,
+            overall=load_summary_overall(LOG_DIR, room_id),
+            user_annotations=load_user_annotations(LOG_DIR, room_id),
+            agents=agents,
+        )
+        return jsonify(payload)
+
+    cached = load_latest_extract(LOG_DIR, room_id)
+    try:
+        fresh = extract_ibis_llm(msgs, lang, agent_module.create_response, prior=cached)
+    except Exception as e:
+        return jsonify({"error": f"Extract failed: {e}"}), 502
+    if not fresh:
+        return jsonify({"error": "Extract returned nothing"}), 502
+    append_extract(LOG_DIR, room_id, fresh)
+
+    payload = assemble_smart_map(
+        room_id=room_id,
+        msgs=msgs,
+        phase_changes=_phase_changes_for_room(room_id),
+        lang=lang,
+        overall=load_summary_overall(LOG_DIR, room_id),
+        user_annotations=load_user_annotations(LOG_DIR, room_id),
+        cached=cached,
+        fresh=fresh,
+        agents=agents,
+    )
+    payload["extracted"] = True
+    return jsonify(payload)
 
 
 @app.route('/api/health', methods=['GET'])

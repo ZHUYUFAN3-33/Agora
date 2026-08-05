@@ -11,6 +11,10 @@ import {
   type PhaseChangeMarker,
 } from "../components/DecisionNavi";
 import {
+  DecisionMapPanel,
+  type DecisionMapData,
+} from "../components/DecisionMapPanel";
+import {
   IntakeModal,
   ProfileModal,
   MemoryHistoryPanel,
@@ -2107,11 +2111,20 @@ export default function Chat() {
   const lastPhaseByRoomRef = useRef<Record<string, string | null>>({});
   const [naviActiveMessageId, setNaviActiveMessageId] = useState<string | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [highlightedMessageIds, setHighlightedMessageIds] = useState<string[]>([]);
   const [highlightToken, setHighlightToken] = useState(0);
   const highlightTimerRef = useRef<number | null>(null);
   /** Ignore scroll-spy while smooth-scrolling from a Decision Navi click. */
   const naviJumpLockRef = useRef(false);
   const naviJumpUnlockTimerRef = useRef<number | null>(null);
+
+  const [decisionMapOpen, setDecisionMapOpen] = useState(false);
+  const [decisionMap, setDecisionMap] = useState<DecisionMapData | null>(null);
+  const [decisionMapLoading, setDecisionMapLoading] = useState(false);
+  const [decisionMapError, setDecisionMapError] = useState<string | null>(null);
+  const [decisionMapExtracting, setDecisionMapExtracting] = useState(false);
+  const [selectedMapTopicId, setSelectedMapTopicId] = useState<string | null>(null);
+  const [mapAnnotationDraft, setMapAnnotationDraft] = useState("");
 
   const [agentNames, setAgentNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
   const [agentBackendNames, setAgentBackendNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
@@ -2367,6 +2380,12 @@ export default function Chat() {
     setSummaryError(null);
     setNaviActiveMessageId(null);
     setHighlightedMessageId(null);
+    setHighlightedMessageIds([]);
+    setDecisionMapOpen(false);
+    setDecisionMap(null);
+    setDecisionMapError(null);
+    setSelectedMapTopicId(null);
+    setMapAnnotationDraft("");
     naviJumpLockRef.current = false;
     if (naviJumpUnlockTimerRef.current) {
       window.clearTimeout(naviJumpUnlockTimerRef.current);
@@ -2416,12 +2435,169 @@ export default function Chat() {
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightToken((n) => n + 1);
     setHighlightedMessageId(messageId);
+    setHighlightedMessageIds([messageId]);
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => {
       setHighlightedMessageId((prev) => (prev === messageId ? null : prev));
+      setHighlightedMessageIds([]);
       highlightTimerRef.current = null;
     }, 1000);
   }, []);
+
+  const jumpToRange = useCallback((indexes: number[]) => {
+    const messages = currentConv?.messages || [];
+    const ids = indexes
+      .map((i) => messages[i]?.id)
+      .filter((id): id is string => !!id);
+    if (ids.length === 0) return;
+    jumpToMessage(ids[0]);
+    if (ids.length > 1) {
+      setHighlightedMessageIds(ids);
+      setHighlightToken((n) => n + 1);
+      if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = window.setTimeout(() => {
+        setHighlightedMessageIds([]);
+        setHighlightedMessageId((prev) => (prev === ids[0] ? null : prev));
+        highlightTimerRef.current = null;
+      }, 1200);
+    }
+  }, [currentConv?.messages, jumpToMessage]);
+
+  const fetchDecisionMap = useCallback(async (opts?: { extract?: boolean }) => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return;
+    const wantExtract = opts?.extract !== false;
+    if (wantExtract) setDecisionMapExtracting(true);
+    else setDecisionMapLoading(true);
+    setDecisionMapError(null);
+    try {
+      const qs = new URLSearchParams({
+        lang: uiLang,
+        smart: "1",
+        extract: wantExtract ? "1" : "0",
+      });
+      const res = await authFetch(`/decision-map/${roomId}?${qs}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDecisionMapError((data as { error?: string }).error || "Failed to load decision map");
+        return;
+      }
+      const map = data as DecisionMapData;
+      setDecisionMap(map);
+      setSelectedMapTopicId((prev) => {
+        if (prev) return prev;
+        const issues = map.issues || [];
+        if (!issues.length) return prev;
+        const active = issues.find((i) => i.status === "leaning" || i.status === "open") || issues[0];
+        return active.id;
+      });
+    } catch {
+      setDecisionMapError("Failed to load decision map");
+    } finally {
+      setDecisionMapLoading(false);
+      setDecisionMapExtracting(false);
+    }
+  }, [currentConv?.roomId, uiLang]);
+
+  const handleOpenDecisionMap = useCallback(() => {
+    setDecisionMapOpen(true);
+    // Open → start smart extract immediately (backend returns insufficient if too few msgs)
+    void fetchDecisionMap({ extract: true });
+  }, [fetchDecisionMap]);
+
+  const handleExtractDecisionMap = useCallback(async () => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return;
+    setDecisionMapExtracting(true);
+    setDecisionMapError(null);
+    try {
+      const res = await authFetch(`/decision-map/${roomId}/extract`, {
+        method: "POST",
+        body: JSON.stringify({ lang: uiLang }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDecisionMapError((data as { error?: string }).error || "Extract failed");
+        return;
+      }
+      setDecisionMap(data as DecisionMapData);
+    } catch {
+      setDecisionMapError("Extract failed");
+    } finally {
+      setDecisionMapExtracting(false);
+    }
+  }, [currentConv?.roomId, uiLang]);
+
+  const handleAddMapAnnotation = useCallback(async () => {
+    const roomId = currentConv?.roomId;
+    const text = mapAnnotationDraft.trim();
+    if (!roomId || !text) return;
+    try {
+      const res = await authFetch(`/decision-map/${roomId}/annotations`, {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          target_id: selectedMapTopicId,
+          kind: "user",
+        }),
+      });
+      if (!res.ok) return;
+      setMapAnnotationDraft("");
+      await fetchDecisionMap({ extract: false });
+    } catch {
+      /* ignore */
+    }
+  }, [currentConv?.roomId, mapAnnotationDraft, selectedMapTopicId, fetchDecisionMap]);
+
+  const handleDeleteMapAnnotation = useCallback(async (id: string) => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return;
+    try {
+      await authFetch(`/decision-map/${roomId}/annotations`, {
+        method: "DELETE",
+        body: JSON.stringify({ id }),
+      });
+      await fetchDecisionMap({ extract: false });
+    } catch {
+      /* ignore */
+    }
+  }, [currentConv?.roomId, fetchDecisionMap]);
+
+  const handlePromoteLayerAnnotations = useCallback(async () => {
+    const roomId = currentConv?.roomId;
+    const messages = currentConv?.messages || [];
+    if (!roomId) return;
+    const layers: {
+      id: string;
+      layer: string;
+      excerpt: string;
+      message_index: number;
+      target_id?: string | null;
+    }[] = [];
+    messages.forEach((msg, index) => {
+      const anns = chatLayerAnnotations[msg.id] || [];
+      for (const a of anns) {
+        if (a.layer !== "decision") continue;
+        layers.push({
+          id: a.id,
+          layer: a.layer,
+          excerpt: (msg.content || "").slice(a.start, a.end),
+          message_index: index,
+          target_id: selectedMapTopicId,
+        });
+      }
+    });
+    if (layers.length === 0) return;
+    try {
+      await authFetch(`/decision-map/${roomId}/annotations`, {
+        method: "POST",
+        body: JSON.stringify({ promote_layers: true, layers }),
+      });
+      await fetchDecisionMap({ extract: false });
+    } catch {
+      /* ignore */
+    }
+  }, [currentConv?.roomId, currentConv?.messages, chatLayerAnnotations, selectedMapTopicId, fetchDecisionMap]);
 
   useEffect(() => {
     const root = messagesContainerRef.current;
@@ -3211,6 +3387,8 @@ export default function Chat() {
         return;
       }
       setSummaryByRoom((prev) => ({ ...prev, [roomId]: (data as { markdown?: string }).markdown || "" }));
+      // Summary caches overall JSON for the decision map — refresh if the panel is open.
+      if (decisionMapOpen) void fetchDecisionMap({ extract: false });
     } catch {
       setSummaryError(t(uiLang, "err.summaryBackend"));
     } finally {
@@ -3841,9 +4019,10 @@ export default function Chat() {
               <div className="pr-3 border-r border-black/10">
                 <DecisionNavi
                   nodes={decisionNaviNodes}
+                  count={decisionMap?.issues?.length || decisionNaviNodes.length}
                   lang={uiLang}
-                  activeMessageId={naviActiveMessageId}
-                  onJump={jumpToMessage}
+                  open={decisionMapOpen}
+                  onOpen={handleOpenDecisionMap}
                 />
               </div>
             )}
@@ -4219,7 +4398,8 @@ export default function Chat() {
                 const firstTurnAgentSeen: Partial<Record<AgentKey, boolean>> = {};
                 const emotionTagCounts: Record<string, number> = {};
                 return currentConv.messages.map((msg) => {
-                  const isHighlighted = highlightedMessageId === msg.id;
+                  const isHighlighted =
+                    highlightedMessageId === msg.id || highlightedMessageIds.includes(msg.id);
                   if (msg.role === "user") {
                     userTurnCount += 1;
                     return (
@@ -4433,6 +4613,25 @@ export default function Chat() {
         />
       )}
     </AnimatePresence>
-    </>
+    <DecisionMapPanel
+      open={decisionMapOpen}
+      onClose={() => setDecisionMapOpen(false)}
+      data={decisionMap}
+      loading={decisionMapLoading}
+      error={decisionMapError}
+      lang={uiLang}
+      selectedTopicId={selectedMapTopicId}
+      onSelectTopic={setSelectedMapTopicId}
+      onJumpIndexes={jumpToRange}
+      onRefresh={() => void fetchDecisionMap({ extract: true })}
+      onExtract={() => void handleExtractDecisionMap()}
+      extracting={decisionMapExtracting}
+      annotationDraft={mapAnnotationDraft}
+      onAnnotationDraftChange={setMapAnnotationDraft}
+      onAddAnnotation={() => void handleAddMapAnnotation()}
+      onDeleteAnnotation={(id) => void handleDeleteMapAnnotation(id)}
+      onPromoteLayers={() => void handlePromoteLayerAnnotations()}
+    />
+  </>
   );
 }

@@ -317,7 +317,17 @@ def render(msgs: List[dict], segments: List[dict], overall: Optional[dict],
 # 入口
 # -------------------------------
 
-def build(chat_path: str, lang: str = "zh") -> str:
+def build_result(chat_path: str, lang: str = "zh") -> dict:
+    """Return structured summary pieces plus rendered markdown.
+
+    Shape:
+      {
+        "markdown": str,
+        "overall": dict | None,
+        "segments": [{phase, summary, ...}],
+        "staged": bool,
+      }
+    """
     msgs = load_jsonl(chat_path)
     if not msgs:
         raise RuntimeError(f"聊天记录是空的：{chat_path}")
@@ -326,7 +336,25 @@ def build(chat_path: str, lang: str = "zh") -> str:
     for s in segments:
         s["summary"] = summarize_segment(s, lang)
     overall = summarize_overall(segments, lang)
-    return render(msgs, segments, overall, lang, staged=bool(changes))
+    markdown = render(msgs, segments, overall, lang, staged=bool(changes))
+    # Strip heavy message bodies before returning segments
+    light_segments = []
+    for s in segments:
+        light_segments.append({
+            "phase": s.get("phase"),
+            "summary": s.get("summary"),
+            "message_count": len(s.get("messages") or []),
+        })
+    return {
+        "markdown": markdown,
+        "overall": overall,
+        "segments": light_segments,
+        "staged": bool(changes),
+    }
+
+
+def build(chat_path: str, lang: str = "zh") -> str:
+    return build_result(chat_path, lang)["markdown"]
 
 
 def main() -> int:

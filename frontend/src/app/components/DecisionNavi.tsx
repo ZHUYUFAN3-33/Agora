@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import React, { useMemo } from "react";
 import { getUiFont, labelCaseClass, phaseLabel, t, type UiLang } from "../i18n/ui";
 
 export type DecisionNaviKind = "start" | "phase" | "topic" | "user_call";
@@ -82,7 +81,6 @@ export function buildDecisionNaviNodes(
 
   const pushNode = (node: DecisionNaviNode) => {
     if (usedMessageIds.has(node.messageId) && node.kind !== "phase") return;
-    // Allow phase to replace a weaker topic on same message
     if (usedMessageIds.has(node.messageId)) {
       const idx = nodes.findIndex((n) => n.messageId === node.messageId);
       if (idx >= 0 && nodes[idx].kind === "topic") {
@@ -132,7 +130,6 @@ export function buildDecisionNaviNodes(
     });
   }
 
-  // Topic waypoints: fill gaps so longer threads still have a usable outline
   if (nodes.length < 3 && userMessages.length >= 2) {
     const midIndexes = new Set<number>();
     if (userMessages.length === 2) {
@@ -159,7 +156,6 @@ export function buildDecisionNaviNodes(
     }
   }
 
-  // Ensure current phase appears even if moderator markers were missed
   if (currentPhase && !nodes.some((n) => n.phase === currentPhase && n.kind === "phase")) {
     const lastUser = userMessages[userMessages.length - 1];
     if (lastUser && currentPhase !== "Exploration") {
@@ -174,13 +170,11 @@ export function buildDecisionNaviNodes(
     }
   }
 
-  // Keep chronological order by message position
   const order = new Map(messages.map((m, i) => [m.id, i]));
   nodes.sort((a, b) => (order.get(a.messageId) ?? 0) - (order.get(b.messageId) ?? 0));
 
   if (nodes.length <= MAX_NODES) return nodes;
 
-  // Prefer start + phase + user_call; drop topics first
   const essential = nodes.filter((n) => n.kind !== "topic");
   if (essential.length >= MAX_NODES) {
     return [essential[0], ...essential.slice(-(MAX_NODES - 1))];
@@ -192,72 +186,49 @@ export function buildDecisionNaviNodes(
   );
 }
 
-function kindDotClass(kind: DecisionNaviKind): string {
-  if (kind === "start") return "bg-black";
-  if (kind === "phase") return "bg-[#1560a8]";
-  if (kind === "user_call") return "bg-red-500";
-  return "bg-black/35";
-}
-
-/** Header dropdown: collapsed trigger + expandable path list. */
+/** Header trigger: opens the Decision Map side panel. */
 export function DecisionNavi({
   nodes,
+  count,
   lang = "en",
-  activeMessageId,
-  onJump,
+  open = false,
+  onOpen,
   className = "",
 }: {
-  nodes: DecisionNaviNode[];
+  nodes?: DecisionNaviNode[];
+  /** Prefer map topic count when available; falls back to nodes.length */
+  count?: number;
   lang?: UiLang;
-  activeMessageId?: string | null;
-  onJump: (messageId: string) => void;
+  open?: boolean;
+  onOpen: () => void;
   className?: string;
 }) {
   const font = getUiFont(lang);
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const n = useMemo(() => {
+    if (typeof count === "number") return count;
+    return nodes?.length ?? 0;
+  }, [count, nodes]);
 
-  useEffect(() => {
-    if (!open) return;
-    const h = (e: MouseEvent) => {
-      const node = e.target as Node;
-      if (panelRef.current?.contains(node) || btnRef.current?.contains(node)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [open]);
-
-  const activeId = useMemo(() => {
-    if (!nodes.length) return null;
-    if (activeMessageId && nodes.some((n) => n.messageId === activeMessageId)) {
-      return activeMessageId;
-    }
-    return nodes[nodes.length - 1]?.messageId ?? null;
-  }, [nodes, activeMessageId]);
-
-  if (nodes.length === 0) return null;
+  if (n <= 0 && (!nodes || nodes.length === 0)) return null;
 
   return (
     <div className={`relative flex items-center ${className}`}>
       <button
-        ref={btnRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={onOpen}
         className="flex items-center gap-1.5 h-4 hover:opacity-80 transition-opacity"
         aria-expanded={open}
-        title={t(lang, "navi.title")}
+        title={t(lang, "map.title")}
       >
         <span className="w-[7px] h-[7px] rounded-full bg-black flex-shrink-0" />
         <span
           className={`text-[10px] tracking-widest text-black ${labelCaseClass(lang)}`}
           style={font}
         >
-          {t(lang, "navi.title")}
+          {t(lang, "map.title")}
         </span>
         <span className="text-[10px] text-[var(--app-muted-text)]" style={font}>
-          {nodes.length}
+          {n || nodes?.length || 0}
         </span>
         <svg
           width="8"
@@ -270,69 +241,6 @@ export function DecisionNavi({
           <path d="M2 4L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            ref={panelRef}
-            initial={{ opacity: 0, y: -4, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.98 }}
-            transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute top-[calc(100%+8px)] right-0 z-50 w-[240px] rounded-[10px] border border-black/10 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.1)] overflow-hidden"
-          >
-            <div className="px-3 py-2 border-b border-black/6">
-              <p className="text-[10px] text-[var(--app-muted-text)] truncate" style={font}>
-                {t(lang, "navi.subtitle")}
-              </p>
-            </div>
-            <ol className="relative max-h-[min(52vh,420px)] overflow-y-auto py-1.5 px-1.5">
-              <div className="absolute left-[17px] top-3 bottom-3 w-px bg-black/10" aria-hidden />
-              {nodes.map((node, index) => {
-                const isActive = node.messageId === activeId;
-                return (
-                  <li key={node.id}>
-                    <button
-                      type="button"
-                      onClick={() => onJump(node.messageId)}
-                      className={`relative w-full flex items-start gap-2.5 px-2 py-2 rounded-[8px] text-left transition-colors ${
-                        isActive ? "bg-black/[0.04]" : "hover:bg-black/[0.03]"
-                      }`}
-                    >
-                      <span
-                        className={`relative z-10 mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ring-2 ring-white ${kindDotClass(node.kind)} ${
-                          isActive ? "scale-125" : ""
-                        }`}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1.5 min-w-0">
-                          <span
-                            className={`text-[11px] truncate ${isActive ? "text-black" : "text-black/75"}`}
-                            style={font}
-                          >
-                            {node.label}
-                          </span>
-                          <span className="text-[9px] text-[var(--app-muted-text)] flex-shrink-0" style={font}>
-                            {index + 1}/{nodes.length}
-                          </span>
-                        </span>
-                        {node.detail && (
-                          <span
-                            className="block text-[10px] text-[var(--app-muted-text)] leading-snug mt-0.5 line-clamp-2"
-                            style={font}
-                          >
-                            {node.detail}
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

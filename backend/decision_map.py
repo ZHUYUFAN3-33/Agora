@@ -229,13 +229,26 @@ def annotations_path(log_dir: str, room_id: str) -> str:
     return os.path.join(log_dir, f"{room_id}_decision_map_annotations.json")
 
 
-def load_summary_overall(log_dir: str, room_id: str) -> Optional[dict]:
+def load_summary_overall(log_dir: str, room_id: str,
+                          lang: Optional[str] = None) -> Optional[dict]:
+    """Cached `overall` for this room, or None.
+
+    lang: when given, a row saved for a DIFFERENT language is rejected rather than
+    returned. save_summary_overall has always stamped the language but this reader
+    used to ignore it, and there is one file per room — so summarising a zh room
+    once in en left the en `room_leaning` text bolted onto every later zh map (and
+    vice versa). Callers that genuinely want whatever is cached omit the argument.
+    """
     path = summary_meta_path(log_dir, room_id)
     if not os.path.exists(path):
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if lang:
+            saved = data.get("lang")
+            if saved and normalize_lang(str(saved)) != normalize_lang(lang):
+                return None
         overall = data.get("overall")
         return overall if isinstance(overall, dict) else None
     except (OSError, json.JSONDecodeError):
@@ -572,6 +585,15 @@ def build_structured_option_layer(
     edges: List[dict] = []
     claims: List[dict] = []
     chosen_ids: set = set()
+    # Cross-message dedup: agents re-offer the same chips every few turns, and
+    # each message used to mint a fresh namespaced node ("Offer A" × N). One
+    # canonical node per normalized label; later groups alias into it.
+    label_to_id: Dict[str, str] = {}   # normalized label -> canonical option id
+    alias: Dict[str, str] = {}         # "{group}:{oid}" -> canonical option id
+    group_members: Dict[str, List[str]] = {}  # group_id -> canonical ids in that chip group
+
+    def _norm_label(s: str) -> str:
+        return re.sub(r"\s+", "", (s or "")).strip().lower()
 
     def add_option(
         oid: str,
@@ -608,32 +630,45 @@ def build_structured_option_layer(
     # Intake seeds (map-only; proposed_by=intake)
     for i, item in enumerate(intake_options or []):
         if isinstance(item, str) and item.strip():
-            add_option(f"intake_{i + 1}", item.strip(), proposed_by="intake", indexes=[])
+            oid, label = f"intake_{i + 1}", item.strip()
         elif isinstance(item, dict):
             label = str(item.get("label") or item.get("text") or item.get("name") or "").strip()
-            if label:
-                add_option(
-                    str(item.get("id") or f"intake_{i + 1}"),
-                    label,
-                    proposed_by="intake",
-                    indexes=[],
-                )
+            if not label:
+                continue
+            oid = str(item.get("id") or f"intake_{i + 1}")
+        else:
+            continue
+        add_option(oid, label, proposed_by="intake", indexes=[])
+        label_to_id.setdefault(_norm_label(label), oid)
+        alias[oid] = oid
 
-    # Agent message option groups
+    # Agent message option groups (deduped by label across messages)
     for mi, m in enumerate(msgs or []):
         opts = _msg_options(m)
         if not opts:
             continue
         group_id = str(m.get("id") or f"msg-{mi}")
         speaker = _msg_character(m) or "agent"
+        members: List[str] = []
         for o in opts:
-            add_option(
-                f"{group_id}:{o['id']}",
-                o["label"],
-                proposed_by=speaker,
-                indexes=[mi],
-                group_id=group_id,
-            )
+            full = f"{group_id}:{o['id']}"
+            key = _norm_label(o["label"])
+            canon = label_to_id.get(key)
+            if canon:
+                # Same option re-offered in a later message: one node, union indexes.
+                alias[full] = canon
+                for existing in options:
+                    if existing["id"] == canon:
+                        if mi not in existing["message_indexes"]:
+                            existing["message_indexes"] = [*existing["message_indexes"], mi]
+                        break
+                members.append(canon)
+                continue
+            add_option(full, o["label"], proposed_by=speaker, indexes=[mi], group_id=group_id)
+            label_to_id[key] = full
+            alias[full] = full
+            members.append(full)
+        group_members[group_id] = members
 
     # Apply hand selections (truth source)
     for ch in choices or []:
@@ -642,8 +677,12 @@ def build_structured_option_layer(
         label = str(ch.get("label") or "").strip()
         if not oid_raw:
             continue
-        # Prefer namespaced id from group
-        full_id = f"{gid}:{oid_raw}" if gid and f"{gid}:{oid_raw}" in opt_ids else None
+        # Resolution order: alias (handles label-deduped groups) → exact
+        # namespaced id → label match → suffix scan → recreate from payload.
+        cand = f"{gid}:{oid_raw}" if gid else oid_raw
+        full_id = alias.get(cand) or (cand if cand in opt_ids else None)
+        if not full_id and label:
+            full_id = label_to_id.get(_norm_label(label))
         if not full_id:
             # Match by suffix or recreate from choice payload options
             for o in options:
@@ -672,6 +711,8 @@ def build_structured_option_layer(
                 status="chosen",
                 group_id=gid or None,
             )
+            label_to_id.setdefault(_norm_label(label or full_id), full_id)
+            alias[full_id] = full_id
         else:
             add_option(
                 full_id,
@@ -703,7 +744,16 @@ def build_structured_option_layer(
             "to": full_id,
         })
 
-    # Mark non-chosen siblings in a chosen group as rejected (still visible)
+    # Mark non-chosen siblings in a chosen group as rejected (still visible).
+    # Two paths: group_members covers choices made on a later (label-aliased)
+    # chip group; the choice_group_id scan is the legacy fallback for options
+    # that directly carry the chosen group id.
+    rejected_ids: set = set()
+    for ch in choices or []:
+        gid = str(ch.get("choice_group_id") or "")
+        members = group_members.get(gid) or []
+        if any(mid in chosen_ids for mid in members):
+            rejected_ids.update(mid for mid in members if mid not in chosen_ids)
     chosen_groups = {
         o.get("choice_group_id")
         for o in options
@@ -712,7 +762,9 @@ def build_structured_option_layer(
     for o in options:
         if o.get("status") == "chosen":
             continue
-        if o.get("choice_group_id") and o["choice_group_id"] in chosen_groups:
+        if o["id"] in rejected_ids or (
+            o.get("choice_group_id") and o["choice_group_id"] in chosen_groups
+        ):
             o["status"] = "rejected"
 
     if not options and not claims:
@@ -974,8 +1026,12 @@ def extract_ibis_llm(
     max_messages: int = 50,
 ) -> Optional[dict]:
     lang = normalize_lang(lang)
+    # Window over the NEWEST messages — the most recent turns are what the map
+    # must reflect. Indexes stay GLOBAL (offset enumerate) so message_indexes
+    # remain valid against the full history.
+    start = max(0, len(msgs) - max_messages)
     lines = []
-    for i, m in enumerate(msgs[:max_messages]):
+    for i, m in enumerate(msgs[start:], start=start):
         text = _msg_text(m)
         if not text:
             continue
@@ -1112,9 +1168,11 @@ def assemble_smart_map(
         "edges": [],
         "room_leaning": None,
     }
-    merged = merge_ibis_maps(base, cached, msg_count=len(msgs))
-    if fresh:
-        merged = merge_ibis_maps(merged, fresh, msg_count=len(msgs))
+    # LLM layer: the newest extract REPLACES the previous one rather than
+    # unioning with it. Union let re-numbered ids duplicate every node and kept
+    # LLM-deleted claims alive forever; continuity lives in the PRIOR_MAP block
+    # of the extraction prompt, not in a client-side union.
+    merged = merge_ibis_maps(base, fresh or cached, msg_count=len(msgs))
     # Structured hand-choices win over LLM for options / chooses / selection claims.
     if has_structured:
         merged = merge_ibis_maps(merged, structured, msg_count=len(msgs))

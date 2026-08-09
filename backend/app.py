@@ -193,13 +193,15 @@ POOL_KEYS: List[str] = ["A", "B", "C", "D", "E", "F"]
 VALID_SLOT_KEYS: List[str] = list(POOL_KEYS)
 MIN_ROSTER_AGENTS = 2
 MAX_ROSTER_AGENTS = 6
+# Emotion names must match emotion/{Name}.txt exactly — lowercase variants only
+# resolved on macOS's case-insensitive filesystem and broke on Linux deploys.
 PROFILE_FIXED_CONFIG: Dict[str, dict] = {
-    "A": {"decision": "Spontaneous", "emotion": "joy"},
-    "B": {"decision": "Rational", "emotion": "fear"},
-    "C": {"decision": "Avoidant", "emotion": "disgust"},
-    "D": {"decision": "Dependent", "emotion": "surprise"},
-    "E": {"decision": "Intuitive", "emotion": "anger"},
-    "F": {"decision": "Rational", "emotion": "sadness"},
+    "A": {"decision": "Spontaneous", "emotion": "Joy"},
+    "B": {"decision": "Rational", "emotion": "Fear"},
+    "C": {"decision": "Avoidant", "emotion": "Disgust"},
+    "D": {"decision": "Dependent", "emotion": "Surprise"},
+    "E": {"decision": "Intuitive", "emotion": "Anger"},
+    "F": {"decision": "Rational", "emotion": "Sadness"},
 }
 
 
@@ -459,7 +461,7 @@ def _runtime_config_from_slot_profiles(slot_to_profile: Dict[str, str], slot_key
     conf: Dict[str, dict] = {}
     for slot in keys:
         profile_key = slot_to_profile.get(slot, slot)
-        fixed = PROFILE_FIXED_CONFIG.get(profile_key, PROFILE_FIXED_CONFIG.get(slot, {"decision": "Rational", "emotion": "joy"}))
+        fixed = PROFILE_FIXED_CONFIG.get(profile_key, PROFILE_FIXED_CONFIG.get(slot, {"decision": "Rational", "emotion": "Joy"}))
         conf[slot] = {"decision": fixed["decision"], "emotion": fixed["emotion"]}
     return conf
 
@@ -1110,6 +1112,67 @@ def send_message():
 
 
 
+def _room_lang(room_id: str, requested: Optional[str] = None) -> str:
+    """The language a room's derived artefacts (summary, decision map) must use.
+
+    The transcript was generated in ONE language, fixed at /api/start. Deriving the
+    summary or the map in whatever language the UI happens to be showing produced a
+    Chinese conversation with an English map — and, because
+    `{room}_summary_meta.json` is a single file per room, an en summary would
+    overwrite the zh one and leak its room_leaning text into the other language's map.
+    So the room's own language wins; the request language is only a last resort.
+
+    Resolution order: live session -> cached summary meta -> transcript detection
+    -> requested. Detection (rather than a DB column) keeps this working for rooms
+    replayed from SQLite after a restart, with no schema migration.
+    """
+    allowed = ("en", "zh", "ja")
+
+    def _ok(v) -> Optional[str]:
+        v = (str(v or "")).strip().lower()
+        return v if v in allowed else None
+
+    session = chat_sessions.get(room_id) or {}
+    hit = _ok(session.get("lang"))
+    if hit:
+        return hit
+
+    try:
+        from decision_map import summary_meta_path
+        path = summary_meta_path(LOG_DIR, room_id)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                hit = _ok((json.load(f) or {}).get("lang"))
+            if hit:
+                return hit
+    except (OSError, json.JSONDecodeError, ImportError):
+        pass
+
+    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    if os.path.exists(chat_path):
+        try:
+            from lang_utils import detect_lang
+            sample = []
+            with open(chat_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        sample.append(str((json.loads(line) or {}).get("txt") or ""))
+                    except json.JSONDecodeError:
+                        continue
+                    if len(sample) >= 12:
+                        break
+            hit = _ok(detect_lang(" ".join(sample)))
+            if hit:
+                return hit
+        except (OSError, ImportError):
+            pass
+
+    return _ok(requested) or "en"
+
+
 def _phase_changes_for_room(room_id: str) -> List[dict]:
     """Moderator phase boundaries for decision-navi (from `{room}_moderator.jsonl`)."""
     try:
@@ -1327,12 +1390,13 @@ def session_summary(room_id):
     if not os.path.exists(chat_path):
         return jsonify({"error": "No chat log for this session yet"}), 404
 
-    lang = "en"
     if request.method == "GET":
-        lang = (request.args.get("lang") or "en").strip().lower()
+        requested = request.args.get("lang")
     else:
         body = request.get_json(silent=True) or {}
-        lang = (body.get("lang") or request.args.get("lang") or "en").strip().lower()
+        requested = body.get("lang") or request.args.get("lang")
+    # The room's own language, not the UI's — see _room_lang.
+    lang = _room_lang(room_id, requested)
     if lang not in ("en", "zh"):
         lang = "en"
 
@@ -1469,12 +1533,19 @@ def _load_room_msgs_and_agents(room_id: str, ctx: dict) -> Tuple[List[dict], Lis
         scenario_type = room.get("scenario_type")
         store = get_user_store()
         for m in store.list_chat_messages(room_id):
-            msgs.append({
+            row = {
                 "character": m["character"],
                 "txt": m["txt"],
                 "time": m.get("created_at"),
                 "chat_room_id": room_id,
-            })
+            }
+            # Keep option chips visible on the decision map after a restart —
+            # same replay shape as /api/history's DB branch.
+            cq = m.get("clarifying_question")
+            if isinstance(cq, dict) and isinstance(cq.get("options"), list):
+                row["options"] = cq["options"]
+                row["clarifying_question"] = cq
+            msgs.append(row)
         # Re-derive default stances when roster is not persisted on history
         try:
             from stance import list_stances, assign_stance
@@ -1514,9 +1585,8 @@ def get_decision_map(room_id):
     if err:
         return err
 
-    lang = (request.args.get("lang") or "en").strip().lower()
-    if lang not in ("en", "zh", "ja"):
-        lang = "en"
+    # Follow the room's language, not the UI's — a zh transcript always gets a zh map.
+    lang = _room_lang(room_id, request.args.get("lang"))
     # Default smart on; extract=1 forces a (re)run when messages suffice
     smart = (request.args.get("smart") or "1").strip().lower() not in ("0", "false", "no")
     do_extract = (request.args.get("extract") or "").strip().lower() in ("1", "true", "yes")
@@ -1549,7 +1619,7 @@ def get_decision_map(room_id):
         return jsonify(empty_map(room_id, lang, insufficient=True))
 
     phase_changes = _phase_changes_for_room(room_id)
-    overall = load_summary_overall(LOG_DIR, room_id)
+    overall = load_summary_overall(LOG_DIR, room_id, lang)
     user_annotations = load_user_annotations(LOG_DIR, room_id)
     choices = load_choices(LOG_DIR, room_id)
     intake_options = None
@@ -1670,9 +1740,7 @@ def decision_map_extract(room_id):
         return err
 
     body = request.get_json(silent=True) or {}
-    lang = (body.get("lang") or request.args.get("lang") or "en").strip().lower()
-    if lang not in ("en", "zh", "ja"):
-        lang = "en"
+    lang = _room_lang(room_id, body.get("lang") or request.args.get("lang"))
 
     msgs, agents, _scenario_type = _load_room_msgs_and_agents(room_id, ctx or {})
     if not msgs:
@@ -1711,7 +1779,7 @@ def decision_map_extract(room_id):
             msgs=msgs,
             phase_changes=_phase_changes_for_room(room_id),
             lang=lang,
-            overall=load_summary_overall(LOG_DIR, room_id),
+            overall=load_summary_overall(LOG_DIR, room_id, lang),
             user_annotations=load_user_annotations(LOG_DIR, room_id),
             agents=agents,
             choices=choices,
@@ -1737,7 +1805,7 @@ def decision_map_extract(room_id):
         msgs=msgs,
         phase_changes=_phase_changes_for_room(room_id),
         lang=lang,
-        overall=load_summary_overall(LOG_DIR, room_id),
+        overall=load_summary_overall(LOG_DIR, room_id, lang),
         user_annotations=load_user_annotations(LOG_DIR, room_id),
         cached=cached,
         fresh=fresh,
@@ -1828,15 +1896,13 @@ def decision_map_choices(room_id):
         intake = (chat_sessions[room_id].get("agora2") or {}).get("intake") or {}
         if isinstance(intake.get("options"), list):
             intake_options = intake.get("options")
-    lang = (body.get("lang") or "en").strip().lower()
-    if lang not in ("en", "zh", "ja"):
-        lang = "en"
+    lang = _room_lang(room_id, body.get("lang"))
     payload = assemble_smart_map(
         room_id=room_id,
         msgs=msgs or [],
         phase_changes=_phase_changes_for_room(room_id),
         lang=lang,
-        overall=load_summary_overall(LOG_DIR, room_id),
+        overall=load_summary_overall(LOG_DIR, room_id, lang),
         user_annotations=load_user_annotations(LOG_DIR, room_id),
         cached=load_latest_extract(LOG_DIR, room_id, lang=lang),
         fresh=None,

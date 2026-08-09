@@ -91,6 +91,7 @@ const en: Dict = {
   "welcome.chooseScenario": "Choose scenario",
   "welcome.scenarioSubtitle": "Employment / Parent-Child",
   "settings.language": "Language",
+  "settings.languageLocked": "Fixed for this session — the transcript, summary and decision map are all in it. Start a new chat to switch.",
 
   // Tutorial
   "tutorial.skip": "skip",
@@ -401,6 +402,7 @@ const zh: Dict = {
   "welcome.chooseScenario": "选择场景",
   "welcome.scenarioSubtitle": "就职 / 亲子",
   "settings.language": "语言",
+  "settings.languageLocked": "本次会话已固定使用该语言，对话、总结和决策地图都是这个语言。要换语言请新建一个会话。",
 
   "tutorial.skip": "跳过",
   "tutorial.back": "上一步",

@@ -1332,7 +1332,6 @@ def run_user_turn(
     known_context: str = "",
     domain_background: str = "",
     session_memory_text: str = "",
-    preloaded_knowledge_text: str = "",
     intake_data: Optional[dict] = None,
     scenario_type: Optional[str] = None,
     lang: str = "en",
@@ -1389,11 +1388,12 @@ def run_user_turn(
                 "emotion", "Joy"
             ),
             "stance": (session.get("agent_runtime_config") or {}).get(slot, {}).get("stance"),
+            # Setup-hint knowledge belongs to exactly one agent.  A global
+            # fallback here would make another agent's matched card appear in
+            # this agent's system prompt when its own hint has no match.
             "preloaded_knowledge": (
                 (session.get("agora2_specs") or {}).get(slot) or {}
-            ).get("preloaded_knowledge")
-            or preloaded_knowledge_text
-            or "",
+            ).get("preloaded_knowledge") or "",
         }
         for slot in agent_keys
     }

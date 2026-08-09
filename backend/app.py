@@ -1021,15 +1021,9 @@ def send_message():
     known_context = agora2.get("known_context") or ""
     domain_background = agora2.get("domain_background") or ""
     session_memory_text = agora2.get("session_memory_text") or ""
-    # Hint / stance-knowledge preload lives on assembled agent specs
-    preloaded_knowledge_text = agora2.get("preloaded_knowledge_text") or ""
-    if not preloaded_knowledge_text:
-        specs = session.get("agora2_specs") or {}
-        for slot in _session_slot_keys(session):
-            pk = (specs.get(slot) or {}).get("preloaded_knowledge") or ""
-            if pk:
-                preloaded_knowledge_text = pk
-                break
+    # Setup-hint knowledge is deliberately per-agent in ``agora2_specs``.
+    # Do not collapse it to one session-level string: doing so leaks the first
+    # matching agent's card into every agent whose own hint did not match.
     intake_data = agora2.get("intake") or {}
     lang = session.get("lang") or "en"
     scenario_type = session.get("scenario_type")
@@ -1061,7 +1055,6 @@ def send_message():
             known_context=known_context,
             domain_background=domain_background,
             session_memory_text=session_memory_text,
-            preloaded_knowledge_text=preloaded_knowledge_text,
             intake_data=intake_data,
             scenario_type=scenario_type,
             lang=lang,

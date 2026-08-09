@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """HTTP-facing run_user_turn scheduling + in-session distill."""
+import inspect
 import json
 
 from _harness import bootstrap, Checker
@@ -102,6 +103,46 @@ speakers = [x["agent"] for x in r2["responses"]]
 dup = any(a == b for a, b in zip(speakers, speakers[1:]))
 check("http: no consecutive same speaker under Admin-2=A + prefer=1", not dup, speakers)
 check("http: returns phase key", "phase" in r and "concluded" in r)
+
+# Setup-hint cards are per-agent.  The Web adapter used to find the first
+# non-empty card, pass it as a session-wide fallback, and thereby inject A's
+# card into B/C when their own hints missed.  Keep the HTTP runner's interface
+# free of that global value, and verify that B's prompt does not receive A's
+# card even when only A has one assembled.
+check(
+    "http: no session-wide preloaded knowledge fallback parameter",
+    "preloaded_knowledge_text" not in inspect.signature(aw.run_user_turn).parameters,
+)
+sess_kb = _session("@ChatbotB please")
+sess_kb["agora2_specs"] = {
+    "A": {"preloaded_knowledge": "A-ONLY-SETUP-KNOWLEDGE"},
+    "B": {"preloaded_knowledge": ""},
+    "C": {"preloaded_knowledge": ""},
+}
+seen_kb = []
+for a in agent_list:
+    a.spoke = 0
+aw.run_user_turn(
+    session=sess_kb,
+    user_message="@ChatbotB please",
+    agents=agents,
+    agent_list=agent_list,
+    all_agent_names=names,
+    client_chat=object(),
+    client_admin=object(),
+    scene="s",
+    prefer_agents=0.0,
+    novelty_threshold=0.0,
+    max_agent_turns_before_user=1,
+    create_response_with_client=fake_factory("A", seen_sys=seen_kb),
+)
+b_prompts = [p for p in seen_kb if p.startswith("You are ChatbotB")]
+check("http: B speaks for isolation check", bool(b_prompts), len(b_prompts))
+check(
+    "http: A setup knowledge never leaks into B prompt",
+    not any("A-ONLY-SETUP-KNOWLEDGE" in p for p in b_prompts),
+    b_prompts[0][-500:] if b_prompts else "",
+)
 
 # ---- in-session distill: periodic after DISTILL_TRIGGER_INTERVAL utterances of A
 mem_path = "memory_distill.jsonl"

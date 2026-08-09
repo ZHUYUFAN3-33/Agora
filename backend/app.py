@@ -193,13 +193,15 @@ POOL_KEYS: List[str] = ["A", "B", "C", "D", "E", "F"]
 VALID_SLOT_KEYS: List[str] = list(POOL_KEYS)
 MIN_ROSTER_AGENTS = 2
 MAX_ROSTER_AGENTS = 6
+# Emotion names must match emotion/{Name}.txt exactly — lowercase variants only
+# resolved on macOS's case-insensitive filesystem and broke on Linux deploys.
 PROFILE_FIXED_CONFIG: Dict[str, dict] = {
-    "A": {"decision": "Spontaneous", "emotion": "joy"},
-    "B": {"decision": "Rational", "emotion": "fear"},
-    "C": {"decision": "Avoidant", "emotion": "disgust"},
-    "D": {"decision": "Dependent", "emotion": "surprise"},
-    "E": {"decision": "Intuitive", "emotion": "anger"},
-    "F": {"decision": "Rational", "emotion": "sadness"},
+    "A": {"decision": "Spontaneous", "emotion": "Joy"},
+    "B": {"decision": "Rational", "emotion": "Fear"},
+    "C": {"decision": "Avoidant", "emotion": "Disgust"},
+    "D": {"decision": "Dependent", "emotion": "Surprise"},
+    "E": {"decision": "Intuitive", "emotion": "Anger"},
+    "F": {"decision": "Rational", "emotion": "Sadness"},
 }
 
 
@@ -459,7 +461,7 @@ def _runtime_config_from_slot_profiles(slot_to_profile: Dict[str, str], slot_key
     conf: Dict[str, dict] = {}
     for slot in keys:
         profile_key = slot_to_profile.get(slot, slot)
-        fixed = PROFILE_FIXED_CONFIG.get(profile_key, PROFILE_FIXED_CONFIG.get(slot, {"decision": "Rational", "emotion": "joy"}))
+        fixed = PROFILE_FIXED_CONFIG.get(profile_key, PROFILE_FIXED_CONFIG.get(slot, {"decision": "Rational", "emotion": "Joy"}))
         conf[slot] = {"decision": fixed["decision"], "emotion": fixed["emotion"]}
     return conf
 

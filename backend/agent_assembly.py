@@ -105,6 +105,14 @@ def _read_preset(dir_path: str, name: str) -> str:
     if not name:
         return ""
     path = os.path.join(dir_path, f"{name}.txt")
+    if not os.path.exists(path) and os.path.isdir(dir_path):
+        # Case-insensitive fallback: "joy" must resolve to Joy.txt on Linux
+        # (case-sensitive FS) exactly as it already does on macOS dev machines.
+        want = f"{name}.txt".lower()
+        for fname in sorted(os.listdir(dir_path)):
+            if fname.lower() == want:
+                path = os.path.join(dir_path, fname)
+                break
     if not os.path.exists(path):
         return f"[MISSING PRESET: {path} — add this file to enable the '{name}' option]"
     with open(path, "r", encoding="utf-8-sig") as f:

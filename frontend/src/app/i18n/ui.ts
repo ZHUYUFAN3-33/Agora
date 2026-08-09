@@ -137,10 +137,10 @@ const en: Dict = {
   "custom.stanceHintUnbound":
     "Select an Employment or Parent-Child scene for live knowledge matching. Showing Employment stance options for now.",
   "custom.basicStance": "Basic Stance",
-  "custom.knowledgeHint": "Knowledge Hint",
+  "custom.knowledgeHint": "What should this agent focus on?",
   "custom.knowledgeHelp":
-    'Topic keywords for this agent (optional). Partial phrases work — e.g. "job change".',
-  "custom.knowledgePh": "e.g. job change, burnout, commute",
+    "In one sentence, describe your concern or the aspect you want this agent to focus on (optional).",
+  "custom.knowledgePh": "e.g. I'm worried about layoffs and whether this is a good time to change jobs.",
   "custom.noKnowledge": "no knowledge matched",
   "custom.matchedTopic": "matched topic",
   "custom.tone": "Tone",
@@ -440,9 +440,9 @@ const zh: Dict = {
   "custom.stanceHintUnbound":
     "请先选择就职或亲子场景以启用实时知识匹配。暂以就职立场选项预览。",
   "custom.basicStance": "基本立场",
-  "custom.knowledgeHint": "知识提示",
-  "custom.knowledgeHelp": "为本智能体填写主题关键词（可选）。支持短语片段，例如「跳槽」「加班」。",
-  "custom.knowledgePh": "例如：跳槽时机、加班",
+  "custom.knowledgeHint": "希望这个智能体关注什么？",
+  "custom.knowledgeHelp": "用一句话简单说明你的困扰，或希望这个智能体重点关注的方面（可选）。",
+  "custom.knowledgePh": "例如：我担心裁员，也不确定现在是否适合跳槽。",
   "custom.noKnowledge": "未匹配到知识",
   "custom.matchedTopic": "已匹配主题",
   "custom.tone": "语气",

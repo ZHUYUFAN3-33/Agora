@@ -266,6 +266,7 @@ function buildStartAgentsPayload(
       emotion: s?.emotionTag || "Joy",
       accent_color: s?.accentColor || DEFAULT_AGENT_COLORS[key],
       stance: stance || undefined,
+      hint: s?.hint?.trim() || undefined,
     };
   });
 }
@@ -1722,6 +1723,19 @@ function CustomizerModal({
                   onChange={(v) => upd(key, "stance", v)}
                   options={stanceOptions.map((o) => ({ value: o.value, label: t(uiLang, `stance.${o.value}`) }))}
                   size="sm"
+                  style={font}
+                />
+              </div>
+              <div>
+                <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.knowledgeHint")}</label>
+                <p className="text-[10px] text-[var(--app-muted-text)] mb-2 leading-relaxed" style={font}>{t(uiLang, "custom.knowledgeHelp")}</p>
+                <textarea
+                  value={s.hint}
+                  maxLength={240}
+                  rows={3}
+                  onChange={(e) => upd(key, "hint", e.target.value)}
+                  placeholder={t(uiLang, "custom.knowledgePh")}
+                  className="w-full resize-none text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none focus:border-black/40 transition-colors"
                   style={font}
                 />
               </div>

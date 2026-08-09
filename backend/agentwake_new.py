@@ -667,12 +667,23 @@ class ChatAgent:
             "[OPTIONS]\n"
             '[{"id":"o1","label":"short option A"},{"id":"o2","label":"short option B"}]\n'
             "[/OPTIONS]\n"
+            "[MOVE]\n"
+            "one word for what this message DOES, optionally plus who it responds to, e.g. "
+            "\"challenge @ChatbotB\". Exactly one of: challenge (you dispute a specific claim "
+            "someone made) / extend (you build on someone's point with something they did not "
+            "say) / new_point (you raise something not aimed at anyone) / concede (you accept "
+            "a cost or genuinely adjust your position) / clarify (you answer a question or "
+            "supply facts).\n"
+            "[/MOVE]\n"
             "[RATIONALE]\n"
             "one short sentence: why you said this, given your persona and the current phase goal\n"
             "[/RATIONALE]\n"
-            "Tag names are literal markers: write MESSAGE / OPTIONS / RATIONALE in English exactly "
-            "as shown. Do NOT translate them "
-            "(never [消息]/[选项]/[選択肢]/[オプション]/[メッセージ]/[理由]/[根拠]). "
+            "Tag names are literal markers: write MESSAGE / OPTIONS / MOVE / RATIONALE in English "
+            "exactly as shown. Do NOT translate them "
+            "(never [消息]/[选项]/[選択肢]/[オプション]/[メッセージ]/[动作]/[理由]/[根拠]). "
+            "Only MESSAGE and OPTIONS are shown to the others; MOVE and RATIONALE are private. "
+            "Report the move honestly — an agreeable message labelled \"challenge\" defeats its "
+            "purpose.\n"
             "Labels INSIDE OPTIONS must use the same language as the chat message "
             "(Chinese / English / Japanese as required by LANGUAGE).\n"
             "Include [OPTIONS] whenever you present 2–6 mutually exclusive choices the user could "
@@ -1153,6 +1164,10 @@ def looks_like_refusal(text: str) -> bool:
 _MSG_NAMES = r"MESSAGE|MSG|消息|訊息|信息|メッセージ"
 _RAT_NAMES = r"RATIONALE|REASON|理由|原因|理由说明|根拠|根拠説明"
 _OPT_NAMES = r"OPTIONS|OPTION|CHOICES|选项|選項|選択肢|オプション"
+# Kept deliberately identical to feature/dialogue-naturalness's list (no zh-TW or
+# extra ja variants) so [MOVE] recognition is bit-for-bit what that layer was
+# tuned against — this port took the tag, not the layer.
+_MOVE_NAMES = r"MOVE|动作|行动|アクション"
 
 _MESSAGE_TAG_RE = re.compile(rf"\[(?:{_MSG_NAMES})\](.*?)\[/(?:{_MSG_NAMES})\]",
                              re.DOTALL | re.IGNORECASE)
@@ -1160,14 +1175,48 @@ _RATIONALE_TAG_RE = re.compile(rf"\[(?:{_RAT_NAMES})\](.*?)\[/(?:{_RAT_NAMES})\]
                                re.DOTALL | re.IGNORECASE)
 _OPTIONS_TAG_RE = re.compile(rf"\[(?:{_OPT_NAMES})\](.*?)\[/(?:{_OPT_NAMES})\]",
                              re.DOTALL | re.IGNORECASE)
+_MOVE_TAG_RE = re.compile(rf"\[(?:{_MOVE_NAMES})\](.*?)\[/(?:{_MOVE_NAMES})\]",
+                          re.DOTALL | re.IGNORECASE)
 _STRAY_TAG_RE = re.compile(
-    rf"\[/?(?:{_MSG_NAMES}|{_RAT_NAMES}|{_OPT_NAMES})\]", re.IGNORECASE
+    rf"\[/?(?:{_MSG_NAMES}|{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES})\]", re.IGNORECASE
 )
-# Last resort for the no-tags branch: a rationale/options block that opened but
-# never closed would otherwise stay in the chat message.
+# Last resort for the no-tags branch: a rationale/options/move block that opened
+# but never closed would otherwise stay in the chat message.
 _TRAILING_RATIONALE_RE = re.compile(
-    rf"\[(?:{_RAT_NAMES}|{_OPT_NAMES})\].*$", re.DOTALL | re.IGNORECASE
+    rf"\[(?:{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES})\].*$", re.DOTALL | re.IGNORECASE
 )
+
+# Structured self-report of what a turn DOES, emitted by the agent itself in a
+# [MOVE] block (see system_prompt's OUTPUT FORMAT).
+#
+# Ported from feature/dialogue-naturalness, WITHOUT that branch's consumers.
+# There it also fed a challenge_tracker that steered the consensus warning and
+# the convergence gate; bringing that here would change speaker scheduling and
+# break this fork's fidelity to agora2/backend-dev. So the tag is emitted and
+# logged only: the move lands in {room}_rationale.jsonl as a "move" event, which
+# is what map_facts.py joins against to build the reply graph deterministically.
+# Nothing in the deliberation loop reads it.
+AGENT_MOVES = ("challenge", "extend", "new_point", "concede", "clarify")
+
+
+def normalize_move(body: str) -> str:
+    """First recognised move keyword in a [MOVE] block body, or "".
+
+    Tolerant on purpose: the block may carry an @target ("challenge @ChatbotB"),
+    stray punctuation, or a hyphen/space variant ("new point"). Anything that
+    does not resolve to a known move is treated as no self-report at all, so a
+    garbled block degrades to nothing instead of mislabelling the turn.
+
+    NOTE for map_facts.py: this scans AGENT_MOVES in TUPLE order, not text
+    order, so 'extend @ChatbotB, not a challenge' resolves to 'challenge'. That
+    is why the fact layer parses the kind off the first whitespace token of
+    move_detail instead of calling this.
+    """
+    low = (body or "").strip().lower().replace("-", "_").replace(" ", "_")
+    for move in AGENT_MOVES:
+        if move in low:
+            return move
+    return ""
 
 
 def _parse_options_block(raw_body: str) -> list:
@@ -1220,6 +1269,7 @@ def parse_agent_turn(raw: str) -> dict:
     msg_match = _MESSAGE_TAG_RE.search(raw)
     rat_match = _RATIONALE_TAG_RE.search(raw)
     opt_match = _OPTIONS_TAG_RE.search(raw)
+    move_match = _MOVE_TAG_RE.search(raw)
 
     if msg_match:
         message = msg_match.group(1).strip()
@@ -1238,8 +1288,20 @@ def parse_agent_turn(raw: str) -> dict:
     # Strip a leaked OPTIONS block from the visible message if tags were mangled.
     if options and _OPTIONS_TAG_RE.search(message):
         message = _OPTIONS_TAG_RE.sub("", message).strip()
+    # Same for a leaked MOVE block — it is private and must never reach the chat.
+    if _MOVE_TAG_RE.search(message):
+        message = _MOVE_TAG_RE.sub("", message).strip()
 
-    return {"message": message, "rationale": rationale, "options": options}
+    # Missing or unrecognised MOVE degrades to "" — no caller guesses a move.
+    # move_detail keeps the raw body (incl. any @target) for the fact layer.
+    move_body = move_match.group(1).strip() if move_match else ""
+    return {
+        "message": message,
+        "rationale": rationale,
+        "options": options,
+        "move": normalize_move(move_body),
+        "move_detail": " ".join(move_body.split())[:80],
+    }
 
 
 def enforce_no_refusal(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float,
@@ -1980,6 +2042,12 @@ def run_user_turn(
                     f"(soft cue, not routed, admin still decides next speaker)",
                 )
             append_agent(burst_agent, txt, options=parsed.get("options") or None)
+            # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
+            # the chat row. map_facts.py joins the two on (timestamp, speaker) at
+            # one-second granularity, so anything between these two writes risks
+            # straddling a second boundary and orphaning the event.
+            if parsed.get("move"):
+                log_agent_event(burst_agent.key, "move", parsed.get("move_detail") or parsed["move"])
             session["last_speaker_key"] = burst_agent.key
             maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
         moderator_state["stall"] = False
@@ -2075,6 +2143,12 @@ def run_user_turn(
                 f"(soft cue, not routed, admin still decides next speaker)",
             )
         append_agent(agent, txt, options=parsed.get("options") or None)
+        # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
+        # the chat row. map_facts.py joins the two on (timestamp, speaker) at
+        # one-second granularity, so anything between these two writes risks
+        # straddling a second boundary and orphaning the event.
+        if parsed.get("move"):
+            log_agent_event(agent.key, "move", parsed.get("move_detail") or parsed["move"])
         maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
         if stall_triggered:
             stall_burst(trigger_key=agent.key)
@@ -2993,6 +3067,12 @@ def main():
                                 f"(soft cue, not routed, admin still decides next speaker)")
             print(f"{burst_agent.name}> {txt}")
             log_chat(burst_agent.name, txt)
+            # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
+            # the chat row. map_facts.py joins the two on (timestamp, speaker) at
+            # one-second granularity, so anything between these two writes risks
+            # straddling a second boundary and orphaning the event.
+            if parsed.get("move"):
+                log_agent_event(burst_agent.key, "move", parsed.get("move_detail") or parsed["move"])
             last_speaker_key = burst_agent.key
             maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
 
@@ -3169,6 +3249,12 @@ def main():
 
             print(f"{agent.name}> {txt}")
             log_chat(agent.name, txt)
+            # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
+            # the chat row. map_facts.py joins the two on (timestamp, speaker) at
+            # one-second granularity, so anything between these two writes risks
+            # straddling a second boundary and orphaning the event.
+            if parsed.get("move"):
+                log_agent_event(agent.key, "move", parsed.get("move_detail") or parsed["move"])
             maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
 
             # After the triggering agent speaks, run the burst for remaining agents

@@ -229,13 +229,26 @@ def annotations_path(log_dir: str, room_id: str) -> str:
     return os.path.join(log_dir, f"{room_id}_decision_map_annotations.json")
 
 
-def load_summary_overall(log_dir: str, room_id: str) -> Optional[dict]:
+def load_summary_overall(log_dir: str, room_id: str,
+                          lang: Optional[str] = None) -> Optional[dict]:
+    """Cached `overall` for this room, or None.
+
+    lang: when given, a row saved for a DIFFERENT language is rejected rather than
+    returned. save_summary_overall has always stamped the language but this reader
+    used to ignore it, and there is one file per room — so summarising a zh room
+    once in en left the en `room_leaning` text bolted onto every later zh map (and
+    vice versa). Callers that genuinely want whatever is cached omit the argument.
+    """
     path = summary_meta_path(log_dir, room_id)
     if not os.path.exists(path):
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if lang:
+            saved = data.get("lang")
+            if saved and normalize_lang(str(saved)) != normalize_lang(lang):
+                return None
         overall = data.get("overall")
         return overall if isinstance(overall, dict) else None
     except (OSError, json.JSONDecodeError):

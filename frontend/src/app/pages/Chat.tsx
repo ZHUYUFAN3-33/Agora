@@ -1441,27 +1441,43 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
   return (
     <motion.div ref={ref} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
       className="absolute bottom-full right-0 mb-2 bg-white border border-black/10 rounded-[12px] shadow-[0_2px_12px_rgba(0,0,0,0.06)] py-2 min-w-[220px] z-50">
+      {/* Language is frozen once a session exists: the transcript was generated in
+          it, and the summary / decision map are extracted in it. Letting it change
+          mid-session produced a Chinese chat with an English map. */}
       <div className="flex items-center gap-3 px-3 py-2.5">
         <span className="opacity-40 flex-shrink-0"><GlobeIcon /></span>
-        <span className="text-[12px] flex-1" style={font}>{t(lang, "settings.language")}</span>
+        <span className={`text-[12px] flex-1 ${hasRoomId ? "text-black/35" : ""}`} style={font}>
+          {t(lang, "settings.language")}
+        </span>
         <div className="flex items-center gap-1.5 text-[11px] tracking-wide" style={getUiFont("en")}>
           <button
             type="button"
+            disabled={hasRoomId}
             onClick={() => onLangChange("en")}
-            className={`px-0.5 transition-colors ${lang === "en" ? "text-black font-semibold" : "text-black/35 hover:text-black/60"}`}
+            className={`px-0.5 transition-colors ${
+              lang === "en" ? "text-black font-semibold" : "text-black/35"
+            } ${hasRoomId ? "cursor-not-allowed opacity-45" : "hover:text-black/60"}`}
           >
             EN
           </button>
           <span className="text-black/20">/</span>
           <button
             type="button"
+            disabled={hasRoomId}
             onClick={() => onLangChange("zh")}
-            className={`px-0.5 transition-colors ${lang === "zh" ? "text-black font-semibold" : "text-black/35 hover:text-black/60"}`}
+            className={`px-0.5 transition-colors ${
+              lang === "zh" ? "text-black font-semibold" : "text-black/35"
+            } ${hasRoomId ? "cursor-not-allowed opacity-45" : "hover:text-black/60"}`}
           >
             CN
           </button>
         </div>
       </div>
+      {hasRoomId && (
+        <p className="px-3 pb-2 -mt-1 text-[10px] leading-snug text-black/40" style={font}>
+          {t(lang, "settings.languageLocked")}
+        </p>
+      )}
       <div className="my-1 border-t border-black/8" />
       <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label={t(lang, "settings.customizeAgent")} onClick={onCustomize} />
       <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>} label={t(lang, "settings.customizeScene")} onClick={onScene} />

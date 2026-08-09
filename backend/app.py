@@ -578,15 +578,22 @@ def _persist_chat_message_db(
                     title=_room_title_for_session(session, room_id),
                     phase=((session or {}).get("moderator_state") or {}).get("state") or "Exploration",
                 )
-        cq = None
+        cq = {}
         opts = msg.get("options")
         if isinstance(opts, list) and len(opts) >= 2:
-            cq = {"options": opts}
+            cq["options"] = opts
+        knowledge = msg.get("knowledge")
+        if isinstance(knowledge, dict) and knowledge.get("id") and knowledge.get("tag"):
+            cq["knowledge"] = {
+                "id": str(knowledge["id"]),
+                "tag": str(knowledge["tag"]),
+                "source": str(knowledge.get("source") or ""),
+            }
         store.append_chat_message(
             room_id,
             character=str(msg.get("character") or ""),
             txt=str(msg.get("txt") or ""),
-            clarifying_question=cq,
+            clarifying_question=cq or None,
             created_at=str(msg.get("time") or "") or None,
         )
     except Exception as e:
@@ -1172,6 +1179,8 @@ def get_history(room_id):
         if isinstance(cq, dict) and isinstance(cq.get("options"), list):
             row["options"] = cq["options"]
             row["clarifying_question"] = cq
+        if isinstance(cq, dict) and isinstance(cq.get("knowledge"), dict):
+            row["knowledge"] = cq["knowledge"]
         history.append(row)
     from decision_map import load_choices
     return jsonify({

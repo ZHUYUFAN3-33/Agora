@@ -48,6 +48,7 @@ try:
     from stance_knowledge import (
         load_stance_knowledge,
         get_stance_knowledge_block,
+        get_stance_knowledge_hit,
         peek_matched_card_id,
         _match_topic_card as sk_match_topic_card,
     )
@@ -341,6 +342,7 @@ def resolve_dynamic_stance_knowledge(
     hit_history: Dict[str, List[str]],
     agent_key: str,
     deliberation_state: str,
+    on_match: Optional[Callable[[dict], None]] = None,
 ) -> str:
     """
     Dynamic stance-knowledge channel with one-hop related_cards expansion.
@@ -361,10 +363,25 @@ def resolve_dynamic_stance_knowledge(
     )
     if not card_id:
         return ""
+    hit = get_stance_knowledge_hit(
+        scenario_type or "",
+        stance,
+        last_user_message,
+        lang,
+        knowledge=knowledge,
+    )
+    if not hit or hit.get("is_fallback"):
+        return ""
     hits = hit_history.setdefault(agent_key, [])
     repeat_hit = card_id in hits  # trigger A (check BEFORE recording)
     in_convergence = deliberation_state == "Convergence"  # trigger B
     hits.append(card_id)
+    if on_match is not None:
+        on_match({
+            "id": hit.get("id"),
+            "tag": hit.get("tag") or card_id,
+            "source": hit.get("source") or "",
+        })
     return stance_knowledge_on_hit(
         scenario_type,
         stance,
@@ -1447,6 +1464,7 @@ def run_user_turn(
 
     transcript_lines = history_to_transcript_lines(session.get("history") or [])
     responses: List[dict] = []
+    pending_knowledge_matches: Dict[str, dict] = {}
     room_id = session.get("room_id")
 
     def _append_jsonl(fp, obj: dict) -> None:
@@ -1640,6 +1658,10 @@ def run_user_turn(
             last_user_message = (
                 transcript_lines[li].split(":", 1)[1].strip() if li is not None else ""
             )
+            # A phase context can be rebuilt after a dropped/retried turn. Clear
+            # any earlier candidate first so a future message never inherits a
+            # stale badge from a generation that was not emitted.
+            pending_knowledge_matches.pop(agent_key, None)
             sk_block = resolve_dynamic_stance_knowledge(
                 scenario_type=scenario_type,
                 stance=stance,
@@ -1649,6 +1671,7 @@ def run_user_turn(
                 hit_history=session["agent_knowledge_hit_history"],
                 agent_key=agent_key,
                 deliberation_state=s.get("state", "Exploration"),
+                on_match=lambda hit: pending_knowledge_matches.__setitem__(agent_key, hit),
             )
             if sk_block:
                 lines.append(sk_block)
@@ -1667,6 +1690,9 @@ def run_user_turn(
         }
         if opts:
             msg["options"] = opts
+        knowledge = pending_knowledge_matches.pop(agent.key, None)
+        if knowledge:
+            msg["knowledge"] = knowledge
         session.setdefault("history", []).append(msg)
         _append_jsonl(session.get("chat_fp"), msg)
         if persist_chat:
@@ -1680,6 +1706,8 @@ def run_user_turn(
         }
         if opts:
             resp["options"] = opts
+        if knowledge:
+            resp["knowledge"] = knowledge
         responses.append(resp)
         session.setdefault("has_spoken", {})[agent.key] = True
         agent.spoke += 1

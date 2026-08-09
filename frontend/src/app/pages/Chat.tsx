@@ -170,6 +170,7 @@ function AnimatedGuideFrame({
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type ChatOptionChip = { id: string; label: string };
+export type KnowledgeReference = { id: string; tag: string; source?: string };
 
 interface Message {
   id: string;
@@ -178,6 +179,8 @@ interface Message {
   content: string;
   timestamp: number;
   emotionTagSnapshot?: string | null;
+  /** Curated background actually injected for this exact agent response. */
+  knowledge?: KnowledgeReference;
   /** Structured choice chips from agent [OPTIONS] block */
   options?: ChatOptionChip[];
   /** Selected option id within this message's group (locked) */
@@ -263,7 +266,6 @@ function buildStartAgentsPayload(
       emotion: s?.emotionTag || "Joy",
       accent_color: s?.accentColor || DEFAULT_AGENT_COLORS[key],
       stance: stance || undefined,
-      hint: (s?.hint || "").trim() || undefined,
     };
   });
 }
@@ -1073,6 +1075,20 @@ const AgentMessage = React.memo(function AgentMessage({
             ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent", nickname)
             : highlightUserMentions(finalContent, nickname)}
         </p>
+        {message.knowledge && (
+          <div className="mt-2.5 pt-2 border-t border-black/[0.07] flex flex-wrap items-center gap-1.5">
+            <span className="text-[9px] text-black/40" style={getUiFont(uiLang)}>
+              {t(uiLang, "chat.knowledgeUsed")}
+            </span>
+            <span
+              className="text-[9px] px-2 py-0.5 rounded-[4px] border border-black/10 bg-black/[0.03] text-black/65"
+              style={getUiFont(uiLang)}
+              title={message.knowledge.source || undefined}
+            >
+              {message.knowledge.tag}
+            </span>
+          </div>
+        )}
         {(message.options?.length || 0) >= 2 && (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             <span className={`w-full text-[9px] text-black/40 ${labelCaseClass(uiLang)}`} style={getUiFont(uiLang)}>
@@ -1551,8 +1567,6 @@ function CustomizerModal({
   const [selectedAgent, setSelectedAgent] = useState<AgentKey>(initialOpenCard || agentKeys[0] || "A");
   const [page, setPage] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
-  const [knowledgeTags, setKnowledgeTags] = useState<Array<{ id: string; label: string }>>([]);
-  const [knowledgeMatched, setKnowledgeMatched] = useState<boolean | null>(null);
   // Per-card scroll positions so switching pages does not share one scrollbar offset
   const cardScrollRef = useRef<HTMLDivElement>(null);
   const cardScrollPosRef = useRef<Record<string, number>>({});
@@ -1575,7 +1589,7 @@ function CustomizerModal({
 
   const canEditAdvanced = experimentMode === "full";
   const agentOptions = experimentMode === "single" ? (["A"] as AgentKey[]) : agentKeys;
-  // Stance/hint UI is always available in full mode. If no agora2 scene is selected yet,
+  // Stance UI is always available in full mode. If no agora2 scene is selected yet,
   // fall back to employment options so Basic card is not empty (preview/start bind to real scene later).
   const stanceScenarioId =
     scenarioId && SCENARIO_STANCES[scenarioId] ? scenarioId : (canEditAdvanced ? "employment" : null);
@@ -1622,47 +1636,6 @@ function CustomizerModal({
       return changed ? next : prev;
     });
   }, [showStanceFields, stanceScenarioId, agentOptions.join(",")]);
-
-  // Debounced knowledge preview for selected agent's hint + stance
-  useEffect(() => {
-    if (!showStanceFields || !stanceScenarioId) {
-      setKnowledgeTags([]);
-      setKnowledgeMatched(null);
-      return;
-    }
-    const s = localSettings[selectedAgent];
-    const hint = (s?.hint || "").trim();
-    const stance = s?.stance || "";
-    if (!hint || !stance) {
-      setKnowledgeTags([]);
-      setKnowledgeMatched(hint ? false : null);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      fetch(`${API_BASE}/knowledge-preview`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scenario_type: stanceScenarioId, stance, hint, lang: uiLang }),
-      })
-        .then((r) => r.json())
-        .then((data: { matched?: boolean; tags?: Array<{ id: string; label: string }> }) => {
-          if (cancelled) return;
-          setKnowledgeMatched(!!data.matched);
-          setKnowledgeTags(Array.isArray(data.tags) ? data.tags : []);
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setKnowledgeMatched(false);
-            setKnowledgeTags([]);
-          }
-        });
-    }, 350);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [showStanceFields, selectedAgent, localSettings[selectedAgent]?.hint, localSettings[selectedAgent]?.stance, stanceScenarioId, uiLang]);
 
   const upd = (key: AgentKey, field: keyof AgentCustomSetting, value: unknown) =>
     setLocalSettings((prev) => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
@@ -1751,37 +1724,6 @@ function CustomizerModal({
                   size="sm"
                   style={font}
                 />
-              </div>
-              <div>
-                <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.knowledgeHint")}</label>
-                <p className="text-[10px] text-[var(--app-muted-text)] mb-1.5" style={font}>
-                  {t(uiLang, "custom.knowledgeHelp")}
-                </p>
-                <textarea
-                  value={s.hint || ""}
-                  onChange={(e) => upd(key, "hint", e.target.value)}
-                  placeholder={t(uiLang, "custom.knowledgePh")}
-                  rows={2}
-                  className="w-full text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none resize-none leading-relaxed focus:border-black/40 transition-colors"
-                  style={font}
-                />
-                <div className="mt-2 flex flex-wrap items-center justify-start gap-1.5 min-h-[22px]">
-                  {knowledgeMatched === false && (s.hint || "").trim() && (
-                    <span className="text-[9px] text-[var(--app-muted-text)]" style={font}>{t(uiLang, "custom.noKnowledge")}</span>
-                  )}
-                  {knowledgeMatched && knowledgeTags.length > 0 && (
-                    <span className="text-[9px] text-[var(--app-muted-text)]" style={font}>{t(uiLang, "custom.matchedTopic")}</span>
-                  )}
-                  {knowledgeTags.map((tag) => (
-                    <span
-                      key={tag.id}
-                      className="text-[9px] px-2 py-0.5 rounded-[4px] border border-black/10 bg-black/[0.03] text-black/70"
-                      style={font}
-                    >
-                      {tag.label}
-                    </span>
-                  ))}
-                </div>
               </div>
             </>
           )}
@@ -2113,6 +2055,7 @@ export default function Chat() {
     isSystem?: boolean;
     messageId?: string;
     options?: ChatOptionChip[];
+    knowledge?: KnowledgeReference;
   }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
   const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>(blankAgentSettings());
@@ -2972,6 +2915,7 @@ export default function Chat() {
         timestamp: Date.now(),
         emotionTagSnapshot: isSystem ? null : next.emotionTagSnapshot,
         options: next.options && next.options.length >= 2 ? next.options : undefined,
+        knowledge: isSystem ? undefined : next.knowledge,
       };
       const names = agentNamesRef.current;
       const previewLabel = isSystem ? "System" : names[next.agentKey as AgentKey];
@@ -3354,6 +3298,7 @@ export default function Chat() {
         message: string;
         message_id?: string;
         options?: ChatOptionChip[];
+        knowledge?: KnowledgeReference;
       }> = data.responses || [];
       if (responses.length === 0) { setTypingKeys([]); }
       else {
@@ -3374,6 +3319,9 @@ export default function Chat() {
               isSystem,
               messageId: r.message_id,
               options: opts && opts.length >= 2 ? opts : undefined,
+              knowledge: r.knowledge?.id && r.knowledge?.tag
+                ? { id: String(r.knowledge.id), tag: String(r.knowledge.tag), source: String(r.knowledge.source || "") }
+                : undefined,
             };
           });
         const filtered = activeMode === "single"
@@ -3434,7 +3382,7 @@ export default function Chat() {
           .map((c) => [String(c.choice_group_id), String(c.option_id)]),
       );
       const messages: Message[] = hist.map((
-        h: { id?: string; character: string; txt: string; time?: string; options?: ChatOptionChip[] },
+        h: { id?: string; character: string; txt: string; time?: string; options?: ChatOptionChip[]; knowledge?: KnowledgeReference },
         i: number,
       ) => {
         const ts = historyTimestamp(h.time, i, hist.length);
@@ -3462,6 +3410,7 @@ export default function Chat() {
           emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
           options: opts,
           chosenOptionId: opts ? (chosenByGroup.get(mid) || null) : null,
+          knowledge: h.knowledge?.id && h.knowledge?.tag ? h.knowledge : undefined,
         };
       });
       setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, messages } : c));
@@ -3639,7 +3588,7 @@ export default function Chat() {
               .map((c) => [String(c.choice_group_id), String(c.option_id)]),
           );
           const messages: Message[] = hist.map((
-            h: { id?: string; character: string; txt: string; time?: string; options?: ChatOptionChip[] },
+            h: { id?: string; character: string; txt: string; time?: string; options?: ChatOptionChip[]; knowledge?: KnowledgeReference },
             i: number,
           ) => {
             const ts = historyTimestamp(h.time, i, hist.length);
@@ -3662,6 +3611,7 @@ export default function Chat() {
               timestamp: ts,
               options: opts,
               chosenOptionId: opts ? (chosenByGroup.get(mid) || null) : null,
+              knowledge: h.knowledge?.id && h.knowledge?.tag ? h.knowledge : undefined,
             };
           });
           setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, messages } : c)));
@@ -3835,7 +3785,6 @@ export default function Chat() {
                   if (settings[k]?.emotionOn !== agentSettings[k]?.emotionOn || settings[k]?.emotionTag !== agentSettings[k]?.emotionTag) changes.push({ type: "emotion", agent, before: agentSettings[k]?.emotionTag ?? null, after: settings[k]?.emotionTag ?? null });
                   if (settings[k]?.decisionBlock !== agentSettings[k]?.decisionBlock) changes.push({ type: "decision", agent, before: agentSettings[k]?.decisionBlock ?? null, after: settings[k]?.decisionBlock ?? null });
                   if ((settings[k]?.stance ?? null) !== (agentSettings[k]?.stance ?? null)) changes.push({ type: "stance", agent, before: agentSettings[k]?.stance ?? null, after: settings[k]?.stance ?? null });
-                  if ((settings[k]?.hint ?? "") !== (agentSettings[k]?.hint ?? "")) changes.push({ type: "hint", agent, before: agentSettings[k]?.hint ?? null, after: settings[k]?.hint ?? null });
                 });
               if (changes.length > 0) {
                   fetch(`${API_BASE}/log-param-change`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }) }).catch(() => {});

@@ -2,6 +2,7 @@
 """HTTP-facing run_user_turn scheduling + in-session distill."""
 import inspect
 import json
+import os
 
 from _harness import bootstrap, Checker
 
@@ -143,6 +144,74 @@ check(
     not any("A-ONLY-SETUP-KNOWLEDGE" in p for p in b_prompts),
     b_prompts[0][-500:] if b_prompts else "",
 )
+
+# Dynamic knowledge is attached to the exact emitted agent message, not exposed
+# as a setup-time preview. The same agent can therefore show a different topic
+# badge when the user's next message triggers a different card.
+dynamic_knowledge = aw.load_stance_knowledge(
+    os.path.join(os.path.dirname(aw.__file__), "background_templates", "stance_knowledge")
+)
+original_load_stance_knowledge = aw.load_stance_knowledge
+aw.load_stance_knowledge = lambda: dynamic_knowledge
+sess_dynamic = _session("@ChatbotA job change timing")
+sess_dynamic["agent_runtime_config"]["A"]["stance"] = "growth_centered"
+for a in agent_list:
+    a.spoke = 0
+first_dynamic = aw.run_user_turn(
+    session=sess_dynamic,
+    user_message="@ChatbotA job change timing",
+    agents=agents,
+    agent_list=agent_list,
+    all_agent_names=names,
+    client_chat=object(),
+    client_admin=object(),
+    scene="s",
+    scenario_type="employment",
+    lang="en",
+    prefer_agents=0.0,
+    novelty_threshold=0.0,
+    max_agent_turns_before_user=1,
+    create_response_with_client=fake_factory("U"),
+)
+first_hit = first_dynamic["responses"][0].get("knowledge") or {}
+check(
+    "http knowledge: emitted response carries actual matched topic",
+    first_hit.get("id") == "growth_job_change_timing" and first_hit.get("tag") == "Job change timing",
+    first_hit,
+)
+check(
+    "http knowledge: in-memory history preserves the same topic metadata",
+    (sess_dynamic["history"][-1].get("knowledge") or {}).get("id") == "growth_job_change_timing",
+    sess_dynamic["history"][-1],
+)
+
+sess_dynamic["history"].append({"character": "user", "txt": "@ChatbotA startup or big company"})
+for a in agent_list:
+    a.spoke = 0
+second_dynamic = aw.run_user_turn(
+    session=sess_dynamic,
+    user_message="@ChatbotA startup or big company",
+    agents=agents,
+    agent_list=agent_list,
+    all_agent_names=names,
+    client_chat=object(),
+    client_admin=object(),
+    scene="s",
+    scenario_type="employment",
+    lang="en",
+    prefer_agents=0.0,
+    novelty_threshold=0.0,
+    max_agent_turns_before_user=1,
+    create_response_with_client=fake_factory("U"),
+)
+second_hit = second_dynamic["responses"][0].get("knowledge") or {}
+check(
+    "http knowledge: badge changes with the next user message",
+    second_hit.get("id") == "growth_startup_vs_corporate"
+    and second_hit.get("id") != first_hit.get("id"),
+    {"first": first_hit, "second": second_hit},
+)
+aw.load_stance_knowledge = original_load_stance_knowledge
 
 # ---- in-session distill: periodic after DISTILL_TRIGGER_INTERVAL utterances of A
 mem_path = "memory_distill.jsonl"

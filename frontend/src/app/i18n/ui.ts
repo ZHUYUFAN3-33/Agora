@@ -170,6 +170,7 @@ const en: Dict = {
   "chat.justNow": "just now",
   "chat.pastSession": "Past session",
   "chat.phasePrefix": "Phase: {phase}",
+  "chat.knowledgeUsed": "Background used",
 
   // Settings
   "settings.customizeAgent": "Customize Agent",
@@ -470,6 +471,7 @@ const zh: Dict = {
   "chat.justNow": "刚刚",
   "chat.pastSession": "历史会话",
   "chat.phasePrefix": "阶段：{phase}",
+  "chat.knowledgeUsed": "使用的参考知识",
 
   "settings.customizeAgent": "自定义智能体",
   "settings.customizeScene": "自定义场景",

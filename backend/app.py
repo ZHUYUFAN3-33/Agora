@@ -1574,6 +1574,29 @@ def _load_room_msgs_and_agents(room_id: str, ctx: dict) -> Tuple[List[dict], Lis
     return msgs, agents, scenario_type
 
 
+def _with_fact_layer(payload: dict, room_id: str) -> dict:
+    """Attach the deterministic reply graph to a decision-map payload.
+
+    Who answered whom, derived from the [MOVE] self-reports already sitting in
+    {room}_rationale.jsonl. A pure log join — no LLM, no network — so it rides
+    along on every map response instead of being gated behind the extract.
+
+    Its own key on purpose: the IBIS layer is about CLAIMS and is LLM-inferred,
+    this is about TURNS and is not. Merging them would blur which half of the
+    map is a guess.
+
+    Never fatal: a half-written or malformed log degrades to an empty graph
+    rather than 500-ing the whole endpoint.
+    """
+    try:
+        from map_facts import load_room_facts
+        payload["facts"] = load_room_facts(LOG_DIR, room_id)
+    except Exception as e:  # noqa: BLE001 — the map must still render
+        print(f"⚠ decision-map fact layer skipped: {e}")
+        payload["facts"] = {"turns": [], "relations": [], "roster": {}, "stats": {}}
+    return payload
+
+
 @app.route('/api/decision-map/<room_id>', methods=['GET'])
 def get_decision_map(room_id):
     """IBIS Decision Map: open with smart=1&extract=1 to LLM-extract (if enough messages)."""
@@ -1667,7 +1690,8 @@ def get_decision_map(room_id):
     if fresh or cached or payload.get("options"):
         payload["extracted"] = True
     payload["extract_skipped"] = bool(do_extract and not need_extract and cached)
-    return jsonify(payload)
+
+    return jsonify(_with_fact_layer(payload, room_id))
 
 
 @app.route('/api/decision-map/<room_id>/annotations', methods=['GET', 'POST', 'DELETE'])
@@ -1785,7 +1809,7 @@ def decision_map_extract(room_id):
             choices=choices,
             intake_options=_intake_opts(),
         )
-        return jsonify(payload)
+        return jsonify(_with_fact_layer(payload, room_id))
 
     cached = load_latest_extract(LOG_DIR, room_id, lang=lang)
     prior_any = load_latest_extract(LOG_DIR, room_id)
@@ -1814,7 +1838,7 @@ def decision_map_extract(room_id):
         intake_options=_intake_opts(),
     )
     payload["extracted"] = True
-    return jsonify(payload)
+    return jsonify(_with_fact_layer(payload, room_id))
 
 
 @app.route('/api/decision-map/<room_id>/choices', methods=['GET', 'POST'])

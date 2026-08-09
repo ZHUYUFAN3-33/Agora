@@ -6,6 +6,7 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
 } from "./DecisionMapCanvas";
+import { ReplyGraph, type FactLayer } from "./ReplyGraph";
 
 export type DecisionMapIssue = {
   id: string;
@@ -74,6 +75,12 @@ export type DecisionMapData = {
   extracted?: boolean;
   insufficient?: boolean;
   counts?: { user?: number; agent?: number; total?: number };
+  /**
+   * Deterministic reply graph from map_facts.py — turns and the [MOVE]-derived
+   * edges between them. Separate from `edges` above, which is the LLM's IBIS
+   * claim graph. Absent on older responses.
+   */
+  facts?: FactLayer | null;
   /** @deprecated legacy */
   topics?: unknown[];
   stances?: unknown[];
@@ -571,6 +578,14 @@ export function DecisionMapPanel({
                 )}
               </AnimatePresence>
             </div>
+
+            {/* Fact layer, below the inferred one: collapsible, and absent
+                entirely when the logs carry no turns. */}
+            {!insufficient && (
+              <div className="flex-shrink-0">
+                <ReplyGraph facts={data?.facts} lang={lang} onJumpIndexes={onJumpIndexes} />
+              </div>
+            )}
 
             <footer className="flex-shrink-0 border-t border-black/8 bg-white/95 backdrop-blur-sm px-4 py-3">
               <div className="max-w-[1100px] mx-auto flex flex-col sm:flex-row gap-3 sm:items-start">

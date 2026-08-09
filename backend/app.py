@@ -578,6 +578,13 @@ def _persist_chat_message_db(
                     title=_room_title_for_session(session, room_id),
                     phase=((session or {}).get("moderator_state") or {}).get("state") or "Exploration",
                 )
+        # `cq` is the message side-payload persisted into chat_messages'
+        # clarifying_question_json column. That column name is historical: it now
+        # carries any per-message metadata, currently option chips and the
+        # stance-knowledge card that was injected for this exact response. Add new
+        # keys here rather than new columns, and keep get_history (which unpacks
+        # it back onto the row) in step. Stays None when there is nothing to store,
+        # so rows that predate either key are unaffected.
         cq = {}
         opts = msg.get("options")
         if isinstance(opts, list) and len(opts) >= 2:
@@ -1175,6 +1182,11 @@ def get_history(room_id):
             "time": m.get("created_at"),
             "chat_room_id": room_id,
         }
+        # Unpack the side-payload blob written by _persist_chat_message_db. The
+        # column is named clarifying_question_json for historical reasons only —
+        # it is a bag of per-message metadata, so each key is lifted onto the row
+        # under its own name. Every key is optional: rows written before a key
+        # existed simply do not carry it.
         cq = m.get("clarifying_question")
         if isinstance(cq, dict) and isinstance(cq.get("options"), list):
             row["options"] = cq["options"]

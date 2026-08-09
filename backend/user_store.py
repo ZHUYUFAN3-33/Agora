@@ -84,6 +84,14 @@ class UserStore:
                     seq INTEGER NOT NULL,
                     character TEXT NOT NULL DEFAULT '',
                     txt TEXT NOT NULL DEFAULT '',
+                    -- Despite the name, this is the message's generic side-payload
+                    -- blob, not just a clarifying question. It currently holds
+                    -- {"options": [...], "knowledge": {id, tag, source}} — option
+                    -- chips and the stance-knowledge card actually injected for
+                    -- that response. The name is kept only because renaming would
+                    -- need a migration over existing rows; treat it as
+                    -- "payload_json" and add new per-message metadata as further
+                    -- keys inside it. Writer: app.py _persist_chat_message_db.
                     clarifying_question_json TEXT,
                     created_at TEXT NOT NULL,
                     UNIQUE(room_id, seq)

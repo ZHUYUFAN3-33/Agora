@@ -178,13 +178,19 @@ export function layoutIbisMap(
       ? mineOpts.length * OPTION_W + Math.max(0, mineOpts.length - 1) * OPTION_GAP
       : 0;
 
-    // Claims layered below the options band
+    // Claims layered below the options band. Columns center against the
+    // tallest column, never against the band baseline — the old centering
+    // pulled tall columns up into (and over) the option chips.
+    const colHs = layers.map(
+      (layer) => layer.length * CLAIM_H + Math.max(0, layer.length - 1) * GAP_Y,
+    );
+    const maxColH = Math.max(0, ...colHs);
     const rel: { id: string; x: number; y: number; claim: DecisionMapClaim }[] = [];
     layers.forEach((layer, li) => {
-      const colH = layer.length * CLAIM_H + Math.max(0, layer.length - 1) * GAP_Y;
+      const colH = colHs[li];
       layer.forEach((c, ri) => {
         const x = li * (CLAIM_W + GAP_X);
-        const y = optBandH + ri * (CLAIM_H + GAP_Y) - colH / 2 + CLAIM_H / 2;
+        const y = optBandH + (maxColH - colH) / 2 + ri * (CLAIM_H + GAP_Y);
         rel.push({ id: c.id, x, y, claim: c });
       });
     });
@@ -524,8 +530,17 @@ export function DecisionMapCanvas({
     return m;
   }, [edges]);
 
-  const worldW = 3200;
-  const worldH = 2400;
+  // World tracks the layout's bounding box — a fixed 3200×2400 clipped the
+  // SVG edge layer once tall maps stacked frames past y=2400.
+  const { worldW, worldH } = useMemo(() => {
+    let w = 3200;
+    let h = 2400;
+    nodes.forEach((n) => {
+      w = Math.max(w, n.x + n.w + 240);
+      h = Math.max(h, n.y + n.h + 240);
+    });
+    return { worldW: w, worldH: h };
+  }, [nodes]);
 
   return (
     <div

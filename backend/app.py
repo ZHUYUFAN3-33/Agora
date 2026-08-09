@@ -1469,12 +1469,19 @@ def _load_room_msgs_and_agents(room_id: str, ctx: dict) -> Tuple[List[dict], Lis
         scenario_type = room.get("scenario_type")
         store = get_user_store()
         for m in store.list_chat_messages(room_id):
-            msgs.append({
+            row = {
                 "character": m["character"],
                 "txt": m["txt"],
                 "time": m.get("created_at"),
                 "chat_room_id": room_id,
-            })
+            }
+            # Keep option chips visible on the decision map after a restart —
+            # same replay shape as /api/history's DB branch.
+            cq = m.get("clarifying_question")
+            if isinstance(cq, dict) and isinstance(cq.get("options"), list):
+                row["options"] = cq["options"]
+                row["clarifying_question"] = cq
+            msgs.append(row)
         # Re-derive default stances when roster is not persisted on history
         try:
             from stance import list_stances, assign_stance

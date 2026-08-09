@@ -123,8 +123,13 @@ def stance_knowledge_on_hit(
     message: str,
     lang: str,
     include_header: bool = True,
+    allow_soft: bool = False,
 ) -> str:
-    """Keyword-hit only; empty string when no match (no generic fallback)."""
+    """Keyword-hit only; empty string when no match (no generic fallback).
+
+    allow_soft threads the fork-local soft matcher; pass True only when
+    `message` is a short setup hint. Gate and block below must agree on it.
+    """
     if not (HAVE_STANCE_KNOWLEDGE and stance and message):
         return ""
     knowledge = get_stance_kb()
@@ -133,7 +138,7 @@ def stance_knowledge_on_hit(
     scenario_cfg = knowledge.get(scenario_type, {}) or {}
     stance_cfg = scenario_cfg.get(stance)
     topic_cards = stance_cfg.get("topic_cards", []) if isinstance(stance_cfg, dict) else []
-    if not sk_match_topic_card(message, topic_cards, lang):
+    if not sk_match_topic_card(message, topic_cards, lang, allow_soft=allow_soft):
         return ""
     return get_stance_knowledge_block(
         scenario_type,
@@ -142,6 +147,7 @@ def stance_knowledge_on_hit(
         lang,
         knowledge=knowledge,
         include_header=include_header,
+        allow_soft=allow_soft,
     )
 
 

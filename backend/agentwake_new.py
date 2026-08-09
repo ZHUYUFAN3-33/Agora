@@ -297,7 +297,8 @@ def last_user_index(transcript_lines: List[str]) -> Optional[int]:
 
 def stance_knowledge_on_hit(scenario_type, stance, message, lang, knowledge,
                             include_header: bool = True,
-                            include_related: bool = False) -> str:
+                            include_related: bool = False,
+                            allow_soft: bool = False) -> str:
     """Stance-knowledge block for `message`, but ONLY when it actually hits a
     topic-card keyword; "" otherwise. This suppresses the module's generic
     fallback so the block is tied to a real keyword match — the single rule both
@@ -307,18 +308,26 @@ def stance_knowledge_on_hit(scenario_type, stance, message, lang, knowledge,
     their own distinct block title.
 
     include_related: expand one-hop related_cards (A-OR-B trigger decided by caller).
+
+    allow_soft: opt into the fork-local reverse-containment pass in
+    _match_topic_card. TRUE only for the session-start preload, whose input is a
+    short setup hint; FALSE (upstream-identical) for the per-turn dynamic
+    channel, whose input is a whole user message. It is passed to BOTH the gate
+    and the block below on purpose — if they disagreed, a soft hit would clear
+    the gate and then render the stance's GENERIC FALLBACK as if it were the
+    matched card.
     """
     if not (HAVE_STANCE_KNOWLEDGE and knowledge and stance and message):
         return ""
     scenario_cfg = knowledge.get(scenario_type, {}) or {}
     stance_cfg = scenario_cfg.get(stance)
     topic_cards = stance_cfg.get("topic_cards", []) if isinstance(stance_cfg, dict) else []
-    if not sk_match_topic_card(message, topic_cards, lang):
+    if not sk_match_topic_card(message, topic_cards, lang, allow_soft=allow_soft):
         return ""
     return get_stance_knowledge_block(
         scenario_type, stance, message, lang,
         knowledge=knowledge, include_header=include_header,
-        include_related=include_related,
+        include_related=include_related, allow_soft=allow_soft,
     )
 
 
@@ -2417,6 +2426,7 @@ def main():
         agent_configs[key]["preloaded_knowledge"] = stance_knowledge_on_hit(
             args.scenario_type, agent_configs[key].get("stance"),
             hint, args.lang, stance_knowledge_data, include_header=False,
+            allow_soft=True,  # a setup hint is short by design ("跳槽", "手机")
         ) if hint else ""
 
     # Short "represents X" phrase per agent, for the generated cast list in the

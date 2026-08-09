@@ -249,9 +249,13 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
         scenario_cfg = (kb or {}).get(scenario_type, {}) or {}
         stance_cfg = scenario_cfg.get(stance)
         topic_cards = stance_cfg.get("topic_cards", []) if isinstance(stance_cfg, dict) else []
-        if sk_match_topic_card(hint, topic_cards, lang):
+        # allow_soft=True: `hint` is a short setup phrase typed in the agent
+        # customizer, not a sentence. Gate and block must receive the SAME value
+        # or a soft hit renders the generic fallback as if it were a real card.
+        if sk_match_topic_card(hint, topic_cards, lang, allow_soft=True):
             preloaded_knowledge = get_stance_knowledge_block(
-                scenario_type, stance, hint, lang, knowledge=kb, include_header=False
+                scenario_type, stance, hint, lang, knowledge=kb, include_header=False,
+                allow_soft=True,
             )
 
     return {

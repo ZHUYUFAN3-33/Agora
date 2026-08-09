@@ -19,6 +19,9 @@ BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 aw = bootstrap("agentwake_stanceknow_")
 # Bring the cwd-relative data the run reads (KB + scene files) into the temp cwd.
 shutil.copytree(os.path.join(BACKEND, "background_templates"), "background_templates")
+# stance_templates/ holds the stance definitions (assignment, prompt text,
+# per-phase focus, labels) that stance.py reads at cwd-relative paths.
+shutil.copytree(os.path.join(BACKEND, "stance_templates"), "stance_templates")
 shutil.copytree(os.path.join(BACKEND, "scenes"), "scenes")
 
 _ck = Checker(); check = _ck.check

@@ -401,7 +401,23 @@ import os
 STANCE_KNOWLEDGE_DIR = os.path.join("background_templates", "stance_knowledge")
 os.makedirs(STANCE_KNOWLEDGE_DIR, exist_ok=True)
 
+# This script no longer writes anything: both scenarios now have their own
+# generator carrying the current content (28 and 29 cards, with the `tag` field
+# the frontend reads).
+#
+#     parent_child.json  ->  build_parent_child_kb.py
+#     employment.json    ->  build_employment_kb.py
+#
+# The card data further up THIS file is the superseded 15-cards-per-scenario
+# version with no `tag`. Regenerating from it silently reverted the knowledge
+# base — observed for real on both scenarios in turn. The file is kept as the
+# historical source rather than deleted, but it must stay inert.
+OWNED_ELSEWHERE = {"parent_child", "employment"}
+
 for scenario_type, stances in data.items():
+    if scenario_type in OWNED_ELSEWHERE:
+        print(f"Skipped {scenario_type}.json — regenerate it with build_{scenario_type}_kb.py")
+        continue
     out_path = os.path.join(STANCE_KNOWLEDGE_DIR, f"{scenario_type}.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(stances, f, ensure_ascii=False, indent=2)

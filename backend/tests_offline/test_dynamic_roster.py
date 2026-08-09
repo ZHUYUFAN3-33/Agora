@@ -8,7 +8,7 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 if backend not in sys.path:
     sys.path.insert(0, backend)
 
-from stance import assign_stance, STANCE_CYCLE_ORDER
+from stance import assign_stance, list_stances
 from agent_assembly import build_all_agent_specs
 
 failures = []
@@ -21,16 +21,16 @@ def check(ok: bool, label: str, detail=""):
 
 
 # --- stance cycle for D/E/F ---
-emp = STANCE_CYCLE_ORDER["employment"]
+emp = list_stances("employment")
 slots4 = ["A", "B", "C", "D"]
 check(assign_stance("employment", "A") == emp[0], "A keeps growth stance")
-check(assign_stance("employment", "D", slot_keys=slots4) == emp[3 % 3], "D cycles to growth", assign_stance("employment", "D", slot_keys=slots4))
-check(assign_stance("employment", "E", slot_keys=["A", "B", "C", "D", "E"]) == emp[4 % 3], "E cycles to stability")
-check(assign_stance("employment", "F", slot_keys=["A", "B", "C", "D", "E", "F"]) == emp[5 % 3], "F cycles to life")
+check(assign_stance("employment", "D", agent_keys=slots4) == emp[3 % 3], "D cycles to growth", assign_stance("employment", "D", agent_keys=slots4))
+check(assign_stance("employment", "E", agent_keys=["A", "B", "C", "D", "E"]) == emp[4 % 3], "E cycles to stability")
+check(assign_stance("employment", "F", agent_keys=["A", "B", "C", "D", "E", "F"]) == emp[5 % 3], "F cycles to life")
 
-pc = STANCE_CYCLE_ORDER["parent_child"]
+pc = list_stances("parent_child")
 check(
-    assign_stance("parent_child", "D", slot_keys=["A", "B", "C", "D"]) == pc[0],
+    assign_stance("parent_child", "D", agent_keys=["A", "B", "C", "D"]) == pc[0],
     "parent_child D cycles child_centered",
 )
 
@@ -64,6 +64,22 @@ check(not specs_o["A"].get("preloaded_knowledge"), "no hint → no preload on A"
 from stance_knowledge import preview_matched_card
 prev = preview_matched_card("employment", "growth_centered", "job change timing", "en")
 check(prev.get("matched") is True and len(prev.get("tags") or []) > 0, "knowledge preview tags")
+tag_ids = [t.get("id") for t in (prev.get("tags") or [])]
+tag_labels = [t.get("label") for t in (prev.get("tags") or [])]
+card_kws = set((prev.get("card") or {}).get("keywords") or [])
+check(tag_ids[0].startswith("topic:"), "first tag is topic id", tag_ids)
+check(
+    not any(tid in card_kws for tid in tag_ids),
+    "tag ids are not raw keywords",
+    tag_ids,
+)
+# Synonym keywords must not appear as extra chips (topic title may reuse 1st kw as label)
+extra_labels = tag_labels[1:]
+check(
+    not any(lbl in card_kws for lbl in extra_labels),
+    "no keyword-synonym chips after topic",
+    {"tags": tag_labels, "keywords": sorted(card_kws)},
+)
 
 # --- parse + session helpers from app (Flask may init) ---
 try:

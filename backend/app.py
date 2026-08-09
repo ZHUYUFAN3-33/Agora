@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 from openai import OpenAI, AuthenticationError, APIError
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 import sys
 import importlib.util
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from data_paths import BASE_DIR, LOG_DIR, DATA_DIR
 
 # ─── Load emotion module (optional) ───────────────────────────────────────────
 EMOTION_MODULE_LOADED = False
@@ -107,6 +107,8 @@ load_dotenv(os.path.join(os.path.dirname(BASE_DIR), ".env"))
 API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 # Faithful CLI default (Agora-2 backend-dev): prefer_agents=0.85
 PREFER_AGENTS = float(os.getenv("AGORA_PREFER_AGENTS") or "0.85")
+# Faithful CLI default: --novelty_threshold 0.5
+NOVELTY_THRESHOLD = float(os.getenv("AGORA_NOVELTY_THRESHOLD") or "0.5")
 
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
@@ -129,12 +131,15 @@ BOT2_FILE = os.path.join(BASE_DIR, "chatbot2.txt")
 BOT3_FILE = os.path.join(BASE_DIR, "chatbot3.txt")
 INFO_JSONL = os.path.join(BASE_DIR, "info.jsonl")
 INFO_EXAMPLE_JSONL = os.path.join(BASE_DIR, "info_example.jsonl")
-LOG_DIR = os.path.join(BASE_DIR, "logs")
 DECISION_BLOCK_DIR = os.path.join(SCENE_DIR, "decision block")
 EMOTION_BLOCK_DIR = os.path.join(SCENE_DIR, "emotion block")  # Newst: new/emotion block/
 EMOTION_PROMPTS_LEGACY = os.path.join(BASE_DIR, "emotion block", "prompts")  # fallback
 
 ensure_dir(LOG_DIR)
+
+# Built React SPA (Docker / Fly sets AGORA_STATIC_DIR=/app/frontend/dist)
+_static_env = (os.getenv("AGORA_STATIC_DIR") or "").strip()
+STATIC_DIR = _static_env or os.path.join(os.path.dirname(BASE_DIR), "frontend", "dist")
 
 # Load agent configs from info.jsonl (default decision/emotion per agent)
 _info_path = INFO_JSONL if os.path.exists(INFO_JSONL) else INFO_EXAMPLE_JSONL
@@ -188,13 +193,15 @@ POOL_KEYS: List[str] = ["A", "B", "C", "D", "E", "F"]
 VALID_SLOT_KEYS: List[str] = list(POOL_KEYS)
 MIN_ROSTER_AGENTS = 2
 MAX_ROSTER_AGENTS = 6
+# Emotion names must match emotion/{Name}.txt exactly — lowercase variants only
+# resolved on macOS's case-insensitive filesystem and broke on Linux deploys.
 PROFILE_FIXED_CONFIG: Dict[str, dict] = {
-    "A": {"decision": "Spontaneous", "emotion": "joy"},
-    "B": {"decision": "Rational", "emotion": "fear"},
-    "C": {"decision": "Avoidant", "emotion": "disgust"},
-    "D": {"decision": "Dependent", "emotion": "surprise"},
-    "E": {"decision": "Intuitive", "emotion": "anger"},
-    "F": {"decision": "Rational", "emotion": "sadness"},
+    "A": {"decision": "Spontaneous", "emotion": "Joy"},
+    "B": {"decision": "Rational", "emotion": "Fear"},
+    "C": {"decision": "Avoidant", "emotion": "Disgust"},
+    "D": {"decision": "Dependent", "emotion": "Surprise"},
+    "E": {"decision": "Intuitive", "emotion": "Anger"},
+    "F": {"decision": "Rational", "emotion": "Sadness"},
 }
 
 
@@ -335,6 +342,13 @@ def _merge_slot_keys_to_session(session: dict, slot_keys: List[str]) -> None:
     session["latest_rationale"] = {k: str(prev_rationale.get(k) or "") for k in slot_keys}
     session["latest_snippet_id"] = {k: prev_snippet_id.get(k) for k in slot_keys}
     session["snippet_counters"] = {k: int(prev_counters.get(k) or 0) for k in slot_keys}
+    # Drop removed agents from turn-routing queues (mid-session roster edits).
+    keyset = set(slot_keys)
+    mq = session.get("mention_queue") or []
+    if isinstance(mq, list):
+        session["mention_queue"] = [k for k in mq if k in keyset]
+    if session.get("last_speaker_key") not in keyset:
+        session["last_speaker_key"] = None
 
 
 def _assemble_cfg_from_runtime(session: dict) -> Dict[str, dict]:
@@ -447,7 +461,7 @@ def _runtime_config_from_slot_profiles(slot_to_profile: Dict[str, str], slot_key
     conf: Dict[str, dict] = {}
     for slot in keys:
         profile_key = slot_to_profile.get(slot, slot)
-        fixed = PROFILE_FIXED_CONFIG.get(profile_key, PROFILE_FIXED_CONFIG.get(slot, {"decision": "Rational", "emotion": "joy"}))
+        fixed = PROFILE_FIXED_CONFIG.get(profile_key, PROFILE_FIXED_CONFIG.get(slot, {"decision": "Rational", "emotion": "Joy"}))
         conf[slot] = {"decision": fixed["decision"], "emotion": fixed["emotion"]}
     return conf
 
@@ -566,11 +580,29 @@ def _persist_chat_message_db(
                     title=_room_title_for_session(session, room_id),
                     phase=((session or {}).get("moderator_state") or {}).get("state") or "Exploration",
                 )
+        # `cq` is the message side-payload persisted into chat_messages'
+        # clarifying_question_json column. That column name is historical: it now
+        # carries any per-message metadata, currently option chips and the
+        # stance-knowledge card that was injected for this exact response. Add new
+        # keys here rather than new columns, and keep get_history (which unpacks
+        # it back onto the row) in step. Stays None when there is nothing to store,
+        # so rows that predate either key are unaffected.
+        cq = {}
+        opts = msg.get("options")
+        if isinstance(opts, list) and len(opts) >= 2:
+            cq["options"] = opts
+        knowledge = msg.get("knowledge")
+        if isinstance(knowledge, dict) and knowledge.get("id") and knowledge.get("tag"):
+            cq["knowledge"] = {
+                "id": str(knowledge["id"]),
+                "tag": str(knowledge["tag"]),
+                "source": str(knowledge.get("source") or ""),
+            }
         store.append_chat_message(
             room_id,
             character=str(msg.get("character") or ""),
             txt=str(msg.get("txt") or ""),
-            clarifying_question=None,
+            clarifying_question=cq or None,
             created_at=str(msg.get("time") or "") or None,
         )
     except Exception as e:
@@ -598,7 +630,9 @@ def _sync_room_meta(session: dict, room_id: str, *, title: Optional[str] = None)
 
 @app.route('/')
 def index():
-    """API root — product UI is the React app on :5173"""
+    """Serve built SPA when present; otherwise API stub for local Vite-only setup."""
+    if STATIC_DIR and os.path.isdir(STATIC_DIR) and os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
+        return send_from_directory(STATIC_DIR, "index.html")
     return jsonify({
         "service": "agora-api",
         "health": "/api/health",
@@ -819,7 +853,11 @@ def start_chat():
 
 def normalize_lang_safe(lang: str) -> str:
     lang = (lang or "zh").lower()
-    return "zh" if lang.startswith("zh") else "en"
+    if lang.startswith("zh"):
+        return "zh"
+    if lang.startswith("ja"):
+        return "ja"
+    return "en"
 
 
 @app.route('/api/roster', methods=['POST'])
@@ -999,15 +1037,9 @@ def send_message():
     known_context = agora2.get("known_context") or ""
     domain_background = agora2.get("domain_background") or ""
     session_memory_text = agora2.get("session_memory_text") or ""
-    # Hint / stance-knowledge preload lives on assembled agent specs
-    preloaded_knowledge_text = agora2.get("preloaded_knowledge_text") or ""
-    if not preloaded_knowledge_text:
-        specs = session.get("agora2_specs") or {}
-        for slot in _session_slot_keys(session):
-            pk = (specs.get(slot) or {}).get("preloaded_knowledge") or ""
-            if pk:
-                preloaded_knowledge_text = pk
-                break
+    # Setup-hint knowledge is deliberately per-agent in ``agora2_specs``.
+    # Do not collapse it to one session-level string: doing so leaks the first
+    # matching agent's card into every agent whose own hint did not match.
     intake_data = agora2.get("intake") or {}
     lang = session.get("lang") or "en"
     scenario_type = session.get("scenario_type")
@@ -1039,13 +1071,13 @@ def send_message():
             known_context=known_context,
             domain_background=domain_background,
             session_memory_text=session_memory_text,
-            preloaded_knowledge_text=preloaded_knowledge_text,
             intake_data=intake_data,
             scenario_type=scenario_type,
             lang=lang,
             max_user_gap=max_user_gap,
             max_agent_turns_before_user=max_agent_turns_before_user,
             prefer_agents=PREFER_AGENTS,
+            novelty_threshold=NOVELTY_THRESHOLD,
             persist_chat=lambda msg: _persist_chat_message_db(room_id, msg, session),
             create_response_with_client=create_response_with_client,
         )
@@ -1080,6 +1112,89 @@ def send_message():
 
 
 
+def _room_lang(room_id: str, requested: Optional[str] = None) -> str:
+    """The language a room's derived artefacts (summary, decision map) must use.
+
+    The transcript was generated in ONE language, fixed at /api/start. Deriving the
+    summary or the map in whatever language the UI happens to be showing produced a
+    Chinese conversation with an English map — and, because
+    `{room}_summary_meta.json` is a single file per room, an en summary would
+    overwrite the zh one and leak its room_leaning text into the other language's map.
+    So the room's own language wins; the request language is only a last resort.
+
+    Resolution order: live session -> cached summary meta -> transcript detection
+    -> requested. Detection (rather than a DB column) keeps this working for rooms
+    replayed from SQLite after a restart, with no schema migration.
+    """
+    allowed = ("en", "zh", "ja")
+
+    def _ok(v) -> Optional[str]:
+        v = (str(v or "")).strip().lower()
+        return v if v in allowed else None
+
+    session = chat_sessions.get(room_id) or {}
+    hit = _ok(session.get("lang"))
+    if hit:
+        return hit
+
+    try:
+        from decision_map import summary_meta_path
+        path = summary_meta_path(LOG_DIR, room_id)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                hit = _ok((json.load(f) or {}).get("lang"))
+            if hit:
+                return hit
+    except (OSError, json.JSONDecodeError, ImportError):
+        pass
+
+    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    if os.path.exists(chat_path):
+        try:
+            from lang_utils import detect_lang
+            sample = []
+            with open(chat_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        sample.append(str((json.loads(line) or {}).get("txt") or ""))
+                    except json.JSONDecodeError:
+                        continue
+                    if len(sample) >= 12:
+                        break
+            hit = _ok(detect_lang(" ".join(sample)))
+            if hit:
+                return hit
+        except (OSError, ImportError):
+            pass
+
+    return _ok(requested) or "en"
+
+
+def _phase_changes_for_room(room_id: str) -> List[dict]:
+    """Moderator phase boundaries for decision-navi (from `{room}_moderator.jsonl`)."""
+    try:
+        from transcript_summary import load_state_changes
+    except Exception:
+        return []
+    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    if not os.path.exists(chat_path) and not os.path.exists(
+        os.path.join(LOG_DIR, f"{room_id}_moderator.jsonl")
+    ):
+        return []
+    out = []
+    for c in load_state_changes(chat_path):
+        t = c.get("time")
+        out.append({
+            "from": c.get("from"),
+            "to": c.get("to"),
+            "time": t.isoformat() if hasattr(t, "isoformat") else (str(t) if t else None),
+        })
+    return out
+
+
 @app.route('/api/history/<room_id>', methods=['GET'])
 def get_history(room_id):
     """Get chat history for a session (memory or SQLite replay)."""
@@ -1095,6 +1210,7 @@ def get_history(room_id):
             if not auth or (auth["user_id"] != owner and not auth.get("is_admin")):
                 return jsonify({"error": "Forbidden"}), 403
         session_agents, _, _ = _make_session_agents(session)
+        from decision_map import load_choices
         return jsonify({
             "room_id": room_id,
             "mode": session.get("mode", "full"),
@@ -1103,8 +1219,10 @@ def get_history(room_id):
                 for slot in _session_slot_keys(session)
             ],
             "history": session["history"],
+            "choices": load_choices(LOG_DIR, room_id),
             "known_facts": list(session["known_user_facts"].values()),
             "phase": (session.get("moderator_state") or {}).get("state"),
+            "phase_changes": _phase_changes_for_room(room_id),
             "source": "memory",
         })
 
@@ -1121,19 +1239,34 @@ def get_history(room_id):
     msgs = store.list_chat_messages(room_id)
     history = []
     for m in msgs:
-        history.append({
+        row = {
             "character": m["character"],
             "txt": m["txt"],
             "time": m.get("created_at"),
             "chat_room_id": room_id,
-        })
+        }
+        # Unpack the side-payload blob written by _persist_chat_message_db. The
+        # column is named clarifying_question_json for historical reasons only —
+        # it is a bag of per-message metadata, so each key is lifted onto the row
+        # under its own name. Every key is optional: rows written before a key
+        # existed simply do not carry it.
+        cq = m.get("clarifying_question")
+        if isinstance(cq, dict) and isinstance(cq.get("options"), list):
+            row["options"] = cq["options"]
+            row["clarifying_question"] = cq
+        if isinstance(cq, dict) and isinstance(cq.get("knowledge"), dict):
+            row["knowledge"] = cq["knowledge"]
+        history.append(row)
+    from decision_map import load_choices
     return jsonify({
         "room_id": room_id,
         "mode": "full",
         "active_agents": [],
         "history": history,
+        "choices": load_choices(LOG_DIR, room_id),
         "known_facts": [],
         "phase": room.get("phase"),
+        "phase_changes": _phase_changes_for_room(room_id),
         "scenario_type": room.get("scenario_type"),
         "title": room.get("title"),
         "concluded": room.get("concluded"),
@@ -1257,20 +1390,30 @@ def session_summary(room_id):
     if not os.path.exists(chat_path):
         return jsonify({"error": "No chat log for this session yet"}), 404
 
-    lang = "en"
     if request.method == "GET":
-        lang = (request.args.get("lang") or "en").strip().lower()
+        requested = request.args.get("lang")
     else:
         body = request.get_json(silent=True) or {}
-        lang = (body.get("lang") or request.args.get("lang") or "en").strip().lower()
+        requested = body.get("lang") or request.args.get("lang")
+    # The room's own language, not the UI's — see _room_lang.
+    lang = _room_lang(room_id, requested)
     if lang not in ("en", "zh"):
         lang = "en"
 
     try:
-        from transcript_summary import build as build_summary
-        text = build_summary(chat_path, lang)
+        from transcript_summary import build_result as build_summary_result
+        result = build_summary_result(chat_path, lang)
+        text = result.get("markdown") or ""
+        overall = result.get("overall")
+        segments = result.get("segments") or []
     except Exception as e:
         return jsonify({"error": f"Summary failed: {e}"}), 502
+
+    try:
+        from decision_map import save_summary_overall
+        save_summary_overall(LOG_DIR, room_id, overall, lang)
+    except Exception as cache_err:
+        print(f"⚠ summary overall cache failed: {cache_err}")
 
     memory_record = None
     session = chat_sessions.get(room_id) or {}
@@ -1337,9 +1480,461 @@ def session_summary(room_id):
         "room_id": room_id,
         "lang": lang,
         "markdown": text,
+        "overall": overall,
+        "segments": segments,
         "memory_saved": bool(memory_record),
         "memory": memory_record,
     })
+
+
+def _authorize_room_read(room_id: str) -> Tuple[Optional[dict], Optional[tuple]]:
+    """Return (room_context, error_response). error_response is (jsonify(...), status)."""
+    if room_id in chat_sessions:
+        session = chat_sessions[room_id]
+        owner = session.get("user_id")
+        if owner and HAVE_USER_STORE:
+            auth = get_user_store().resolve_token(_bearer_token())
+            if not auth or (auth["user_id"] != owner and not auth.get("is_admin")):
+                return None, (jsonify({"error": "Forbidden"}), 403)
+        return {"source": "memory", "session": session, "room": None}, None
+
+    if not HAVE_USER_STORE:
+        return None, (jsonify({"error": "Session not found"}), 404)
+    store = get_user_store()
+    room = store.get_chat_room(room_id)
+    if not room:
+        # Allow log-only rooms (export/summary style) when jsonl exists
+        chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+        if os.path.exists(chat_path):
+            return {"source": "log", "session": None, "room": None}, None
+        return None, (jsonify({"error": "Session not found"}), 404)
+    auth = store.resolve_token(_bearer_token())
+    if not auth or (auth["user_id"] != room["user_id"] and not auth.get("is_admin")):
+        return None, (jsonify({"error": "Forbidden"}), 403)
+    return {"source": "db", "session": None, "room": room}, None
+
+
+def _load_room_msgs_and_agents(room_id: str, ctx: dict) -> Tuple[List[dict], List[dict], Optional[str]]:
+    """History rows + agent payload + scenario_type for decision map."""
+    session = ctx.get("session")
+    room = ctx.get("room")
+    scenario_type = None
+    agents: List[dict] = []
+    msgs: List[dict] = []
+
+    if session is not None:
+        msgs = list(session.get("history") or [])
+        scenario_type = session.get("scenario_type")
+        session_agents, _, _ = _make_session_agents(session)
+        agents = _agents_payload_for_session(session, session_agents)
+        return msgs, agents, scenario_type
+
+    if room is not None and HAVE_USER_STORE:
+        scenario_type = room.get("scenario_type")
+        store = get_user_store()
+        for m in store.list_chat_messages(room_id):
+            row = {
+                "character": m["character"],
+                "txt": m["txt"],
+                "time": m.get("created_at"),
+                "chat_room_id": room_id,
+            }
+            # Keep option chips visible on the decision map after a restart —
+            # same replay shape as /api/history's DB branch.
+            cq = m.get("clarifying_question")
+            if isinstance(cq, dict) and isinstance(cq.get("options"), list):
+                row["options"] = cq["options"]
+                row["clarifying_question"] = cq
+            msgs.append(row)
+        # Re-derive default stances when roster is not persisted on history
+        try:
+            from stance import list_stances, assign_stance
+            keys = ["A", "B", "C"]
+            if list_stances(scenario_type):
+                agents = [
+                    {
+                        "key": k,
+                        "name": f"Chatbot{k}",
+                        "stance": assign_stance(scenario_type, k, keys),
+                    }
+                    for k in keys
+                ]
+        except Exception:
+            agents = []
+        return msgs, agents, scenario_type
+
+    # Log-only fallback
+    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    if os.path.exists(chat_path):
+        try:
+            from transcript_summary import load_jsonl
+            msgs = load_jsonl(chat_path)
+        except Exception:
+            msgs = []
+    return msgs, agents, scenario_type
+
+
+def _with_fact_layer(payload: dict, room_id: str) -> dict:
+    """Attach the deterministic reply graph to a decision-map payload.
+
+    Who answered whom, derived from the [MOVE] self-reports already sitting in
+    {room}_rationale.jsonl. A pure log join — no LLM, no network — so it rides
+    along on every map response instead of being gated behind the extract.
+
+    Its own key on purpose: the IBIS layer is about CLAIMS and is LLM-inferred,
+    this is about TURNS and is not. Merging them would blur which half of the
+    map is a guess.
+
+    Never fatal: a half-written or malformed log degrades to an empty graph
+    rather than 500-ing the whole endpoint.
+    """
+    try:
+        from map_facts import load_room_facts
+        payload["facts"] = load_room_facts(LOG_DIR, room_id)
+    except Exception as e:  # noqa: BLE001 — the map must still render
+        print(f"⚠ decision-map fact layer skipped: {e}")
+        payload["facts"] = {"turns": [], "relations": [], "roster": {}, "stats": {}}
+    return payload
+
+
+@app.route('/api/decision-map/<room_id>', methods=['GET'])
+def get_decision_map(room_id):
+    """IBIS Decision Map: open with smart=1&extract=1 to LLM-extract (if enough messages)."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    ctx, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
+    # Follow the room's language, not the UI's — a zh transcript always gets a zh map.
+    lang = _room_lang(room_id, request.args.get("lang"))
+    # Default smart on; extract=1 forces a (re)run when messages suffice
+    smart = (request.args.get("smart") or "1").strip().lower() not in ("0", "false", "no")
+    do_extract = (request.args.get("extract") or "").strip().lower() in ("1", "true", "yes")
+
+    msgs, agents, scenario_type = _load_room_msgs_and_agents(room_id, ctx or {})
+    if not msgs:
+        chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+        if os.path.exists(chat_path):
+            try:
+                from transcript_summary import load_jsonl
+                msgs = load_jsonl(chat_path)
+            except Exception:
+                pass
+
+    from decision_map import (
+        assemble_smart_map,
+        enough_messages,
+        load_summary_overall,
+        load_latest_extract,
+        load_latest_extract_meta,
+        extract_cache_fresh,
+        load_user_annotations,
+        load_choices,
+        extract_ibis_llm,
+        append_extract,
+        empty_map,
+    )
+
+    if not msgs:
+        return jsonify(empty_map(room_id, lang, insufficient=True))
+
+    phase_changes = _phase_changes_for_room(room_id)
+    overall = load_summary_overall(LOG_DIR, room_id, lang)
+    user_annotations = load_user_annotations(LOG_DIR, room_id)
+    choices = load_choices(LOG_DIR, room_id)
+    intake_options = None
+    if room_id in chat_sessions:
+        agora2 = chat_sessions[room_id].get("agora2") or {}
+        intake = agora2.get("intake") or {}
+        if isinstance(intake.get("options"), list):
+            intake_options = intake.get("options")
+    # Prefer same-UI-lang cache so zh/en maps don't overwrite each other.
+    cached_meta = load_latest_extract_meta(LOG_DIR, room_id, lang=lang) if smart else None
+    cached = cached_meta["map"] if cached_meta else None
+    prior_any = load_latest_extract(LOG_DIR, room_id) if smart else None
+    fresh = None
+
+    # extract=1 means "extract if transcript changed" — skip LLM when cache is fresh.
+    need_extract = (
+        smart
+        and do_extract
+        and enough_messages(msgs)
+        and not extract_cache_fresh(cached_meta, msgs)
+    )
+    if need_extract:
+        try:
+            fresh = extract_ibis_llm(
+                msgs, lang, agent_module.create_response, prior=cached or prior_any,
+            )
+            if fresh:
+                append_extract(LOG_DIR, room_id, fresh, lang=lang, msgs=msgs)
+        except Exception as ex:
+            print(f"⚠ decision-map extract failed: {ex}")
+
+    payload = assemble_smart_map(
+        room_id=room_id,
+        msgs=msgs,
+        phase_changes=phase_changes,
+        lang=lang,
+        overall=overall,
+        user_annotations=user_annotations,
+        cached=cached,
+        fresh=fresh,
+        agents=agents,
+        choices=choices,
+        intake_options=intake_options,
+    )
+    if fresh or cached or payload.get("options"):
+        payload["extracted"] = True
+    payload["extract_skipped"] = bool(do_extract and not need_extract and cached)
+
+    return jsonify(_with_fact_layer(payload, room_id))
+
+
+@app.route('/api/decision-map/<room_id>/annotations', methods=['GET', 'POST', 'DELETE'])
+def decision_map_annotations(room_id):
+    """User / layer annotation CRUD for the Decision Map."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    ctx, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
+    from decision_map import (
+        load_user_annotations,
+        add_user_annotation,
+        delete_user_annotation,
+        promote_layer_annotations,
+        save_user_annotations,
+    )
+
+    if request.method == "GET":
+        return jsonify({"room_id": room_id, "annotations": load_user_annotations(LOG_DIR, room_id)})
+
+    body = request.get_json(silent=True) or {}
+
+    if request.method == "DELETE":
+        ann_id = (body.get("id") or request.args.get("id") or "").strip()
+        if not ann_id:
+            return jsonify({"error": "Missing annotation id"}), 400
+        ok = delete_user_annotation(LOG_DIR, room_id, ann_id)
+        if not ok:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({"ok": True, "id": ann_id})
+
+    # POST: single annotation or promote layer spans
+    if body.get("promote_layers"):
+        promoted = promote_layer_annotations(body.get("layers") or [])
+        existing = load_user_annotations(LOG_DIR, room_id)
+        existing_ids = {a.get("id") for a in existing}
+        for item in promoted:
+            if item["id"] not in existing_ids:
+                existing.append(item)
+        save_user_annotations(LOG_DIR, room_id, existing)
+        return jsonify({"ok": True, "annotations": existing, "added": len(promoted)})
+
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Missing text"}), 400
+    item = add_user_annotation(
+        LOG_DIR,
+        room_id,
+        text=text,
+        target_id=body.get("target_id"),
+        message_indexes=body.get("message_indexes") or [],
+        kind=body.get("kind") or "user",
+    )
+    return jsonify({"ok": True, "annotation": item}), 201
+
+
+@app.route('/api/decision-map/<room_id>/extract', methods=['POST'])
+def decision_map_extract(room_id):
+    """Force IBIS LLM extract (or return insufficient if too few messages)."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    ctx, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
+    body = request.get_json(silent=True) or {}
+    lang = _room_lang(room_id, body.get("lang") or request.args.get("lang"))
+
+    msgs, agents, _scenario_type = _load_room_msgs_and_agents(room_id, ctx or {})
+    if not msgs:
+        chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+        if os.path.exists(chat_path):
+            from transcript_summary import load_jsonl
+            msgs = load_jsonl(chat_path)
+
+    from decision_map import (
+        assemble_smart_map,
+        enough_messages,
+        load_summary_overall,
+        load_user_annotations,
+        load_latest_extract,
+        extract_ibis_llm,
+        append_extract,
+        empty_map,
+    )
+
+    if not msgs:
+        return jsonify(empty_map(room_id, lang, insufficient=True))
+
+    from decision_map import load_choices as _load_choices
+
+    def _intake_opts():
+        if room_id in chat_sessions:
+            intake = (chat_sessions[room_id].get("agora2") or {}).get("intake") or {}
+            if isinstance(intake.get("options"), list):
+                return intake.get("options")
+        return None
+
+    choices = _load_choices(LOG_DIR, room_id)
+    if not enough_messages(msgs):
+        payload = assemble_smart_map(
+            room_id=room_id,
+            msgs=msgs,
+            phase_changes=_phase_changes_for_room(room_id),
+            lang=lang,
+            overall=load_summary_overall(LOG_DIR, room_id, lang),
+            user_annotations=load_user_annotations(LOG_DIR, room_id),
+            agents=agents,
+            choices=choices,
+            intake_options=_intake_opts(),
+        )
+        return jsonify(_with_fact_layer(payload, room_id))
+
+    cached = load_latest_extract(LOG_DIR, room_id, lang=lang)
+    prior_any = load_latest_extract(LOG_DIR, room_id)
+    try:
+        # POST /extract always re-runs (explicit "Deepen"), even if transcript unchanged.
+        fresh = extract_ibis_llm(
+            msgs, lang, agent_module.create_response, prior=cached or prior_any,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Extract failed: {e}"}), 502
+    if not fresh:
+        return jsonify({"error": "Extract returned nothing"}), 502
+    append_extract(LOG_DIR, room_id, fresh, lang=lang, msgs=msgs)
+
+    payload = assemble_smart_map(
+        room_id=room_id,
+        msgs=msgs,
+        phase_changes=_phase_changes_for_room(room_id),
+        lang=lang,
+        overall=load_summary_overall(LOG_DIR, room_id, lang),
+        user_annotations=load_user_annotations(LOG_DIR, room_id),
+        cached=cached,
+        fresh=fresh,
+        agents=agents,
+        choices=choices,
+        intake_options=_intake_opts(),
+    )
+    payload["extracted"] = True
+    return jsonify(_with_fact_layer(payload, room_id))
+
+
+@app.route('/api/decision-map/<room_id>/choices', methods=['GET', 'POST'])
+def decision_map_choices(room_id):
+    """Hand-selected option chips — structured truth for the Decision Map."""
+    room_id = _safe_room_id(room_id)
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+
+    ctx, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
+    from decision_map import (
+        load_choices,
+        append_choice,
+        choice_for_group,
+        assemble_smart_map,
+        load_summary_overall,
+        load_user_annotations,
+        load_latest_extract,
+    )
+
+    if request.method == "GET":
+        return jsonify({"room_id": room_id, "choices": load_choices(LOG_DIR, room_id)})
+
+    body = request.get_json(silent=True) or {}
+    option_id = (body.get("option_id") or "").strip()
+    label = (body.get("label") or "").strip()
+    choice_group_id = (body.get("choice_group_id") or "").strip()
+    if not option_id or not label:
+        return jsonify({"error": "option_id and label required"}), 400
+    if choice_for_group(load_choices(LOG_DIR, room_id), choice_group_id):
+        return jsonify({"error": "This option group was already chosen"}), 409
+
+    # Optional: append a visible user confirmation into chat history
+    confirm_txt = (body.get("confirm_text") or "").strip()
+    selection_message_index = None
+    if room_id in chat_sessions and confirm_txt:
+        session = chat_sessions[room_id]
+        user_msg = {
+            "chat_room_id": room_id,
+            "time": now_local_iso(),
+            "character": "user",
+            "txt": confirm_txt,
+            "choice": {
+                "choice_group_id": choice_group_id,
+                "option_id": option_id,
+                "label": label,
+            },
+        }
+        append_jsonl(session["chat_fp"], user_msg)
+        session["history"].append(user_msg)
+        _persist_chat_message_db(room_id, user_msg, session)
+        selection_message_index = len(session["history"]) - 1
+
+    row = append_choice(
+        LOG_DIR,
+        room_id,
+        {
+            "choice_group_id": choice_group_id,
+            "option_id": option_id,
+            "label": label,
+            "proposed_by": body.get("proposed_by"),
+            "message_index": body.get("message_index"),
+            "selection_message_index": selection_message_index
+            if selection_message_index is not None
+            else body.get("selection_message_index"),
+            "options": body.get("options"),
+        },
+    )
+
+    # Return updated map slice so the client can refresh without full extract
+    msgs, agents, _ = _load_room_msgs_and_agents(room_id, ctx or {})
+    if not msgs and room_id in chat_sessions:
+        msgs = list(chat_sessions[room_id].get("history") or [])
+    intake_options = None
+    if room_id in chat_sessions:
+        intake = (chat_sessions[room_id].get("agora2") or {}).get("intake") or {}
+        if isinstance(intake.get("options"), list):
+            intake_options = intake.get("options")
+    lang = _room_lang(room_id, body.get("lang"))
+    payload = assemble_smart_map(
+        room_id=room_id,
+        msgs=msgs or [],
+        phase_changes=_phase_changes_for_room(room_id),
+        lang=lang,
+        overall=load_summary_overall(LOG_DIR, room_id, lang),
+        user_annotations=load_user_annotations(LOG_DIR, room_id),
+        cached=load_latest_extract(LOG_DIR, room_id, lang=lang),
+        fresh=None,
+        agents=agents,
+        choices=load_choices(LOG_DIR, room_id),
+        intake_options=intake_options,
+    )
+    return jsonify({"choice": row, "map": payload, "selection_message_index": selection_message_index})
 
 
 @app.route('/api/health', methods=['GET'])
@@ -1647,31 +2242,47 @@ def admin_export_bundle():
     _, err = _require_admin()
     if err:
         return err
-    uid = (request.args.get("user_id") or "").strip()
-    if not uid:
+    # Accept one or many: ?user_id=a&user_id=b  or  ?user_ids=a,b
+    raw_ids: List[str] = []
+    for v in request.args.getlist("user_id"):
+        raw_ids.extend(part.strip() for part in (v or "").split(",") if part.strip())
+    for v in request.args.getlist("user_ids"):
+        raw_ids.extend(part.strip() for part in (v or "").split(",") if part.strip())
+    # de-dupe, preserve order
+    seen = set()
+    uids: List[str] = []
+    for uid in raw_ids:
+        if uid not in seen:
+            seen.add(uid)
+            uids.append(uid)
+    if not uids:
         return jsonify({"error": "user_id required"}), 400
     scenario_type = (request.args.get("scenario_type") or "").strip() or None
-    bundle = get_user_store().export_user_bundle(uid, scenario_type=scenario_type)
+    store = get_user_store()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            f"{uid}_export.json",
-            json.dumps(bundle, ensure_ascii=False, indent=2),
-        )
-        # Also flatten chat transcripts per room
-        for item in bundle.get("rooms") or []:
-            room = item.get("room") or {}
-            rid = room.get("room_id") or "room"
-            lines = []
-            for m in item.get("messages") or []:
-                lines.append(f"{m.get('character')}: {m.get('txt')}")
-            zf.writestr(f"transcripts/{rid}.txt", "\n".join(lines))
+        for uid in uids:
+            bundle = store.export_user_bundle(uid, scenario_type=scenario_type)
+            prefix = uid if len(uids) > 1 else ""
+            json_name = f"{uid}/{uid}_export.json" if prefix else f"{uid}_export.json"
+            zf.writestr(json_name, json.dumps(bundle, ensure_ascii=False, indent=2))
+            for item in bundle.get("rooms") or []:
+                room = item.get("room") or {}
+                rid = room.get("room_id") or "room"
+                lines = [f"{m.get('character')}: {m.get('txt')}" for m in (item.get("messages") or [])]
+                t_name = f"{uid}/transcripts/{rid}.txt" if prefix else f"transcripts/{rid}.txt"
+                zf.writestr(t_name, "\n".join(lines))
     buf.seek(0)
+    if len(uids) == 1:
+        download_name = f"agora_export_{uids[0]}.zip"
+    else:
+        stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
+        download_name = f"agora_export_{len(uids)}users_{stamp}.zip"
     return send_file(
         buf,
         mimetype="application/zip",
         as_attachment=True,
-        download_name=f"agora_export_{uid}.zip",
+        download_name=download_name,
     )
 
 
@@ -1856,6 +2467,38 @@ def get_agent_prompt(agent_key):
         return jsonify({"error": str(e)}), 500
 
 
+def _serve_spa(path: str):
+    """Serve built frontend assets; SPA fallback to index.html."""
+    if not STATIC_DIR or not os.path.isdir(STATIC_DIR):
+        return jsonify({
+            "error": "Frontend not built",
+            "hint": "Run npm run build in frontend/, or use Vite dev on :5173",
+        }), 404
+    # Never hijack API paths if a catch-all matched somehow
+    if path == "api" or path.startswith("api/"):
+        return jsonify({"error": "Not found"}), 404
+    candidate = os.path.join(STATIC_DIR, path)
+    if path and os.path.isfile(candidate):
+        return send_from_directory(STATIC_DIR, path)
+    index = os.path.join(STATIC_DIR, "index.html")
+    if os.path.isfile(index):
+        return send_from_directory(STATIC_DIR, "index.html")
+    return jsonify({"error": "index.html missing in static dir"}), 404
+
+
+@app.route("/<path:path>", methods=["GET"])
+def spa_path(path: str):
+    return _serve_spa(path)
+
+
+# WSGI (gunicorn) warmup: create DB + admin from env on first import
+if HAVE_USER_STORE:
+    try:
+        get_user_store()
+    except Exception as _store_boot_err:
+        print(f"⚠ User store init deferred: {_store_boot_err}")
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("🚀 多智能体聊天机器人系统启动中...")
@@ -1865,12 +2508,12 @@ if __name__ == '__main__':
     print(f"✓ Agent pool: {', '.join([AGENT_POOL[k]['name'] for k in POOL_KEYS])}")
     print(f"✓ Agora-2 adapter: {'on' if HAVE_AGORA2 else 'off'}"
           + (f" ({', '.join(agora2_http.SCENARIO_TYPES)})" if HAVE_AGORA2 else ""))
+    print(f"✓ Data dir: {DATA_DIR}")
+    print(f"✓ Static dir: {STATIC_DIR} ({'ok' if os.path.isdir(STATIC_DIR) else 'missing — use Vite :5173'})")
     if HAVE_USER_STORE:
-        get_user_store()  # init DB + bootstrap admin from env
         print("✓ User store: SQLite (register/login + profiles)")
     else:
         print("⚠ User store: off")
-    print("✓ Mode: API only (use React frontend on :5173)")
     print("\n" + "=" * 60)
     # Port: use PORT env var, or find first available in 5000-5009
     import socket
@@ -1891,9 +2534,16 @@ if __name__ == '__main__':
         if port == 0:
             port = 5000  # fallback
 
-    print(f"🔌 API listening: http://localhost:{port}")
-    print(f"💚 Health check:  http://localhost:{port}/api/health")
-    print("🖥️  Frontend:      http://localhost:5173  (npm run dev in frontend/)")
+    # Local: 127.0.0.1 + debug. Production: gunicorn (see Dockerfile).
+    debug = (os.getenv("FLASK_DEBUG") or "1").strip().lower() in ("1", "true", "yes", "on")
+    host = (os.getenv("FLASK_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+
+    print(f"🔌 API listening: http://{host}:{port}")
+    print(f"💚 Health check:  http://{host}:{port}/api/health")
+    if os.path.isdir(STATIC_DIR):
+        print(f"🖥️  Frontend:      http://{host}:{port}/  (built SPA)")
+    else:
+        print("🖥️  Frontend:      http://localhost:5173  (npm run dev in frontend/)")
     print("=" * 60)
     print("\n按 Ctrl+C 停止服务器 / Press Ctrl+C to stop the server\n")
-    app.run(debug=True, host='127.0.0.1', port=port, use_reloader=False)
+    app.run(debug=debug, host=host, port=port, use_reloader=False)

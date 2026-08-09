@@ -44,7 +44,8 @@ Choose B and act now.
 6. STRUCTURAL CONTRIBUTION REQUIREMENT
 ============================================================
 
-Each response must accelerate convergence.
+Each response must accelerate convergence — by forcing the unspoken conflict
+into the open, not by smoothing it over to reach agreement sooner.
 
 At least one of the following must occur per turn:
 

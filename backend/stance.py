@@ -4,147 +4,155 @@ stance.py
 
 Implements the Stance dimension discussed for Agora AI:
   - WHO speaks for which interest/priority in a multi-perspective decision.
-  - Forced binding: for scenario types listed in STANCE_ASSIGNMENTS, agent
-    A/B/C are ALWAYS assigned the fixed stance below, overriding whatever
-    (if anything) was written in info.jsonl. Scenario types not listed here
-    (e.g. any future single-decision-maker scenario) simply get no stance
-    at all — assign_stance() returns None and callers skip the block.
+  - Forced binding: agents are ALWAYS assigned a stance from the scenario's
+    template, overriding whatever (if anything) was written in info.jsonl.
+    Scenario types with no template file (e.g. any future single-decision-maker
+    scenario) simply get no stance at all — assign_stance() returns None and
+    callers skip the block.
 
-Two scenarios are wired up:
-  parent_child : child_centered / parent_centered / relationship_centered
-                 (three different interest-holders in the decision)
-  employment   : growth_centered / stability_centered / life_centered
-                 (three competing priorities within the same decision-maker)
+DATA LIVES IN JSON, NOT HERE: stance_templates/{scenario_type}.json, one file
+per scenario — the same split-file convention already used by
+scenario_templates/, background_templates/ and background_templates/
+stance_knowledge/. Adding a scenario, a stance, or a fourth interest-holder is
+a data edit, no code change. Shape:
+
+    {
+      "assignment": ["<stance>", ...],        # index order -> sorted agent keys
+      "stances": {
+        "<stance>": {
+          "label":       {"zh": ..., "en": ...},   # short "represents X" phrase
+          "prompt":      {"zh": ..., "en": ...},   # the YOUR STANCE block text
+          "phase_focus": {"Exploration": {"zh":..., "en":...}, ...}
+        }, ...
+      }
+    }
+
+WHY ASSIGNMENT IS AN ORDERED LIST RATHER THAN AN {AGENT_KEY: STANCE} MAP: the
+agent pool size is configurable (info.jsonl is the single source of truth for
+the key set), but the old hardcoded map only covered A/B/C — so a 5-agent pool
+left D and E with stance None, i.e. no stance block, no per-stance turn focus,
+and no stance knowledge. Sorted agent keys now index into this list and wrap
+around, so every agent gets a stance whatever the pool size. With more agents
+than stances the extras double up on existing stances, which is reported at
+startup rather than happening silently.
 
 All prompt text is bilingual (zh/en) via lang_utils.pick().
 """
 from __future__ import annotations
 
+import json
+import os
 from typing import Dict, List, Optional
 
 from lang_utils import normalize_lang, pick
 
+STANCE_TEMPLATE_DIR_DEFAULT = "stance_templates"
+
 # -------------------------------------------------------------------------
-# 1. Forced assignment table — which agent gets which stance, per scenario
+# 1. Template loading + forced assignment
 # -------------------------------------------------------------------------
 
-STANCE_ASSIGNMENTS: Dict[str, Dict[str, str]] = {
-    "parent_child": {
-        "A": "child_centered",
-        "B": "parent_centered",
-        "C": "relationship_centered",
-    },
-    "employment": {
-        "A": "growth_centered",
-        "B": "stability_centered",
-        "C": "life_centered",
-    },
-}
+_TEMPLATE_CACHE: Dict[str, dict] = {}
 
 
-# Canonical order of stances for cycling when roster has >3 agents (D/E/F…).
-STANCE_CYCLE_ORDER: Dict[str, List[str]] = {
-    "parent_child": [
-        "child_centered",
-        "parent_centered",
-        "relationship_centered",
-    ],
-    "employment": [
-        "growth_centered",
-        "stability_centered",
-        "life_centered",
-    ],
-}
+def load_stance_templates(dir_path: str = STANCE_TEMPLATE_DIR_DEFAULT) -> Dict[str, dict]:
+    """Read stance_templates/{scenario_type}.json into {scenario_type: cfg}.
 
-
-def assign_stance(
-    scenario_type: Optional[str],
-    agent_key: str,
-    slot_keys: Optional[List[str]] = None,
-) -> Optional[str]:
-    """Returns the forced stance for this agent in this scenario, or None if
-    the scenario doesn't use the stance dimension at all.
-
-    For keys A/B/C, use the fixed table. Extra keys (D/E/F or any roster
-    beyond the table) cycle the scenario's stance list by roster index
-    when slot_keys is provided; otherwise cycle by A–F letter index.
+    Cached per directory: this is static data read many times per session. A
+    missing directory is not an error — it just means no scenario uses stances.
     """
+    if dir_path in _TEMPLATE_CACHE:
+        return _TEMPLATE_CACHE[dir_path]
+    templates: Dict[str, dict] = {}
+    if os.path.isdir(dir_path):
+        for fname in sorted(os.listdir(dir_path)):
+            if not fname.endswith(".json"):
+                continue
+            with open(os.path.join(dir_path, fname), "r", encoding="utf-8-sig") as f:
+                templates[fname[:-5]] = json.load(f)
+    _TEMPLATE_CACHE[dir_path] = templates
+    return templates
+
+
+def _scenario_cfg(scenario_type: Optional[str]) -> dict:
     if not scenario_type:
+        return {}
+    return load_stance_templates().get(scenario_type, {}) or {}
+
+
+def list_stances(scenario_type: Optional[str]) -> List[str]:
+    """The scenario's stances in assignment order ([] if it uses no stances)."""
+    cfg = _scenario_cfg(scenario_type)
+    order = cfg.get("assignment") or []
+    return [s for s in order if s in (cfg.get("stances") or {})]
+
+
+def assign_stance(scenario_type: Optional[str], agent_key: str,
+                   agent_keys: Optional[List[str]] = None) -> Optional[str]:
+    """The forced stance for this agent, or None if the scenario uses no stances.
+
+    agent_keys: the full pool from info.jsonl. The agent's position in the sorted
+    pool indexes into the assignment list (wrapping if the pool is larger). It
+    defaults to A/B/C..., which reproduces the original hardcoded mapping exactly
+    for the standard three-agent pool.
+    """
+    order = list_stances(scenario_type)
+    if not order:
         return None
-    table = STANCE_ASSIGNMENTS.get(scenario_type)
-    if not table:
+    keys = sorted(agent_keys) if agent_keys else [chr(ord("A") + i) for i in range(len(order))]
+    if agent_key not in keys:
         return None
-    if agent_key in table:
-        return table[agent_key]
-    cycle = STANCE_CYCLE_ORDER.get(scenario_type) or list(table.values())
-    if not cycle:
-        return None
-    if slot_keys:
-        try:
-            idx = list(slot_keys).index(agent_key)
-        except ValueError:
-            idx = ord(agent_key.upper()) - ord("A")
-    else:
-        idx = ord(agent_key.upper()) - ord("A") if agent_key and agent_key.isalpha() else 0
-    return cycle[idx % len(cycle)]
+    return order[keys.index(agent_key) % len(order)]
+
+
+def get_stance_label(scenario_type: Optional[str], stance: Optional[str],
+                      lang: str = "zh") -> str:
+    """Short "represents X" phrase, used to build the cast list in the prompt."""
+    if not stance:
+        return ""
+    cfg = _scenario_cfg(scenario_type).get("stances", {}).get(stance) or {}
+    return pick(cfg.get("label", {}), normalize_lang(lang))
 
 
 def stance_enabled(scenario_type: Optional[str]) -> bool:
-    return bool(scenario_type) and scenario_type in STANCE_ASSIGNMENTS
+    return bool(list_stances(scenario_type))
 
 
 # -------------------------------------------------------------------------
-# 2. Stance prompt text — what each stance actually instructs the agent to do
+# 2. Stance prompt text and per-phase focus — both read from the scenario's
+#    JSON template (see module docstring for the file shape).
 # -------------------------------------------------------------------------
 
-STANCE_PROMPTS: Dict[str, Dict[str, dict]] = {
-    "parent_child": {
-        "child_centered": {
-            "zh": "始终从孩子的发展需求、自主性、长期心理感受出发评估选项，即使这和家长的顾虑冲突，也要明确指出这种冲突，不要为了迎合家长而弱化孩子视角。",
-            "en": "Always evaluate options from the child's developmental needs, autonomy, and long-term psychological wellbeing. Even when this conflicts with the parent's concerns, name that conflict explicitly rather than softening the child's perspective to accommodate the parent.",
-        },
-        "parent_centered": {
-            "zh": "始终从家长的实际顾虑出发（时间、经济、安全、家庭整体利益），评估孩子的意愿是否现实可行，不要因为想显得开明而回避说出现实约束。",
-            "en": "Always evaluate options from the parent's practical concerns (time, money, safety, the family's overall interests), assessing whether the child's preference is realistically workable. Don't avoid naming real constraints just to appear open-minded.",
-        },
-        "relationship_centered": {
-            "zh": "关注这次决策对亲子沟通和信任关系的长期影响，经常追问'如果这样决定，孩子会怎么理解这件事'，把决策过程本身（而不只是结果）当作需要讨论的对象。",
-            "en": "Focus on how this decision affects long-term parent-child communication and trust. Frequently ask 'how will the child come to understand this decision', and treat the decision-making process itself — not just the outcome — as something worth discussing.",
-        },
-    },
-    "employment": {
-        "growth_centered": {
-            "zh": "始终从职业成长、技能积累、长期职业轨迹的角度评估每个选项，关注这份工作/机会能否让用户在3-5年后处于更强的位置。即使这意味着短期薪酬或稳定性的牺牲，也要明确指出这种权衡，而不是回避它。",
-            "en": "Always evaluate each option from the angle of career growth, skill accumulation, and long-term trajectory — will this put the user in a stronger position 3-5 years from now? Even when that means trading off short-term pay or stability, name that trade-off explicitly rather than avoiding it.",
-        },
-        "stability_centered": {
-            "zh": "始终从风险和财务安全的角度评估每个选项，关注收入的确定性、公司/行业的稳定性、抗经济波动能力。对'成长空间'类的说法保持追问：这是实打实的保障，还是难以验证的画饼？",
-            "en": "Always evaluate each option from the angle of risk and financial security — income certainty, company/industry stability, resilience to downturns. Push back on 'growth potential' claims: is this a concrete guarantee, or an unverifiable promise?",
-        },
-        "life_centered": {
-            "zh": "关注这次决策对工作生活平衡、家庭状况、个人长期福祉的影响，经常追问'这份工作会占用多少本该属于生活的时间和精力'。在其他两方只谈薪酬和成长时，主动把生活质量这个变量摆回桌面。",
-            "en": "Focus on how this decision affects work-life balance, family circumstances, and long-term personal wellbeing. Frequently ask 'how much of this role will consume time and energy that would otherwise belong to life outside work'. When the other two voices only discuss pay and growth, proactively put quality of life back on the table.",
-        },
-    },
-}
+
+def _stance_field(scenario_type: Optional[str], stance: Optional[str], field: str) -> dict:
+    if not stance:
+        return {}
+    cfg = _scenario_cfg(scenario_type).get("stances", {}).get(stance) or {}
+    return cfg.get(field) or {}
 
 
 def get_stance_text(scenario_type: str, stance: Optional[str], lang: str = "zh") -> str:
-    if not stance:
+    """The YOUR STANCE block text: what this stance instructs the agent to do."""
+    return pick(_stance_field(scenario_type, stance, "prompt"), normalize_lang(lang))
+
+
+def get_stance_phase_focus(scenario_type: Optional[str], stance: Optional[str],
+                            phase: str, lang: str = "zh") -> str:
+    """What THIS stance should specifically put on the table in THIS phase.
+
+    The generic turn task is keyed on (state, mode, decision_style), so every
+    agent receives one of the same shape; with only a two-line stance to tell
+    them apart the three voices converge on near-identical content. This is
+    keyed on STANCE, so each agent is pushed toward something the others
+    structurally cannot produce.
+
+    Returns "" when there is no entry (no stance, or a phase with none defined,
+    e.g. the terminal Concluded state), so callers can append blindly.
+    """
+    if not phase:
         return ""
-    bilingual = STANCE_PROMPTS.get(scenario_type, {}).get(stance)
-    if not bilingual:
-        return ""
-    base = pick(bilingual, normalize_lang(lang))
-    # Obey Decision Board: do not open a side-quest question before top-constraint facts exist.
-    obey = pick(
-        {
-            "zh": "服从决策板：在最高优先级约束尚无比对事实前，不要另开副线向用户追问。",
-            "en": "Obey the Decision Board: until the top constraint has comparable facts, do not open a side-quest question to the user.",
-        },
-        normalize_lang(lang),
-    )
-    return f"{base}\n{obey}"
+    focus = _stance_field(scenario_type, stance, "phase_focus").get(phase)
+    return pick(focus, normalize_lang(lang)) if focus else ""
 
 
 # -------------------------------------------------------------------------

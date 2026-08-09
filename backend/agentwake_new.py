@@ -7,10 +7,13 @@ import os
 import random
 import re
 import sys
+import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
+
 
 # Scenario information layer: User Profile + Scenario Intake + Domain Background.
 # See agora_context.py / profile_store.py / scenario_background.py for the
@@ -23,7 +26,9 @@ except ImportError:
     HAVE_AGORA_CONTEXT = False
 
 try:
-    from stance import assign_stance, stance_enabled, get_stance_text, get_convergence_weight_hint
+    from stance import (assign_stance, stance_enabled, get_stance_text,
+                        get_convergence_weight_hint, get_stance_phase_focus,
+                        get_stance_label)
     HAVE_STANCE = True
 except ImportError:
     HAVE_STANCE = False
@@ -43,6 +48,7 @@ try:
     from stance_knowledge import (
         load_stance_knowledge,
         get_stance_knowledge_block,
+        get_stance_knowledge_hit,
         peek_matched_card_id,
         _match_topic_card as sk_match_topic_card,
     )
@@ -292,7 +298,8 @@ def last_user_index(transcript_lines: List[str]) -> Optional[int]:
 
 def stance_knowledge_on_hit(scenario_type, stance, message, lang, knowledge,
                             include_header: bool = True,
-                            include_related: bool = False) -> str:
+                            include_related: bool = False,
+                            allow_soft: bool = False) -> str:
     """Stance-knowledge block for `message`, but ONLY when it actually hits a
     topic-card keyword; "" otherwise. This suppresses the module's generic
     fallback so the block is tied to a real keyword match — the single rule both
@@ -302,18 +309,26 @@ def stance_knowledge_on_hit(scenario_type, stance, message, lang, knowledge,
     their own distinct block title.
 
     include_related: expand one-hop related_cards (A-OR-B trigger decided by caller).
+
+    allow_soft: opt into the fork-local reverse-containment pass in
+    _match_topic_card. TRUE only for the session-start preload, whose input is a
+    short setup hint; FALSE (upstream-identical) for the per-turn dynamic
+    channel, whose input is a whole user message. It is passed to BOTH the gate
+    and the block below on purpose — if they disagreed, a soft hit would clear
+    the gate and then render the stance's GENERIC FALLBACK as if it were the
+    matched card.
     """
     if not (HAVE_STANCE_KNOWLEDGE and knowledge and stance and message):
         return ""
     scenario_cfg = knowledge.get(scenario_type, {}) or {}
     stance_cfg = scenario_cfg.get(stance)
     topic_cards = stance_cfg.get("topic_cards", []) if isinstance(stance_cfg, dict) else []
-    if not sk_match_topic_card(message, topic_cards, lang):
+    if not sk_match_topic_card(message, topic_cards, lang, allow_soft=allow_soft):
         return ""
     return get_stance_knowledge_block(
         scenario_type, stance, message, lang,
         knowledge=knowledge, include_header=include_header,
-        include_related=include_related,
+        include_related=include_related, allow_soft=allow_soft,
     )
 
 
@@ -327,6 +342,7 @@ def resolve_dynamic_stance_knowledge(
     hit_history: Dict[str, List[str]],
     agent_key: str,
     deliberation_state: str,
+    on_match: Optional[Callable[[dict], None]] = None,
 ) -> str:
     """
     Dynamic stance-knowledge channel with one-hop related_cards expansion.
@@ -347,10 +363,25 @@ def resolve_dynamic_stance_knowledge(
     )
     if not card_id:
         return ""
+    hit = get_stance_knowledge_hit(
+        scenario_type or "",
+        stance,
+        last_user_message,
+        lang,
+        knowledge=knowledge,
+    )
+    if not hit or hit.get("is_fallback"):
+        return ""
     hits = hit_history.setdefault(agent_key, [])
     repeat_hit = card_id in hits  # trigger A (check BEFORE recording)
     in_convergence = deliberation_state == "Convergence"  # trigger B
     hits.append(card_id)
+    if on_match is not None:
+        on_match({
+            "id": hit.get("id"),
+            "tag": hit.get("tag") or card_id,
+            "source": hit.get("source") or "",
+        })
     return stance_knowledge_on_hit(
         scenario_type,
         stance,
@@ -523,14 +554,35 @@ class ChatAgent:
                        known_context: str = "", domain_background: str = "",
                        stance_text: str = "", lang: str = "zh",
                        session_memory_text: str = "",
-                       preloaded_knowledge_text: str = "") -> str:
-        roster = "\n".join([f"- {k}: {v}" for k, v in name_map.items()])
+                       preloaded_knowledge_text: str = "",
+                       stance_labels: Dict[str, str] = None) -> str:
+        # The cast list ("A represents the child's needs, B the parent's...") is
+        # built HERE from the actual pool rather than written into the scene file,
+        # which used to hardcode "three assistants (A / B / C)" and contradict the
+        # roster as soon as the pool was any other size.
+        stance_labels = stance_labels or {}
+        roster = "\n".join(
+            f"- {k}: {v}" + (f" — represents {stance_labels[k]}" if stance_labels.get(k) else "")
+            for k, v in name_map.items()
+        )
         # The scene, the intake questions and the user's own input all follow --lang,
         # but nothing here ever told the agent which language to answer in — runs with
         # --lang zh came back in English with Chinese company names spliced in.
-        lang_line = ("Write every message in Chinese (简体中文). Do not switch language mid-message."
-                     if lang == "zh" else
-                     "Write every message in English. Do not switch language mid-message.")
+        if lang == "zh":
+            lang_line = (
+                "Write every message in Chinese (简体中文). "
+                "Do not switch language mid-message."
+            )
+        elif lang == "ja":
+            lang_line = (
+                "Write every message in Japanese (日本語). "
+                "Do not switch language mid-message."
+            )
+        else:
+            lang_line = (
+                "Write every message in English. "
+                "Do not switch language mid-message."
+            )
         others = ", ".join(f"@{v}" for k, v in name_map.items() if k != self.key)
         # Any other agent's name works for the "defer to" example — take the first.
         defer_name = next((v for k, v in name_map.items() if k != self.key), "another bot")
@@ -552,16 +604,29 @@ class ChatAgent:
             f"end two of your messages in a row with a question. Default to stating your own position and "
             f"letting the others rebut it.\n"
             f"- Address the user only when their input is genuinely needed to move the discussion forward.\n"
+            f"- The decision is the user's to make. Put your reasoning and your recommendation on the "
+            f"table as input they weigh — do not narrate their choice back to them as already settled, "
+            f"and do not issue them a list of instructions to go carry out. Say what you would pick and "
+            f"why; leave the deciding to them.\n"
             f"- Output ONLY what {self.name} says (no speaker label, no quotes).\n\n"
             f"=== SCENE (shared) ===\n{scene}\n\n"
             f"=== ROLE INSTRUCTIONS (for {self.name}) ===\n{self.role_text}\n"
             f"\n=== WHAT COUNTS AS A USEFUL MESSAGE ===\n"
-            f"Every message must add at least ONE of these, and it must not already be in the transcript:\n"
-            f"- a new evaluation dimension or consideration\n"
-            f"- a specific fact, number or constraint taken from KNOWN USER CONTEXT\n"
-            f"- a concrete comparison of two options along one named dimension\n"
-            f"- an elimination: an option or component that should be dropped, plus the reason\n"
-            f"- a direct challenge to a specific claim someone made\n"
+            f"These are in PRIORITY ORDER. When they compete, the higher one wins — including over the "
+            f"phase task and the style rules further down.\n"
+            f"1. ANSWER WHAT WAS ACTUALLY ASKED. If the user asked for concrete options, for a "
+            f"recommendation, or what they should do, then name specific options and say which one you "
+            f"back and why. Offering another abstract dimension or framework instead of answering is a "
+            f"failed turn, no matter how well argued.\n"
+            f"2. HOLD YOUR STANCE. If the group is heading somewhere your stance would not choose, say so "
+            f"in this message and name what is being given up. Never soften your stance to keep the peace.\n"
+            f"3. ADD SOMETHING NEW — at least one of these, and it must not already be in the transcript:\n"
+            f"   - a concrete comparison of two NAMED options along one dimension\n"
+            f"   - an elimination: which option should be dropped, plus the reason\n"
+            f"   - a direct challenge to a specific claim someone made\n"
+            f"   - a specific fact, number or constraint taken from KNOWN USER CONTEXT\n"
+            f"   - a new evaluation dimension — ONLY while the concrete options are not yet on the table. "
+            f"Once they are, argue about the options themselves instead of adding more dimensions.\n"
             f"If you genuinely have nothing new, say so in one sentence (\"I have nothing to add beyond X; "
             f"I'll defer to @{defer_name} on Y\") and stop. That is a valid, useful turn.\n"
             f"Never restate a point already made, including your own. Rephrasing is not new information.\n"
@@ -599,9 +664,35 @@ class ChatAgent:
             "[MESSAGE]\n"
             "your chat message here\n"
             "[/MESSAGE]\n"
+            "[OPTIONS]\n"
+            '[{"id":"o1","label":"short option A"},{"id":"o2","label":"short option B"}]\n'
+            "[/OPTIONS]\n"
+            "[MOVE]\n"
+            "one word for what this message DOES, optionally plus who it responds to, e.g. "
+            "\"challenge @ChatbotB\". Exactly one of: challenge (you dispute a specific claim "
+            "someone made) / extend (you build on someone's point with something they did not "
+            "say) / new_point (you raise something not aimed at anyone) / concede (you accept "
+            "a cost or genuinely adjust your position) / clarify (you answer a question or "
+            "supply facts).\n"
+            "[/MOVE]\n"
             "[RATIONALE]\n"
             "one short sentence: why you said this, given your persona and the current phase goal\n"
             "[/RATIONALE]\n"
+            "Tag names are literal markers: write MESSAGE / OPTIONS / MOVE / RATIONALE in English "
+            "exactly as shown. Do NOT translate them "
+            "(never [消息]/[选项]/[選択肢]/[オプション]/[メッセージ]/[动作]/[理由]/[根拠]). "
+            "Only MESSAGE and OPTIONS are shown to the others; MOVE and RATIONALE are private. "
+            "Report the move honestly — an agreeable message labelled \"challenge\" defeats its "
+            "purpose.\n"
+            "Labels INSIDE OPTIONS must use the same language as the chat message "
+            "(Chinese / English / Japanese as required by LANGUAGE).\n"
+            "Include [OPTIONS] whenever you present 2–6 mutually exclusive choices the user could "
+            "pick (jobs, plans, A/B paths). Omit the whole [OPTIONS]…[/OPTIONS] block when you are "
+            "not offering a selectable set. Max 6 options; each label ≤ 24 characters.\n"
+            # Restated here on purpose. The directive at the top is separated from
+            # the actual generation by everything above — most of it English — and
+            # agents were observed replying wholly in English in zh sessions.
+            f"LANGUAGE, again: {lang_line} This applies to MESSAGE text and OPTIONS labels.\n"
         )
         return prompt
 
@@ -825,6 +916,18 @@ def get_phase_prompt(state: str, mode: str, decision: str, stall: bool) -> str:
 # session handing the work back and forth. Questions are genuinely useful while
 # the option space is still open and actively harmful once it is time to commit,
 # so the allowance is tied to the deliberation phase.
+# Which KNOWN USER CONTEXT details the "anchor your message" nudge should point
+# at, per scenario. Keyed by scenario_type; unknown/None scenarios fall back to a
+# neutral phrasing at the call site, so a new scenario needs no entry to work.
+ANCHOR_EXAMPLES: Dict[str, str] = {
+    "employment":
+        "a ranked priority, the deadline, a named option and its salary/level/location, "
+        "the career stage",
+    "parent_child":
+        "the child's age, what the child actually said, the parent's stated worry, the "
+        "deadline, how much say the child was given",
+}
+
 QUESTION_BUDGET: Dict[str, str] = {
     "Exploration":
         "You may ask AT MOST ONE question this turn, and only to fill a gap the KNOWN USER CONTEXT "
@@ -910,6 +1013,57 @@ def validate_agent_configs(agent_configs: Dict[str, dict], info_path: str,
         print(f"ERROR: {info_path} is not usable:\n{detail}", file=sys.stderr)
         sys.exit(2)
 
+def validate_persona_uniqueness(agent_configs: Dict[str, dict], info_path: str) -> None:
+    """No two agents may be indistinguishable in the prompt.
+
+    A scenario defines a fixed, small set of stances (three), while the pool size
+    comes from info.jsonl. A pool larger than that set therefore REUSES stances by
+    design — agent D gets the same stance as agent A. That is fine on its own:
+    what is not fine is two agents whose stance, decision style AND emotion are
+    all identical, because then every block that shapes their behaviour is the
+    same and they can only produce the same message twice. That manufactures, by
+    configuration, exactly the stance homogenisation the per-stance turn tasks
+    exist to prevent.
+
+    So when stances are in play, a full three-way collision is a hard config
+    error: differentiate the duplicated stance with a different decision or
+    emotion in info.jsonl. Without stances (legacy runs with no --scenario_type)
+    the same collision is only a warning, since that path never promised
+    differentiated voices and has always allowed it.
+
+    Must run AFTER stance assignment, since the stance is what it keys on.
+    """
+    groups: Dict[tuple, List[str]] = {}
+    for key in sorted(agent_configs):
+        cfg = agent_configs.get(key) or {}
+        groups.setdefault(
+            (cfg.get("stance"), cfg.get("decision"), cfg.get("emotion")), []).append(key)
+
+    problems, warns = [], []
+    for (stance, decision, emotion), keys in groups.items():
+        if len(keys) < 2:
+            continue
+        who = ", ".join(keys)
+        combo = f"decision={decision!r} + emotion={emotion!r}"
+        if stance:
+            problems.append(
+                f"agents {who} are indistinguishable: they share stance {stance!r} AND {combo}. "
+                f"A pool larger than the scenario's stance set reuses stances on purpose, so give "
+                f"at least one of them a different decision or emotion in info.jsonl."
+            )
+        else:
+            warns.append(
+                f"agents {who} share {combo} and have no stance, so their prompts are identical "
+                f"and they can only repeat each other."
+            )
+
+    for w in warns:
+        print(f"WARNING: {info_path}: {w}", file=sys.stderr)
+    if problems:
+        detail = "\n".join(f"  - {p}" for p in problems)
+        print(f"ERROR: {info_path} defines duplicate agents:\n{detail}", file=sys.stderr)
+        sys.exit(2)
+
 ADMIN3_SYSTEM = """You are the deliberation moderator for a group decision chat.
 Read the transcript and classify where the conversation actually is right now.
 
@@ -969,15 +1123,144 @@ def parse_moderator_plan(text: str) -> Optional[dict]:
 
 RATIONALE_MAX_WORDS = 30
 
-_MESSAGE_TAG_RE = re.compile(r"\[MESSAGE\](.*?)\[/MESSAGE\]", re.DOTALL | re.IGNORECASE)
-_RATIONALE_TAG_RE = re.compile(r"\[RATIONALE\](.*?)\[/RATIONALE\]", re.DOTALL | re.IGNORECASE)
-_STRAY_TAG_RE = re.compile(r"\[/?(?:MESSAGE|RATIONALE)\]", re.IGNORECASE)
+# A model refusal ("I'm sorry, I can't assist with that.") comes back as ordinary
+# COMPLETED content, so generation metadata never flags it — only the text does.
+# Seen live when the group had drifted into issuing a parent directives about
+# their child. Publishing it verbatim breaks the fiction and tells the user
+# nothing, so enforce_no_refusal() reframes and retries, then drops the turn.
+_REFUSAL_RE = re.compile(
+    r"^\W{0,3}(i'?m sorry|sorry|i apologi[sz]e|unfortunately)?\W{0,3}"
+    r"(i\s+(can'?t|cannot|am not able to|won'?t)\s+"
+    r"(assist|help|comply|do that|continue|provide)"
+    r"|i'?m (unable|not able) to (assist|help|provide))"
+    r"|抱歉[，,]?\s*我(不能|无法)|对不起[，,]?\s*我(不能|无法)",
+    re.I)
+
+
+def looks_like_refusal(text: str) -> bool:
+    """True when a reply is a bare content refusal rather than a turn.
+
+    Deliberately anchored near the start and length-bounded: an agent legitimately
+    ARGUING that it cannot support an option ("I can't back Option A because...")
+    is a real contribution and must not be caught.
+    """
+    t = (text or "").strip()
+    if not t or len(t) > 220:
+        return False
+    return bool(_REFUSAL_RE.search(t[:120]))
+
+# Tag names, including the translations the model produces on its own.
+#
+# WHY THE ALIASES: the system prompt orders "write every message in Chinese, do
+# not switch language mid-message", and the model obeys it on the TAGS too,
+# emitting [消息]/[理由] instead of [MESSAGE]/[RATIONALE]. Matching only the
+# English spelling meant no match, which fell through to the "no tags" branch —
+# and that branch only stripped English tags, so the ENTIRE generation, private
+# rationale and both tag pairs included, was published as the chat message while
+# the rationale log got nothing. Observed live in a zh parent_child session.
+# The prompt now also says not to translate the tags; this is the recovery for
+# when it happens anyway.
+# Tag aliases: models sometimes translate markers despite prompt (zh / ja / en).
+_MSG_NAMES = r"MESSAGE|MSG|消息|訊息|信息|メッセージ"
+_RAT_NAMES = r"RATIONALE|REASON|理由|原因|理由说明|根拠|根拠説明"
+_OPT_NAMES = r"OPTIONS|OPTION|CHOICES|选项|選項|選択肢|オプション"
+# Kept deliberately identical to feature/dialogue-naturalness's list (no zh-TW or
+# extra ja variants) so [MOVE] recognition is bit-for-bit what that layer was
+# tuned against — this port took the tag, not the layer.
+_MOVE_NAMES = r"MOVE|动作|行动|アクション"
+
+_MESSAGE_TAG_RE = re.compile(rf"\[(?:{_MSG_NAMES})\](.*?)\[/(?:{_MSG_NAMES})\]",
+                             re.DOTALL | re.IGNORECASE)
+_RATIONALE_TAG_RE = re.compile(rf"\[(?:{_RAT_NAMES})\](.*?)\[/(?:{_RAT_NAMES})\]",
+                               re.DOTALL | re.IGNORECASE)
+_OPTIONS_TAG_RE = re.compile(rf"\[(?:{_OPT_NAMES})\](.*?)\[/(?:{_OPT_NAMES})\]",
+                             re.DOTALL | re.IGNORECASE)
+_MOVE_TAG_RE = re.compile(rf"\[(?:{_MOVE_NAMES})\](.*?)\[/(?:{_MOVE_NAMES})\]",
+                          re.DOTALL | re.IGNORECASE)
+_STRAY_TAG_RE = re.compile(
+    rf"\[/?(?:{_MSG_NAMES}|{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES})\]", re.IGNORECASE
+)
+# Last resort for the no-tags branch: a rationale/options/move block that opened
+# but never closed would otherwise stay in the chat message.
+_TRAILING_RATIONALE_RE = re.compile(
+    rf"\[(?:{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES})\].*$", re.DOTALL | re.IGNORECASE
+)
+
+# Structured self-report of what a turn DOES, emitted by the agent itself in a
+# [MOVE] block (see system_prompt's OUTPUT FORMAT).
+#
+# Ported from feature/dialogue-naturalness, WITHOUT that branch's consumers.
+# There it also fed a challenge_tracker that steered the consensus warning and
+# the convergence gate; bringing that here would change speaker scheduling and
+# break this fork's fidelity to agora2/backend-dev. So the tag is emitted and
+# logged only: the move lands in {room}_rationale.jsonl as a "move" event, which
+# is what map_facts.py joins against to build the reply graph deterministically.
+# Nothing in the deliberation loop reads it.
+AGENT_MOVES = ("challenge", "extend", "new_point", "concede", "clarify")
+
+
+def normalize_move(body: str) -> str:
+    """First recognised move keyword in a [MOVE] block body, or "".
+
+    Tolerant on purpose: the block may carry an @target ("challenge @ChatbotB"),
+    stray punctuation, or a hyphen/space variant ("new point"). Anything that
+    does not resolve to a known move is treated as no self-report at all, so a
+    garbled block degrades to nothing instead of mislabelling the turn.
+
+    NOTE for map_facts.py: this scans AGENT_MOVES in TUPLE order, not text
+    order, so 'extend @ChatbotB, not a challenge' resolves to 'challenge'. That
+    is why the fact layer parses the kind off the first whitespace token of
+    move_detail instead of calling this.
+    """
+    low = (body or "").strip().lower().replace("-", "_").replace(" ", "_")
+    for move in AGENT_MOVES:
+        if move in low:
+            return move
+    return ""
+
+
+def _parse_options_block(raw_body: str) -> list:
+    """Parse OPTIONS JSON array into [{id, label}, ...] (2–6 items)."""
+    body = (raw_body or "").strip()
+    if not body:
+        return []
+    data = None
+    try:
+        data = json.loads(body)
+    except Exception:
+        start, end = body.find("["), body.rfind("]")
+        if start != -1 and end > start:
+            try:
+                data = json.loads(body[start : end + 1])
+            except Exception:
+                data = None
+    if not isinstance(data, list):
+        return []
+    out = []
+    seen = set()
+    for i, item in enumerate(data):
+        if isinstance(item, str):
+            label = item.strip()
+            oid = f"o{i + 1}"
+        elif isinstance(item, dict):
+            label = str(item.get("label") or item.get("text") or item.get("name") or "").strip()
+            oid = str(item.get("id") or f"o{i + 1}").strip() or f"o{i + 1}"
+        else:
+            continue
+        if not label or oid in seen:
+            continue
+        seen.add(oid)
+        out.append({"id": oid, "label": label[:48]})
+        if len(out) >= 6:
+            break
+    return out if len(out) >= 2 else []
 
 
 def parse_agent_turn(raw: str) -> dict:
     """
-    Splits one LLM generation into the chat-visible message and the private
-    rationale. Both fields come from the SAME generation (never a second call).
+    Splits one LLM generation into the chat-visible message, optional OPTIONS
+    chips payload, and the private rationale. Both MESSAGE/RATIONALE come from
+    the SAME generation (never a second call).
     Tolerant by design: a malformed output must never crash a turn — if the
     tags are missing, the whole raw text becomes the message (stray tag tokens
     stripped so they can't leak into the chat log) and rationale stays empty.
@@ -985,18 +1268,79 @@ def parse_agent_turn(raw: str) -> dict:
     raw = (raw or "").strip()
     msg_match = _MESSAGE_TAG_RE.search(raw)
     rat_match = _RATIONALE_TAG_RE.search(raw)
+    opt_match = _OPTIONS_TAG_RE.search(raw)
+    move_match = _MOVE_TAG_RE.search(raw)
 
     if msg_match:
         message = msg_match.group(1).strip()
     else:
-        message = _STRAY_TAG_RE.sub("", raw).strip()
+        # No usable MESSAGE block. Drop anything from an opening RATIONALE/OPTIONS
+        # tag onward first — otherwise a half-formed generation publishes private
+        # blocks — then clear any stray tag tokens from what is left.
+        message = _STRAY_TAG_RE.sub("", _TRAILING_RATIONALE_RE.sub("", raw)).strip()
 
     rationale = rat_match.group(1).strip() if rat_match else ""
     words = rationale.split()
     if len(words) > RATIONALE_MAX_WORDS:
         rationale = " ".join(words[:RATIONALE_MAX_WORDS]) + "..."
 
-    return {"message": message, "rationale": rationale}
+    options = _parse_options_block(opt_match.group(1)) if opt_match else []
+    # Strip a leaked OPTIONS block from the visible message if tags were mangled.
+    if options and _OPTIONS_TAG_RE.search(message):
+        message = _OPTIONS_TAG_RE.sub("", message).strip()
+    # Same for a leaked MOVE block — it is private and must never reach the chat.
+    if _MOVE_TAG_RE.search(message):
+        message = _MOVE_TAG_RE.sub("", message).strip()
+
+    # Missing or unrecognised MOVE degrades to "" — no caller guesses a move.
+    # move_detail keeps the raw body (incl. any @target) for the fact layer.
+    move_body = move_match.group(1).strip() if move_match else ""
+    return {
+        "message": message,
+        "rationale": rationale,
+        "options": options,
+        "move": normalize_move(move_body),
+        "move_detail": " ".join(move_body.split())[:80],
+    }
+
+
+def enforce_no_refusal(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float,
+                       *, create_fn, model: str, max_output_tokens: int,
+                       log_event=None, log_think=None) -> dict:
+    """Catch a bare content refusal, reframe once, drop the turn if it holds."""
+    txt = parsed.get("message", "")
+    if not looks_like_refusal(txt):
+        return parsed
+    if log_event:
+        log_event(agent.key, "refusal_detected", txt[:200])
+    if log_think:
+        log_think("refusal_retry", f"{agent.key}: refusal detected, reframing once")
+    retry_messages = messages + [
+        {"role": "assistant", "content": txt},
+        {"role": "user", "content": (
+            "That was a refusal, and it is not warranted here. This is a deliberation "
+            "among assistants with assigned perspectives; nothing is being decided for "
+            "anyone. The user makes the decision and is simply hearing the considerations "
+            "out loud.\n"
+            "Reply again, in character. Do not instruct the user to do anything and do not "
+            "speak as if the matter is settled — state what your assigned perspective "
+            "weighs, name the trade-off it sees, and leave the choice with the user. "
+            "Keep the required [MESSAGE]/[RATIONALE] output format, tags in English."
+        )},
+    ]
+    retry_raw = create_fn(retry_messages, min(temp + 0.1, 1.4), max_output_tokens)
+    retry_parsed = parse_agent_turn(retry_raw)
+    if retry_parsed.get("message") and not looks_like_refusal(retry_parsed["message"]):
+        if log_think:
+            log_think("refusal_retry", f"{agent.key}: reframed reply accepted")
+        return retry_parsed
+    if log_event:
+        log_event(agent.key, "turn_dropped",
+                  "refusal survived one reframing retry; agent stayed silent this turn")
+    if log_think:
+        log_think("refusal_retry", f"{agent.key}: still refusing — turn dropped")
+    return {"message": "", "rationale": "", "dropped": True}
+
 
 # -------------------------------
 # @-mention parsing
@@ -1007,7 +1351,6 @@ def parse_agent_turn(raw: str) -> dict:
 # -------------------------------
 
 MAX_MENTIONS_PER_MESSAGE = 4
-
 
 def build_mention_patterns(agent_keys: List[str], name_map: Dict[str, str]) -> Dict[str, str]:
     """Maps every accepted @-alias (lowercased) to its canonical agent key:
@@ -1068,7 +1411,6 @@ def run_user_turn(
     known_context: str = "",
     domain_background: str = "",
     session_memory_text: str = "",
-    preloaded_knowledge_text: str = "",
     intake_data: Optional[dict] = None,
     scenario_type: Optional[str] = None,
     lang: str = "en",
@@ -1081,6 +1423,8 @@ def run_user_turn(
     prefer_agents: Optional[float] = None,
     novelty_threshold: Optional[float] = None,
     novelty_window: int = 10,
+    self_novelty_threshold: Optional[float] = None,
+    self_novelty_window: int = 6,
     persist_chat: Optional[Callable[[dict], None]] = None,
     create_response_with_client: Optional[CreateFn] = None,
 ) -> Dict[str, Any]:
@@ -1089,10 +1433,17 @@ def run_user_turn(
     prefer = float(
         prefer_agents if prefer_agents is not None else os.getenv("AGORA_PREFER_AGENTS", "0.85")
     )
+    # CLI argparse default is 0.5 — keep HTTP env fallback aligned (CLI-faithful).
     nov_th = float(
         novelty_threshold
         if novelty_threshold is not None
-        else os.getenv("AGORA_NOVELTY_THRESHOLD", "0.35")
+        else os.getenv("AGORA_NOVELTY_THRESHOLD", "0.5")
+    )
+    # Second novelty scope (self-repetition); CLI argparse default is 0.35.
+    self_nov_th = float(
+        self_novelty_threshold
+        if self_novelty_threshold is not None
+        else os.getenv("AGORA_SELF_NOVELTY_THRESHOLD", "0.35")
     )
 
     key_to_agent = agents
@@ -1116,14 +1467,26 @@ def run_user_turn(
                 "emotion", "Joy"
             ),
             "stance": (session.get("agent_runtime_config") or {}).get(slot, {}).get("stance"),
+            # Setup-hint knowledge belongs to exactly one agent.  A global
+            # fallback here would make another agent's matched card appear in
+            # this agent's system prompt when its own hint has no match.
             "preloaded_knowledge": (
                 (session.get("agora2_specs") or {}).get(slot) or {}
-            ).get("preloaded_knowledge")
-            or preloaded_knowledge_text
-            or "",
+            ).get("preloaded_knowledge") or "",
         }
         for slot in agent_keys
     }
+
+    # Short "represents X" phrase per agent, for the generated cast list in the
+    # prompt roster (CLI-faithful). Empty for scenarios that use no stances.
+    stance_labels: Dict[str, str] = {}
+    if HAVE_STANCE:
+        for key in agent_keys:
+            label = get_stance_label(
+                scenario_type, agent_configs.get(key, {}).get("stance"), lang
+            )
+            if label:
+                stance_labels[key] = label
 
     moderator_state = session.setdefault(
         "moderator_state", {"mode": None, "state": "Exploration", "stall": False, "goal": ""}
@@ -1142,6 +1505,7 @@ def run_user_turn(
     session.setdefault("latest_snippet_id", {k: None for k in agent_keys})
     session.setdefault("snippet_counters", {k: 0 for k in agent_keys})
     session.setdefault("agent_knowledge_hit_history", {k: [] for k in agent_keys})
+    session.setdefault("spoke_counts", {k: 0 for k in agent_keys})
     # Ensure keys exist even if session was created with a fixed A/B/C dict.
     for k in agent_keys:
         session["memory_snippets"].setdefault(k, [])
@@ -1150,11 +1514,19 @@ def run_user_turn(
         session["latest_snippet_id"].setdefault(k, None)
         session["snippet_counters"].setdefault(k, 0)
         session["agent_knowledge_hit_history"].setdefault(k, [])
+        session["spoke_counts"].setdefault(k, 0)
+    # ChatAgent objects are rebuilt per HTTP request, so their spoke counters
+    # start at 0 every turn — but Admin-1's STATS line ("Spoke counts: ...") is
+    # meant to describe the whole session (CLI keeps one ChatAgent per session).
+    # Restore the session-lifetime counts before scheduling.
+    for a in agent_list:
+        a.spoke = int(session["spoke_counts"].get(a.key, 0))
 
     stance_knowledge_data = load_stance_knowledge() if HAVE_STANCE_KNOWLEDGE else None
 
     transcript_lines = history_to_transcript_lines(session.get("history") or [])
     responses: List[dict] = []
+    pending_knowledge_matches: Dict[str, dict] = {}
     room_id = session.get("room_id")
 
     def _append_jsonl(fp, obj: dict) -> None:
@@ -1296,32 +1668,49 @@ def run_user_turn(
         if s.get("goal"):
             lines.append(f"Current goal: {s['goal']}")
         lines.append(f"Your task this turn: {assignment}")
+
+        # The generic task above is keyed on (state, mode, decision_style), so all
+        # agents get one of the same SHAPE. This line is keyed on STANCE, and is
+        # what makes the three voices produce structurally different content
+        # instead of three phrasings of the same evaluation dimension.
+        if HAVE_STANCE:
+            focus = get_stance_phase_focus(
+                scenario_type, agent_configs.get(agent_key, {}).get("stance"),
+                lookup_state, lang)
+            if focus:
+                lines.append(f"What only YOU should be putting on the table this turn: {focus}")
+
         budget = QUESTION_BUDGET.get(lookup_state)
-        if budget and not s.get("stall") and s.get("state") != CONCLUDED_STATE:
+        if budget and not s.get("stall"):
             lines.append(budget)
         if known_context or domain_background:
+            # The examples have to match the scenario (CLI-faithful): a fixed
+            # employment wording pointed parent_child sessions at details that
+            # do not exist in their KNOWN USER CONTEXT.
+            anchor_examples = ANCHOR_EXAMPLES.get(
+                scenario_type, "a stated constraint, the deadline, a named option, a ranked priority")
             lines.append(
                 "Anchor this message to the user's actual case: name at least one specific detail "
-                "from KNOWN USER CONTEXT. A statement that would read the same for any user is not "
-                "a contribution. Do not re-ask for anything already listed there as filled in."
+                f"from KNOWN USER CONTEXT ({anchor_examples}). A statement that would read the same for "
+                "any user is not a contribution. "
+                "Do not re-ask for anything already listed there as filled in. "
+                "If DOMAIN BACKGROUND is present, use it only to support analysis; it does not "
+                "replace understanding the user's actual, specific situation, and it must not be "
+                "treated as a source of concrete numbers or facts beyond what it states."
             )
         recent = [ln for ln in transcript_lines[-6:] if not ln.lower().startswith("user:")]
         if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
             lines.append(
                 "CONSENSUS WARNING: the last several messages contained no real disagreement. "
                 "Before adding anything, state plainly where your stance differs from where the "
-                "group is heading, and what that direction costs the interest you represent."
+                "group is heading, and what that direction costs the interest you represent. "
+                "If you genuinely agree, name the specific sacrifice you are accepting to get there."
             )
-        try:
-            from stance import get_convergence_weight_hint
-
-            if lookup_state == "Convergence":
-                stance = agent_configs.get(agent_key, {}).get("stance")
-                weight_hint = get_convergence_weight_hint(scenario_type, intake_data, stance, lang)
-                if weight_hint:
-                    lines.append(f"Stance weighting for this closing stage: {weight_hint}")
-        except Exception:
-            pass
+        if HAVE_STANCE and s.get("state") == "Convergence":
+            stance = agent_configs.get(agent_key, {}).get("stance")
+            weight_hint = get_convergence_weight_hint(scenario_type, intake_data, stance, lang)
+            if weight_hint:
+                lines.append(f"Stance weighting for this closing stage: {weight_hint}")
 
         # Stance Knowledge — DYNAMIC channel + related_cards A-OR-B expand
         # (repeat hit of same card, or Convergence / Concluded).
@@ -1331,6 +1720,10 @@ def run_user_turn(
             last_user_message = (
                 transcript_lines[li].split(":", 1)[1].strip() if li is not None else ""
             )
+            # A phase context can be rebuilt after a dropped/retried turn. Clear
+            # any earlier candidate first so a future message never inherits a
+            # stale badge from a generation that was not emitted.
+            pending_knowledge_matches.pop(agent_key, None)
             sk_block = resolve_dynamic_stance_knowledge(
                 scenario_type=scenario_type,
                 stance=stance,
@@ -1339,28 +1732,48 @@ def run_user_turn(
                 knowledge=stance_knowledge_data,
                 hit_history=session["agent_knowledge_hit_history"],
                 agent_key=agent_key,
-                deliberation_state=lookup_state,
+                deliberation_state=s.get("state", "Exploration"),
+                on_match=lambda hit: pending_knowledge_matches.__setitem__(agent_key, hit),
             )
             if sk_block:
                 lines.append(sk_block)
         return "\n".join(lines)
 
-    def append_agent(agent: "ChatAgent", txt: str) -> None:
+    def append_agent(agent: "ChatAgent", txt: str, options: Optional[list] = None) -> None:
         txt = sanitize_single_message(txt, agent.name, all_agent_names)
+        opts = options if isinstance(options, list) and len(options) >= 2 else None
+        msg_id = f"m-{uuid.uuid4().hex[:12]}"
         msg = {
+            "id": msg_id,
             "chat_room_id": room_id,
             "time": now_local_iso(),
             "character": agent.name,
             "txt": txt,
         }
+        if opts:
+            msg["options"] = opts
+        knowledge = pending_knowledge_matches.pop(agent.key, None)
+        if knowledge:
+            msg["knowledge"] = knowledge
         session.setdefault("history", []).append(msg)
         _append_jsonl(session.get("chat_fp"), msg)
         if persist_chat:
             persist_chat(msg)
         transcript_lines.append(f"{agent.name}: {txt}")
-        responses.append({"agent_key": agent.key, "agent": agent.name, "message": txt})
+        resp = {
+            "agent_key": agent.key,
+            "agent": agent.name,
+            "message": txt,
+            "message_id": msg_id,
+        }
+        if opts:
+            resp["options"] = opts
+        if knowledge:
+            resp["knowledge"] = knowledge
+        responses.append(resp)
         session.setdefault("has_spoken", {})[agent.key] = True
         agent.spoke += 1
+        session.setdefault("spoke_counts", {})[agent.key] = agent.spoke
 
     def run_moderator(allow_state_change: bool = True) -> None:
         history = clamp_history(transcript_lines, max_history_chars)
@@ -1410,6 +1823,26 @@ def run_user_turn(
             )
             parsed = dict(parsed)
             parsed["state"] = prev_state
+
+        # Convergence gate (deterministic, not asked of the LLM — CLI-faithful):
+        # the group must not close before some substantive disagreement is on
+        # record; otherwise it is held at Structuring with an explicit
+        # instruction to surface the conflict.
+        if parsed["state"] == "Convergence" and prev_state not in ("Convergence", CONCLUDED_STATE):
+            agent_lines = [ln for ln in transcript_lines if not ln.lower().startswith("user:")]
+            if not any(has_disagreement(ln) for ln in agent_lines):
+                log_moderator(
+                    "admin3_convergence_gated",
+                    f"{prev_state} -> Convergence withheld: no substantive disagreement "
+                    f"on record yet across {len(agent_lines)} agent turns.",
+                )
+                parsed = dict(parsed)
+                parsed["state"] = "Structuring"
+                parsed["goal"] = (
+                    "Before closing: no one has actually disagreed yet. Each agent must "
+                    "name where its own stance conflicts with where the group is heading, "
+                    "and what that direction costs the interest it represents."
+                )
 
         if (
             parsed["state"] == "Convergence"
@@ -1464,28 +1897,68 @@ def run_user_turn(
             run_moderator(allow_state_change=allow)
 
     def enforce_novelty(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float) -> dict:
+        """Two-scope novelty guard (CLI-faithful): group (vs the recent window,
+        all speakers) and self (vs this agent's OWN last N messages). Failing
+        EITHER triggers one corrective retry; the retry must clear BOTH scopes
+        or the turn is dropped. nov_th <= 0 is the master off switch for the
+        whole guard; self_nov_th <= 0 turns off only the self scope."""
         txt = parsed.get("message") or ""
         if nov_th <= 0 or not transcript_lines or not txt:
             return parsed
-        prior = transcript_lines[-novelty_window:]
-        ratio = novelty_ratio(txt, prior)
-        if ratio >= nov_th:
+
+        own_prefix = f"{agent.name}: "
+
+        def _scores(message: str) -> tuple:
+            """(group_ratio, self_ratio). self_ratio is 1.0 until this agent
+            has spoken at least once (nothing of its own to repeat yet)."""
+            if not message:
+                return 0.0, 0.0
+            group = novelty_ratio(message, transcript_lines[-novelty_window:])
+            own = [ln[len(own_prefix):] for ln in transcript_lines
+                   if ln.startswith(own_prefix)][-self_novelty_window:]
+            return group, (novelty_ratio(message, own) if own else 1.0)
+
+        def _failing(group: float, own: float):
+            """Which scope (if any) this message fails, as a short label."""
+            if nov_th > 0 and group < nov_th:
+                return "group"
+            if self_nov_th > 0 and own < self_nov_th:
+                return "self"
+            return None
+
+        ratio, self_ratio = _scores(txt)
+        scope = _failing(ratio, self_ratio)
+        if scope is None:
             return parsed
+
         log_thinking(
             "novelty_retry",
-            f"{agent.key}: novelty={ratio:.2f} < {nov_th:.2f}, retrying once",
+            f"{agent.key}: novelty group={ratio:.2f}/{nov_th:.2f} "
+            f"self={self_ratio:.2f}/{self_nov_th:.2f} — failed on {scope}, retrying once",
         )
+
+        # Name the actual failure, so the retry fixes the right problem: the
+        # generic "the group already has this" reads as wrong (and gets
+        # ignored) when what the agent really did was repeat ITSELF.
+        if scope == "self":
+            diagnosis = ("That message re-states a point YOU have already made earlier in this "
+                         "conversation, just worded differently. Rephrasing your own earlier "
+                         "argument is not a contribution. Replace it entirely.\n")
+        else:
+            diagnosis = ("That message restates points the group already has on the table and adds "
+                         "nothing new. Replace it entirely.\n")
+
         retry_messages = messages + [
             {"role": "assistant", "content": txt},
             {
                 "role": "user",
                 "content": (
-                    "That message restates points the group already has on the table and adds nothing new. "
-                    "Replace it entirely.\n"
-                    "Contribute exactly one of: a new evaluation dimension, a specific fact from KNOWN USER "
-                    "CONTEXT that nobody has cited yet, a concrete comparison of two options along one named "
-                    "dimension, an elimination with its reason, or a direct challenge to a specific claim "
-                    "someone made.\n"
+                    diagnosis +
+                    "Contribute exactly one of: a concrete comparison of two named options along one "
+                    "dimension, an elimination with its reason, a direct challenge to a specific claim "
+                    "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
+                    "— only if the concrete options are not yet on the table — a new evaluation "
+                    "dimension.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
                     "whose point you are deferring to. Either way, do not ask a question this time. "
                     "Keep the required [MESSAGE]/[RATIONALE] output format."
@@ -1494,15 +1967,21 @@ def run_user_turn(
         ]
         retry_raw = create(client_chat, retry_messages, min(temp + 0.15, 1.4), max_output_tokens)
         retry_parsed = parse_agent_turn(retry_raw)
-        retry_ratio = (
-            novelty_ratio(retry_parsed["message"], prior) if retry_parsed.get("message") else 0.0
-        )
-        if retry_ratio >= nov_th:
-            log_thinking("novelty_retry", f"{agent.key}: retry novelty={retry_ratio:.2f} (kept)")
+        retry_ratio, retry_self = _scores(retry_parsed.get("message") or "")
+
+        # The retry is the last chance: it must clear BOTH scopes on its own,
+        # or the agent says nothing at all (CLI-faithful drop rule).
+        retry_scope = _failing(retry_ratio, retry_self)
+        if retry_scope is None:
+            log_thinking(
+                "novelty_retry",
+                f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f} (kept)",
+            )
             return retry_parsed
         log_thinking(
             "novelty_retry",
-            f"{agent.key}: retry novelty={retry_ratio:.2f}, still below {nov_th:.2f} — turn dropped",
+            f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "
+            f"still failing {retry_scope} — turn dropped",
         )
         return {"message": "", "rationale": "", "dropped": True}
 
@@ -1542,6 +2021,7 @@ def run_user_turn(
                         lang=lang,
                         session_memory_text=session_memory_text,
                         preloaded_knowledge_text=pk,
+                        stance_labels=stance_labels,
                     )
                     + get_memory_context(burst_agent.key),
                 },
@@ -1561,7 +2041,13 @@ def run_user_turn(
                     f"{burst_agent.key} mentioned {agent_mentions} "
                     f"(soft cue, not routed, admin still decides next speaker)",
                 )
-            append_agent(burst_agent, txt)
+            append_agent(burst_agent, txt, options=parsed.get("options") or None)
+            # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
+            # the chat row. map_facts.py joins the two on (timestamp, speaker) at
+            # one-second granularity, so anything between these two writes risks
+            # straddling a second boundary and orphaning the event.
+            if parsed.get("move"):
+                log_agent_event(burst_agent.key, "move", parsed.get("move_detail") or parsed["move"])
             session["last_speaker_key"] = burst_agent.key
             maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
         moderator_state["stall"] = False
@@ -1614,6 +2100,7 @@ def run_user_turn(
                     lang=lang,
                     session_memory_text=session_memory_text,
                     preloaded_knowledge_text=pk,
+                    stance_labels=stance_labels,
                 )
                 + get_memory_context(agent.key),
             },
@@ -1621,12 +2108,24 @@ def run_user_turn(
         ]
         raw = create(client_chat, messages, effective_temp, max_output_tokens)
         parsed = parse_agent_turn(raw)
-        parsed = enforce_novelty(agent, messages, parsed, effective_temp)
+        parsed = enforce_no_refusal(
+            agent,
+            messages,
+            parsed,
+            effective_temp,
+            create_fn=lambda msgs, t, mt: create(client_chat, msgs, t, mt),
+            model=model,
+            max_output_tokens=max_output_tokens,
+            log_event=log_agent_event,
+            log_think=log_thinking,
+        )
+        if not parsed.get("dropped"):
+            parsed = enforce_novelty(agent, messages, parsed, effective_temp)
         if parsed.get("dropped"):
             log_agent_event(
                 agent.key,
                 "turn_dropped",
-                "novelty guard rejected both the original and the retry; "
+                "refusal or novelty guard rejected the turn; "
                 "agent stayed silent this turn",
             )
             maybe_run_moderator()
@@ -1643,7 +2142,13 @@ def run_user_turn(
                 f"{agent.key} mentioned {agent_mentions} "
                 f"(soft cue, not routed, admin still decides next speaker)",
             )
-        append_agent(agent, txt)
+        append_agent(agent, txt, options=parsed.get("options") or None)
+        # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
+        # the chat row. map_facts.py joins the two on (timestamp, speaker) at
+        # one-second granularity, so anything between these two writes risks
+        # straddling a second boundary and orphaning the event.
+        if parsed.get("move"):
+            log_agent_event(agent.key, "move", parsed.get("move_detail") or parsed["move"])
         maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
         if stall_triggered:
             stall_burst(trigger_key=agent.key)
@@ -1767,8 +2272,9 @@ def run_user_turn(
             )
             force_intro = not bool((session.get("has_spoken") or {}).get(key))
             agent_turn(key_to_agent[key], force_intro=force_intro, mention_trigger=True)
-            if moderator_state.get("state") == CONCLUDED_STATE:
-                break
+            # CLI-faithful: queued mentions are honored even if the moderator
+            # latched to Concluded mid-burst — the loop re-checks the queue
+            # first, and only an EMPTY queue lets Concluded stop the burst.
             continue
 
         if moderator_state.get("state") == CONCLUDED_STATE:
@@ -1842,6 +2348,20 @@ def main():
                     help="How many recent transcript lines the novelty check compares against. Short "
                          "enough that a deliberate callback to something said 20 turns ago isn't "
                          "penalized. Default 10")
+    ap.add_argument("--self_novelty_threshold", type=float, default=0.35,
+                    help="Second novelty scope: how much of a reply must be new relative to THIS "
+                         "agent's own recent messages (not the whole room). Catches cross-turn "
+                         "self-repetition, which --novelty_threshold structurally cannot: with 3 "
+                         "agents an agent's own turns are only every third line, so a 10-line "
+                         "all-speaker window holds just 2-3 of them and anything older could be "
+                         "re-served in new wording unflagged. Lower than --novelty_threshold on "
+                         "purpose — scoring one voice against its own accumulated vocabulary yields "
+                         "structurally lower ratios. 0 disables this scope; --novelty_threshold 0 "
+                         "still disables the whole guard including this one. Default 0.35")
+    ap.add_argument("--self_novelty_window", type=int, default=6,
+                    help="How many of the agent's OWN past messages the self-novelty scope compares "
+                         "against. Bounded so an agent isn't scored against an ever-growing pile of "
+                         "its own vocabulary (which would eventually reject everything). Default 6")
 
     # ---- Scenario information layer (Profile + Intake + Domain Background) ----
     ap.add_argument("--scenario_type", default=None, choices=["employment", "parent_child"],
@@ -1989,10 +2509,13 @@ def main():
     # agent_configs[key]["stance"] stays unset and the block is skipped.
     if HAVE_STANCE and stance_enabled(args.scenario_type):
         for key in agent_keys:
-            agent_configs[key]["stance"] = assign_stance(args.scenario_type, key)
+            agent_configs[key]["stance"] = assign_stance(args.scenario_type, key, list(agent_configs))
     elif args.scenario_type and not HAVE_STANCE:
         print("WARNING: --scenario_type was set but stance.py could not be imported; "
               "continuing without the stance dimension.", file=sys.stderr)
+
+    # Runs here, not in validate_agent_configs, because it keys on the stance.
+    validate_persona_uniqueness(agent_configs, args.info)
 
     # Stance Knowledge — PRELOADED channel: each agent's optional info.jsonl
     # `hint` is matched against the knowledge base ONCE here, and the matched card
@@ -2005,7 +2528,18 @@ def main():
         agent_configs[key]["preloaded_knowledge"] = stance_knowledge_on_hit(
             args.scenario_type, agent_configs[key].get("stance"),
             hint, args.lang, stance_knowledge_data, include_header=False,
+            allow_soft=True,  # a setup hint is short by design ("跳槽", "手机")
         ) if hint else ""
+
+    # Short "represents X" phrase per agent, for the generated cast list in the
+    # prompt roster. Empty for scenarios that use no stances.
+    stance_labels: Dict[str, str] = {}
+    if HAVE_STANCE:
+        for key in agent_keys:
+            label = get_stance_label(args.scenario_type,
+                                     agent_configs.get(key, {}).get("stance"), args.lang)
+            if label:
+                stance_labels[key] = label
 
     agents: List[ChatAgent] = [
         ChatAgent(k, f"Chatbot{k}", role_texts[k]) for k in agent_keys
@@ -2141,15 +2675,31 @@ def main():
             lines.append(f"Current goal: {s['goal']}")
         lines.append(f"Your task this turn: {assignment}")
 
+        # The generic task above is keyed on (state, mode, decision_style), so all
+        # agents get one of the same SHAPE. This line is keyed on STANCE, and is
+        # what makes the three voices produce structurally different content
+        # instead of three phrasings of the same evaluation dimension.
+        if HAVE_STANCE:
+            focus = get_stance_phase_focus(
+                args.scenario_type, agent_configs.get(agent_key, {}).get("stance"),
+                lookup_state, args.lang)
+            if focus:
+                lines.append(f"What only YOU should be putting on the table this turn: {focus}")
+
         budget = QUESTION_BUDGET.get(lookup_state)
         if budget and not s["stall"]:
             lines.append(budget)
 
         if known_context or domain_background:
+            # The examples have to match the scenario. They used to be hardcoded
+            # to the employment case ("salary/level/location, the career stage"),
+            # which in a parent_child session pointed the model at details that
+            # do not exist in its KNOWN USER CONTEXT.
+            anchor_examples = ANCHOR_EXAMPLES.get(
+                args.scenario_type, "a stated constraint, the deadline, a named option, a ranked priority")
             lines.append(
                 "Anchor this message to the user's actual case: name at least one specific detail "
-                "from KNOWN USER CONTEXT (a ranked priority, the deadline, a named option and its "
-                "salary/level/location, the career stage). A statement that would read the same for "
+                f"from KNOWN USER CONTEXT ({anchor_examples}). A statement that would read the same for "
                 "any user is not a contribution. "
                 "Do not re-ask for anything already listed there as filled in. "
                 "If DOMAIN BACKGROUND is present, use it only to support analysis; it does not "
@@ -2386,6 +2936,25 @@ def main():
             parsed = dict(parsed)
             parsed["state"] = prev_state
 
+        # Convergence gate (deterministic, not asked of the LLM): three agents
+        # holding three opposed stances must not close before they have actually
+        # disagreed even once. Without this the group "converges" on turn 5 by
+        # agreeing with each other — which is the premature-convergence failure,
+        # and also what precedes the model refusing a turn outright once the chat
+        # slides into telling the user what to do about an already-settled choice.
+        # Held at Structuring with an explicit instruction to surface the conflict.
+        if parsed["state"] == "Convergence" and prev_state not in ("Convergence", CONCLUDED_STATE):
+            agent_lines = [ln for ln in transcript_lines if not ln.startswith("user:")]
+            if not any(has_disagreement(ln) for ln in agent_lines):
+                log_moderator("admin3_convergence_gated",
+                              f"{prev_state} -> Convergence withheld: no substantive disagreement "
+                              f"on record yet across {len(agent_lines)} agent turns.")
+                parsed = dict(parsed)
+                parsed["state"] = "Structuring"
+                parsed["goal"] = ("Before closing: no one has actually disagreed yet. Each agent must "
+                                  "name where its own stance conflicts with where the group is heading, "
+                                  "and what that direction costs the interest it represents.")
+
         # Terminal-state latch (deterministic, not asked of the LLM): the group
         # reaching Convergence twice in a row with no user input in between
         # means the discussion is finished, not that it needs another round of
@@ -2477,7 +3046,8 @@ def main():
                     known_context=known_context, domain_background=domain_background,
                     stance_text=get_stance_block(burst_agent.key), lang=args.lang,
                     session_memory_text=session_memory_text,
-                    preloaded_knowledge_text=agent_configs[burst_agent.key].get("preloaded_knowledge", ""))
+                    preloaded_knowledge_text=agent_configs[burst_agent.key].get("preloaded_knowledge", ""),
+                    stance_labels=stance_labels)
                     + get_memory_context(burst_agent.key)},
                 {"role": "user", "content": user_prompt},
             ]
@@ -2497,6 +3067,12 @@ def main():
                                 f"(soft cue, not routed, admin still decides next speaker)")
             print(f"{burst_agent.name}> {txt}")
             log_chat(burst_agent.name, txt)
+            # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
+            # the chat row. map_facts.py joins the two on (timestamp, speaker) at
+            # one-second granularity, so anything between these two writes risks
+            # straddling a second boundary and orphaning the event.
+            if parsed.get("move"):
+                log_agent_event(burst_agent.key, "move", parsed.get("move_detail") or parsed["move"])
             last_speaker_key = burst_agent.key
             maybe_distill_snippet(burst_agent.key, txt, stall_active=True)
 
@@ -2624,7 +3200,8 @@ def main():
                     known_context=known_context, domain_background=domain_background,
                     stance_text=get_stance_block(agent.key), lang=args.lang,
                     session_memory_text=session_memory_text,
-                    preloaded_knowledge_text=agent_configs[agent.key].get("preloaded_knowledge", ""))
+                    preloaded_knowledge_text=agent_configs[agent.key].get("preloaded_knowledge", ""),
+                    stance_labels=stance_labels)
                     + get_memory_context(agent.key)},
                 {"role": "user", "content": user_prompt},
             ]
@@ -2633,16 +3210,25 @@ def main():
                                   args.max_output_tokens, meta=meta)
             log_generation_meta(agent.key, meta, raw=raw)
             parsed = parse_agent_turn(raw)
-            parsed = enforce_novelty(agent, messages, parsed, effective_temp)
+            parsed = enforce_no_refusal(
+                agent,
+                messages,
+                parsed,
+                effective_temp,
+                create_fn=lambda msgs, t, mt: create_response(args.model, msgs, t, mt),
+                model=args.model,
+                max_output_tokens=args.max_output_tokens,
+                log_event=log_agent_event,
+                log_think=log_thinking,
+            )
+            if not parsed.get("dropped"):
+                parsed = enforce_novelty(agent, messages, parsed, effective_temp)
 
-            # Novelty guard rejected both attempts: the agent contributes
-            # nothing this turn rather than publishing a restatement. The turn
-            # counters stay incremented (the turn was consumed), but spoke is
-            # rolled back since no message was actually contributed.
+            # Refusal / novelty guard rejected: silence is an allowed turn.
             if parsed.get("dropped"):
                 agent.spoke -= 1
                 log_agent_event(agent.key, "turn_dropped",
-                                "novelty guard rejected both the original and the retry; "
+                                "refusal or novelty guard rejected the turn; "
                                 "agent stayed silent this turn")
                 print(f"[SYSTEM] {agent.name} had nothing new to add this turn.")
                 maybe_run_moderator()
@@ -2663,6 +3249,12 @@ def main():
 
             print(f"{agent.name}> {txt}")
             log_chat(agent.name, txt)
+            # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
+            # the chat row. map_facts.py joins the two on (timestamp, speaker) at
+            # one-second granularity, so anything between these two writes risks
+            # straddling a second boundary and orphaning the event.
+            if parsed.get("move"):
+                log_agent_event(agent.key, "move", parsed.get("move_detail") or parsed["move"])
             maybe_distill_snippet(agent.key, txt, stall_active=stall_triggered)
 
             # After the triggering agent speaks, run the burst for remaining agents
@@ -2689,26 +3281,82 @@ def main():
             A returned dict with "dropped": True means the agent stays silent
             this turn — see the end of this function for why keeping a failed
             retry was worse than dropping it.
+
+            TWO SCOPES, because one was not enough. The original check compared
+            only against transcript_lines[-novelty_window:] — the last N lines
+            from ALL speakers. With three agents taking turns, an agent's own
+            previous message is roughly every third line, so a 10-line window
+            held only its own last 2-3 turns. Anything it had argued before that
+            fell out of the window and could be re-served in new wording without
+            ever being flagged — the observed "cross-turn self-repetition". So a
+            message is now scored twice:
+              group : vs the recent window, all speakers  -> echoing the room
+              self  : vs this agent's OWN last N messages -> repeating yourself
+            Failing EITHER triggers the corrective retry. The self scope needs
+            its own, lower threshold: it compares against a single voice's
+            accumulated vocabulary, so its scores run structurally lower than the
+            group scope's and reusing the same number would silence everyone.
             """
             txt = parsed["message"]
-            if args.novelty_threshold <= 0 or not transcript_lines or not txt:
+            if not transcript_lines or not txt:
                 return parsed
-            prior = transcript_lines[-args.novelty_window:]
-            ratio = novelty_ratio(txt, prior)
-            if ratio >= args.novelty_threshold:
+            # --novelty_threshold 0 stays the documented master off switch for the
+            # whole guard (both scopes), so existing "disable novelty" invocations
+            # keep meaning that. --self_novelty_threshold 0 turns off only the
+            # self scope.
+            if args.novelty_threshold <= 0:
+                return parsed
+
+            own_prefix = f"{agent.name}: "
+
+            def _scores(message: str) -> tuple:
+                """(group_ratio, self_ratio). self_ratio is 1.0 until this agent
+                has spoken at least once (nothing of its own to repeat yet)."""
+                if not message:
+                    return 0.0, 0.0
+                group = novelty_ratio(message, transcript_lines[-args.novelty_window:])
+                own = [ln[len(own_prefix):] for ln in transcript_lines
+                       if ln.startswith(own_prefix)][-args.self_novelty_window:]
+                return group, (novelty_ratio(message, own) if own else 1.0)
+
+            def _failing(group: float, own: float):
+                """Which scope (if any) this message fails, as a short label."""
+                if args.novelty_threshold > 0 and group < args.novelty_threshold:
+                    return "group"
+                if args.self_novelty_threshold > 0 and own < args.self_novelty_threshold:
+                    return "self"
+                return None
+
+            ratio, self_ratio = _scores(txt)
+            scope = _failing(ratio, self_ratio)
+            if scope is None:
                 return parsed
 
             log_thinking("novelty_retry",
-                         f"{agent.key}: novelty={ratio:.2f} < {args.novelty_threshold:.2f}, retrying once")
+                         f"{agent.key}: novelty group={ratio:.2f}/{args.novelty_threshold:.2f} "
+                         f"self={self_ratio:.2f}/{args.self_novelty_threshold:.2f} — "
+                         f"failed on {scope}, retrying once")
+
+            # Name the actual failure, so the retry fixes the right problem: the
+            # generic "the group already has this" reads as wrong (and gets
+            # ignored) when what the agent really did was repeat ITSELF.
+            if scope == "self":
+                diagnosis = ("That message re-states a point YOU have already made earlier in this "
+                             "conversation, just worded differently. Rephrasing your own earlier "
+                             "argument is not a contribution. Replace it entirely.\n")
+            else:
+                diagnosis = ("That message restates points the group already has on the table and adds "
+                             "nothing new. Replace it entirely.\n")
+
             retry_messages = messages + [
                 {"role": "assistant", "content": txt},
                 {"role": "user", "content": (
-                    "That message restates points the group already has on the table and adds nothing new. "
-                    "Replace it entirely.\n"
-                    "Contribute exactly one of: a new evaluation dimension, a specific fact from KNOWN USER "
-                    "CONTEXT that nobody has cited yet, a concrete comparison of two options along one named "
-                    "dimension, an elimination with its reason, or a direct challenge to a specific claim "
-                    "someone made.\n"
+                    diagnosis +
+                    "Contribute exactly one of: a concrete comparison of two named options along one "
+                    "dimension, an elimination with its reason, a direct challenge to a specific claim "
+                    "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
+                    "— only if the concrete options are not yet on the table — a new evaluation "
+                    "dimension.\n"
                     "If you genuinely have nothing new, reply with one short sentence saying so and naming "
                     "whose point you are deferring to. Either way, do not ask a question this time. "
                     "Keep the required [MESSAGE]/[RATIONALE] output format."
@@ -2719,22 +3367,24 @@ def main():
                                         min(temp + 0.15, 1.4), args.max_output_tokens, meta=meta)
             log_generation_meta(agent.key, meta, note="novelty retry")
             retry_parsed = parse_agent_turn(retry_raw)
-            retry_ratio = novelty_ratio(retry_parsed["message"], prior) if retry_parsed["message"] else 0.0
+            retry_ratio, retry_self = _scores(retry_parsed["message"])
 
-            # The retry is the last chance: it must clear the threshold on its
-            # own, or the agent says nothing at all. The old rule kept a retry
-            # whenever it merely scored HIGHER than the original — in
-            # logs/316347 that published 0.50 and 0.52 rewrites of 0.00 turns,
-            # i.e. content the guard itself had flagged as recycled, promoted
-            # purely for being less bad. Silence is an allowed turn (the system
-            # prompt says so explicitly); a rephrased restatement is not.
-            if retry_ratio >= args.novelty_threshold:
-                log_thinking("novelty_retry", f"{agent.key}: retry novelty={retry_ratio:.2f} (kept)")
+            # The retry is the last chance: it must clear BOTH scopes on its own,
+            # or the agent says nothing at all. The old rule kept a retry whenever
+            # it merely scored HIGHER than the original — in logs/316347 that
+            # published 0.50 and 0.52 rewrites of 0.00 turns, i.e. content the
+            # guard itself had flagged as recycled, promoted purely for being less
+            # bad. Silence is an allowed turn (the system prompt says so
+            # explicitly); a rephrased restatement is not.
+            retry_scope = _failing(retry_ratio, retry_self)
+            if retry_scope is None:
+                log_thinking("novelty_retry",
+                             f"{agent.key}: retry novelty group={retry_ratio:.2f} "
+                             f"self={retry_self:.2f} (kept)")
                 return retry_parsed
-            best = max(ratio, retry_ratio)
             log_thinking("novelty_retry",
-                         f"{agent.key}: retry novelty={retry_ratio:.2f}, still below "
-                         f"{args.novelty_threshold:.2f} — turn dropped (best={best:.2f})")
+                         f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "
+                         f"still failing {retry_scope} — turn dropped")
             return {"message": "", "rationale": "", "dropped": True}
 
         def admin_choose_next() -> str:

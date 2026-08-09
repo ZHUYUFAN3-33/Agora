@@ -20,7 +20,12 @@ check = _ck.check  # keep the familiar check(name, cond, detail) call site
 # ---------------------------------------------------------------- unit tests
 # 1. parse_agent_turn
 p = aw.parse_agent_turn("[MESSAGE]\nhello there\n[/MESSAGE]\n[RATIONALE]\nbecause reasons\n[/RATIONALE]")
-check("parse: tagged", p == {"message": "hello there", "rationale": "because reasons"}, repr(p))
+# Assert the fields this test is about, not the whole dict. parse_agent_turn has
+# grown product-side keys twice now (options, then move/move_detail) and strict
+# equality turned each addition into a spurious failure here; the tags each key
+# belongs to are covered by test_tag_parsing.py and test_move_tag.py.
+check("parse: tagged",
+      p["message"] == "hello there" and p["rationale"] == "because reasons", repr(p))
 
 p = aw.parse_agent_turn("no tags at all, just text")
 check("parse: untagged fallback", p["message"] == "no tags at all, just text" and p["rationale"] == "", repr(p))
@@ -36,7 +41,8 @@ check("parse: rationale capped at 30 words + ellipsis",
       and "w30" not in p["rationale"], repr(p["rationale"]))
 
 p = aw.parse_agent_turn("")
-check("parse: empty input no crash", p == {"message": "", "rationale": ""}, repr(p))
+check("parse: empty input no crash",
+      p["message"] == "" and p["rationale"] == "" and not p["options"], repr(p))
 
 # 2. mention helpers
 keys5 = ["A", "B", "C", "D", "E"]

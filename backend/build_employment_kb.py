@@ -1,0 +1,485 @@
+# -*- coding: utf-8 -*-
+"""
+build_employment_kb.py
+
+Regenerates background_templates/stance_knowledge/employment.json.
+
+Same revision pattern as build_parent_child_kb.py:
+  - Expanded from 15 -> 29 topic cards upstream, +1 local = 30 (10/10/10 per stance)
+  - Added `tag` field (bilingual short label) for frontend capture
+  - English keywords at parity with Chinese, incl. colloquial forms
+  - related_cards >= 2 per card, cross-stance edges prioritized
+
+Upstream baseline: agora2/backend-dev @ 987c0b0 (29 cards, 9/10/10).
+This fork adds exactly one card, growth_academia_vs_industry_comp, marked
+inline with a LOCAL banner so the next upstream sync can spot it immediately.
+
+Structural rationale for the additions:
+  - growth_centered previously covered only external market positioning
+    (timing, obsolescence, industry outlook, plateau, firm type). The new
+    cards add the internal dimension: how the user predicts their own future
+    satisfaction, what conditions actually produce learning, how portable
+    their capital is, and how a move reshapes their network.
+  - stability_centered previously covered only external risk detection
+    (cycles, layoff signals, buffer, contracts, side income). The new cards
+    add decision-psychology: risk tolerance as a shifting state, perceived
+    vs actual insecurity, sunk cost, loss framing, and reversibility.
+  - life_centered previously covered logistics and health (commute,
+    relocation, burnout, intensity, remote). The new cards add adaptation
+    to income, the partner's career as a coupled constraint, non-work
+    identity, and orientation toward work itself.
+
+Excluded topics (parallel to the parent_child exclusions): workplace
+discrimination and harassment, visa/immigration status, clinical mental
+health diagnosis, and active legal disputes. These require professional
+assessment, and several carry a clear normative position that would break
+the premise that all three stances can legitimately coexist.
+"""
+import json
+import os
+
+Q = "\u201c"
+QQ = "\u201d"
+
+
+def card(id_, tag_zh, tag_en, keywords, zh, en, source, related):
+    return {
+        "id": id_,
+        "tag": {"zh": tag_zh, "en": tag_en},
+        "keywords": keywords,
+        "text": {"zh": zh, "en": en},
+        "source": source,
+        "source_type": "academic",
+        "related_cards": related,
+    }
+
+
+# =========================================================================
+# GROWTH-CENTERED (10 cards: 9 upstream + 1 local)
+# =========================================================================
+
+growth_centered = [
+    card(
+        "growth_affective_forecasting",
+        "对未来满意度的预判", "Forecasting future satisfaction",
+        ["会不会后悔", "以后会不会喜欢", "想象一下", "到时候感觉", "值不值得",
+         "will I regret", "how will I feel", "imagining myself there", "worth it in the end",
+         "picture myself", "second-guessing"],
+        f"人在预测{Q}换了工作以后自己会有多满意{QQ}这件事上，存在系统性偏差：注意力集中在选项之间最显著的差异（薪酬、头衔、地点），而忽略了日常中占比更大、但在比较时不显眼的部分，同时也低估了自己适应新状态的速度。以上是一般性框架，不是具体的行动建议。",
+        f"People show systematic bias when predicting how satisfied they will be after a job change: attention concentrates on the most salient differences between options (pay, title, location) while the larger share of day-to-day experience that is not salient during comparison is neglected, and the speed of one's own adaptation is underestimated. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with affective forecasting research (cf. Wilson & Gilbert, 2005, on affective forecasting and the impact bias); for illustrative/educational use only.",
+        ["life_income_adaptation", "stability_reversibility", "growth_job_change_timing"],
+    ),
+    card(
+        "growth_job_change_timing",
+        "跳槽时机", "Job change timing",
+        ["跳槽时机", "该不该跳槽", "现在换", "待多久", "是不是该走了",
+         "job change timing", "when to switch jobs", "should I leave", "how long to stay",
+         "time to move on", "is now the right time"],
+        f"从职业成长角度评估跳槽时机，一个常见的参考框架是看当前岗位是否还能提供{Q}可衡量的新增能力{QQ}：如果近一年的工作内容高度重复、没有新技能或新责任范围的增长，即使薪酬尚可，也可能已进入成长停滞期。以上是一般性框架，不是具体的行动建议。",
+        f"Evaluating job-change timing from a growth perspective, a common reference framework is whether the current role still provides measurable new capability: if the past year's work has been highly repetitive with no growth in new skills or scope of responsibility, the role may have entered a growth plateau even if compensation remains adequate. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with career development research (cf. Super, 1980, on career stages and developmental tasks); for illustrative/educational use only.",
+        ["growth_promotion_plateau", "growth_skill_obsolescence", "stability_sunk_cost"],
+    ),
+    card(
+        "growth_skill_obsolescence",
+        "技能过时风险", "Skill obsolescence",
+        ["技能过时", "跟不上", "被淘汰", "学不动了", "新技术",
+         "skill obsolescence", "skills outdated", "falling behind", "being replaced",
+         "keeping up with new tools", "obsolete"],
+        "判断自身技能是否面临过时风险，比起看行业新闻，更直接的信号是观察本行业近期招聘要求的变化：如果新增岗位持续要求你不具备的技能，而你目前的核心技能在新招聘中出现频率下降，这是相对具体的预警信号。以上是一般性框架，不是具体的行动建议。",
+        "Assessing whether one's skills risk becoming obsolete is often better done by observing recent shifts in job requirements within the field than by reading industry news: if new postings increasingly require skills one lacks while one's current core skills appear less frequently, that is a relatively concrete warning sign. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with human capital and career self-management research (cf. Bandura, 1997, on self-efficacy in occupational development); for illustrative/educational use only.",
+        ["growth_industry_outlook", "growth_specialist_generalist"],
+    ),
+    card(
+        "growth_industry_outlook",
+        "行业前景", "Industry outlook",
+        ["行业前景", "夕阳行业", "行业不行了", "还有前途吗", "赛道",
+         "industry outlook", "declining industry", "dying field", "future of this industry",
+         "is this sector growing", "long-term prospects"],
+        "评估行业前景时，一个常见的误区是只看行业整体规模是否增长，而忽略同一行业内部不同细分方向的前景可能差异很大：整体收缩的行业里仍可能存在增长的细分领域，反之亦然。以上是一般性框架，不是具体的行动建议。",
+        "A common pitfall in assessing industry outlook is looking only at whether the industry's overall size is growing, while overlooking that sub-segments within the same industry can differ substantially: a growing sub-segment can exist inside an overall contracting industry, and vice versa. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with labor economics research on sectoral employment change; for illustrative/educational use only.",
+        ["stability_industry_cyclical_risk", "growth_skill_obsolescence"],
+    ),
+    card(
+        "growth_promotion_plateau",
+        "晋升瓶颈", "Promotion plateau",
+        ["晋升瓶颈", "升不上去", "卡住了", "没位置", "看不到头",
+         "promotion plateau", "stuck at this level", "no room to grow", "career stagnation",
+         "passed over", "hit a ceiling"],
+        f"晋升瓶颈的成因，文献中常区分为{Q}结构性瓶颈{QQ}（组织层级有限、位置本身稀缺）与{Q}能力性瓶颈{QQ}（当前能力尚未达到晋升要求）。两者需要不同的应对：前者可能需要换环境，后者需要针对性补足。以上是一般性框架，不是具体的行动建议。",
+        f"Causes of a promotion plateau are commonly distinguished in the literature between structural plateauing (limited hierarchy, scarce positions) and content plateauing (current capability not yet meeting requirements). These call for different responses: the former may require changing environments, the latter targeted development. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with career plateau research (cf. Ference, Stoner, & Warren, 1977, on managerial career plateauing); for illustrative/educational use only.",
+        ["growth_job_change_timing", "growth_network_effects"],
+    ),
+    card(
+        "growth_startup_vs_corporate",
+        "公司类型选择", "Firm type trade-off",
+        ["创业公司", "大厂", "小公司还是大公司", "初创", "稳定大企业",
+         "startup", "big company", "large firm or startup", "early-stage company",
+         "corporate versus startup", "small company"],
+        f"在成长导向下比较创业公司与成熟大企业，一个常被忽视的维度是{Q}成长的可验证性{QQ}：大企业的成长路径通常有更明确的评估标准与外部认可（头衔、履历可读性），创业公司的成长可能更实质但更难向外部证明。这个权衡取决于个人对两者的相对重视程度。以上是一般性框架，不是具体的行动建议。",
+        f"Comparing startups with established firms from a growth-oriented lens, an often-overlooked dimension is the verifiability of growth: growth paths at larger firms typically carry clearer evaluation standards and external legibility (titles, resume readability), whereas growth at a startup may be more substantive but harder to demonstrate externally. The trade-off depends on how one weighs these against each other. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with career capital and labor market signaling research (cf. Spence, 1973, on job market signaling); for illustrative/educational use only.",
+        ["growth_learning_environment", "stability_job_insecurity_perception"],
+    ),
+    # ---- LOCAL (Agora fork), not present in agora2/backend-dev ----------------
+    # Hand-added before upstream shipped its own generators. Kept HERE rather
+    # than patched into employment.json, because this script rewrites that file
+    # wholesale — a card living only in the json is silently deleted the next
+    # time anyone regenerates.
+    #
+    # Position is load-bearing: it must stay AFTER growth_startup_vs_corporate so
+    # a bare "企业" hint keeps binding to the firm-type card rather than being
+    # re-routed here (both cards carry 企业). test_kb_integrity's "ordering" list
+    # pins this.
+    #
+    # The four space-separated zh keywords are the original ones and are
+    # effectively unreachable by pass-1 matching (nobody types the space); the
+    # unspaced variants below are what actually fires.
+    card(
+        "growth_academia_vs_industry_comp",
+        "学界与业界薪酬", "Academia versus industry pay",
+        ["academia vs industry", "academic vs industry", "academia or industry",
+         "industry vs academia", "faculty salary", "research job pay",
+         "industry compensation", "stay in academia", "leave academia",
+         "tenure track or industry",
+         "教授 薪水", "学界 业界", "学术界 产业界", "高校 企业 薪酬",
+         "留在学界", "去业界", "读博还是工作", "学术界还是产业界"],
+        "比较学界与产业界的薪酬时，常见框架是拆成三块再比：基础现金、与绩效挂钩的可变部分、以及长期权益/福利（股权、退休、住房补贴等）。学界往往现金中位数更低、但岗位稳定性与时间自主性结构不同；产业界现金与权益弹性更大、但波动与岗位风险也更高。不要用某一所学校或某一家公司的传闻数字代替用户自己的可比数据。以上是一般性框架，不是具体机构的薪资断言。",
+        "When comparing academia vs industry compensation, a common framework is to separate base cash, performance-linked variable pay, and long-horizon equity/benefits (RSUs, retirement, housing support, etc.). Academia often shows lower median cash with a different stability/autonomy structure; industry usually offers more cash/equity upside with higher role and market volatility. Do not substitute rumor numbers for any specific institution or company — use the user's own comparable figures. This is a general framework, not an assertion about any named employer.",
+        "General framing consistent with labor-economics discussions of academic vs private-sector compensation packages; for illustrative/educational use only.",
+        ["growth_startup_vs_corporate", "stability_financial_buffer"],
+    ),
+    # ---- end LOCAL ----------------------------------------------------------
+    card(
+        "growth_learning_environment",
+        "学习环境", "Learning conditions",
+        ["能不能学到东西", "团队氛围", "带我的人", "反馈", "犯错",
+         "will I learn", "team environment", "who I'd report to", "feedback culture",
+         "room to make mistakes", "mentorship"],
+        f"能否在一个岗位上持续成长，与所在团队的具体条件（能否安全地提出问题与承认错误、是否有可用的反馈来源）的关联，往往强于与公司整体品牌或规模的关联。这意味着{Q}去哪家公司{QQ}和{Q}进哪个团队{QQ}可能不是同一个问题。以上是一般性框架，不是具体的行动建议。",
+        f"Whether one keeps growing in a role tends to relate more strongly to the specific conditions of the immediate team \u2014 whether questions and mistakes can be raised safely, whether usable feedback is available \u2014 than to the company's overall brand or size. This implies that which company to join and which team to join may not be the same question. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with team learning research (cf. Edmondson, 1999, on psychological safety and learning behavior in work teams); for illustrative/educational use only.",
+        ["growth_startup_vs_corporate", "life_meaning_orientation"],
+    ),
+    card(
+        "growth_specialist_generalist",
+        "专精与通用", "Depth versus breadth",
+        ["专精", "太窄", "转方向", "什么都会一点", "护城河", "可迁移",
+         "specialize", "too narrow", "pivot", "jack of all trades", "transferable skills",
+         "depth versus breadth", "niche"],
+        f"能力的可迁移性可以区分为{Q}通用能力{QQ}（在多数雇主处同样有价值）与{Q}特定能力{QQ}（依附于特定公司、产品或流程）。后者在当前岗位内回报可能更高，但在离开时价值损失更大——这个区分有助于判断当前的积累实际上在增强哪一类资本。以上是一般性框架，不是具体的行动建议。",
+        f"The portability of one's capability can be separated into general capability (valued similarly across employers) and specific capability (tied to a particular firm, product, or process). The latter may yield higher returns within the current role but loses more value upon leaving \u2014 the distinction helps clarify which kind of capital current work is actually accumulating. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with human capital theory (cf. Becker, 1964, on general versus firm-specific human capital); for illustrative/educational use only.",
+        ["growth_skill_obsolescence", "stability_sunk_cost"],
+    ),
+    card(
+        "growth_network_effects",
+        "关系网络影响", "Network consequences",
+        ["人脉", "机会从哪来", "圈子", "内推", "认识的人",
+         "network", "where opportunities come from", "connections", "referral",
+         "who I'd be working with", "professional circle"],
+        "职业机会的来源分布，往往并不集中在关系最紧密的少数人身上，而是较多地来自联系不那么频繁的外围关系——因为后者接触的信息与自己重叠更少。因此一次工作变动对成长的影响，部分体现在它改变了自己接触到什么样的信息圈层。以上是一般性框架，不是具体的行动建议。",
+        "The distribution of career opportunities often does not concentrate among one's closest contacts but comes disproportionately from less frequent, peripheral ties, since those contacts are exposed to information that overlaps less with one's own. A job move therefore affects growth partly by changing which information circles one has access to. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with social network research (cf. Granovetter, 1973, on the strength of weak ties); for illustrative/educational use only.",
+        ["growth_promotion_plateau", "life_nonwork_identity"],
+    ),
+]
+
+
+# =========================================================================
+# STABILITY-CENTERED (10 cards)
+# Ordering note: cards whose keywords are specific multi-word phrases are
+# placed before cards using broad single words, since matching returns the
+# first hit (see validate_kb.py's self-match test).
+# =========================================================================
+
+stability_centered = [
+    card(
+        "stability_risk_tolerance_state",
+        "风险偏好的浮动", "Risk tolerance as a state",
+        ["我这个人比较保守", "我能承受风险", "最近不敢冒险", "以前敢现在不敢", "风险承受",
+         "I'm risk averse", "I can handle risk", "not feeling brave lately",
+         "used to be bolder", "my risk tolerance", "playing it safe these days"],
+        f"人对风险的态度并不是完全固定的个人特质：近期的经历、当前的压力水平与财务处境都会使同一个人在不同时点给出不同的风险偏好。因此{Q}我是个保守的人{QQ}这类自我判断，有时反映的是当下状态而非稳定倾向。以上是一般性框架，不是具体的行动建议。",
+        f"Attitudes toward risk are not fully fixed personal traits: recent experience, current stress levels, and financial circumstances can lead the same person to express different risk preferences at different times. A self-assessment such as \u201cI'm a cautious person\u201d therefore sometimes reflects a current state rather than a stable disposition. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on the stability of risk preferences (cf. Schildberg-H\u00f6risch, 2018, on whether risk preferences are stable); for illustrative/educational use only.",
+        ["stability_financial_buffer", "stability_loss_framing", "growth_affective_forecasting"],
+    ),
+    card(
+        "stability_job_insecurity_perception",
+        "不安全感本身的影响", "Perceived insecurity",
+        ["总担心被裁", "心里不踏实", "睡不着觉", "提心吊胆", "不安全感",
+         "worried about losing my job", "constant anxiety about work", "can't relax",
+         "job insecurity", "always on edge", "fear of being let go"],
+        "对失去工作的持续担忧，其影响并不完全取决于最终是否真的失去工作：感知层面的不安全感本身就与健康与工作表现有关联。这意味着评估一个选项的稳定性时，除了客观风险，也需要考虑自己会在多大程度上持续处于担忧状态。以上是一般性框架，不是具体的行动建议。",
+        "The effects of persistent worry about losing one's job do not depend solely on whether job loss actually occurs: perceived insecurity itself is associated with health and performance outcomes. Assessing an option's stability therefore involves not only objective risk but also how continuously one would remain in a state of worry. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with job insecurity research (cf. Sverke, Hellgren, & N\u00e4swall, 2002, meta-analysis of job insecurity and its consequences); for illustrative/educational use only.",
+        ["stability_layoff_signals", "life_burnout_signals"],
+    ),
+    card(
+        "stability_industry_cyclical_risk",
+        "行业周期风险", "Cyclical risk",
+        ["行业周期", "经济不好", "大环境", "周期性", "波动大",
+         "industry cycle", "economic downturn", "market conditions", "cyclical",
+         "volatile sector", "recession risk"],
+        "评估行业的周期性风险，一个相对直接的方法是看该行业在过去一到两次经济下行周期中的招聘与裁员波动幅度：波动越大的行业，稳定性在决策中应被更明确地纳入权重，而不只看当下的招聘热度。以上是一般性框架，不是具体的行动建议。",
+        "A relatively direct way to assess an industry's cyclical risk is to examine how much hiring and layoff activity fluctuated during the past one or two downturns: the greater the fluctuation, the more explicitly stability should be weighted in the decision, rather than relying on current hiring momentum. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with labor economics research on industry cyclicality and employment volatility; for illustrative/educational use only.",
+        ["growth_industry_outlook", "stability_layoff_signals"],
+    ),
+    card(
+        "stability_layoff_signals",
+        "裁员信号", "Layoff signals",
+        ["裁员", "优化", "缩编", "公司要不行了", "组织调整",
+         "layoff", "downsizing", "restructuring", "company in trouble",
+         "hiring freeze", "cutting headcount"],
+        "识别裁员风险的信号，比起等待正式公告，更早的间接信号通常包括：招聘冻结、非核心项目被叫停、管理层频繁变动、绩效考核标准突然收紧。单一信号不足以判断，多个信号同时出现时值得提高警惕。以上是一般性框架，不是具体的行动建议。",
+        "Identifying layoff risk earlier than a formal announcement typically involves indirect signals: hiring freezes, non-core projects being halted, frequent management turnover, and a sudden tightening of performance criteria. No single signal is conclusive, but several appearing together warrants closer attention. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with organizational research on workforce reduction antecedents; for illustrative/educational use only.",
+        ["stability_industry_cyclical_risk", "stability_job_insecurity_perception"],
+    ),
+    card(
+        "stability_financial_buffer",
+        "财务缓冲", "Financial buffer",
+        ["存款", "积蓄", "撑多久", "断收入", "房贷", "养家",
+         "savings", "emergency fund", "how long could I last", "no income",
+         "mortgage payments", "supporting my family"],
+        f"评估职业变动中的财务缓冲是否充足，常见的参考标准是可动用储蓄能覆盖数月的基本生活支出。缓冲不足时，即使主观上愿意冒险，实际的风险承受能力也会明显下降——这使得{Q}我愿意赌一把{QQ}与{Q}我赌得起{QQ}成为两个需要分开评估的问题。以上是一般性框架，不是具体的财务建议。",
+        f"A common reference point for assessing financial buffer during a career transition is whether liquid savings could cover several months of essential expenses. When the buffer is thin, actual capacity to absorb risk drops materially even if one is subjectively willing to take it \u2014 making \u201cI'm willing to bet\u201d and \u201cI can afford to bet\u201d two questions that need separate assessment. This is a general framework, not specific financial advice.",
+        "General framing consistent with household financial resilience research; for illustrative/educational use only, not a substitute for professional financial advice.",
+        ["stability_risk_tolerance_state", "life_partner_career"],
+    ),
+    card(
+        "stability_contract_pitfalls",
+        "合同条款", "Contract terms",
+        ["合同", "试用期", "竞业", "违约金", "offer条款",
+         "contract", "probation period", "non-compete", "notice period",
+         "offer terms", "severance clause"],
+        "评估新机会时，合同与试用期条款中容易被忽略的部分包括：试用期解除的补偿标准、竞业限制的覆盖范围与期限、绩效考核标准是否在入职前已书面明确。这些条款影响的是选项的实际可退出性，而不只是入职时的条件。以上是一般性框架，不是具体的法律建议。",
+        "When evaluating a new opportunity, commonly overlooked contract and probation terms include compensation standards for termination during probation, the scope and duration of non-compete provisions, and whether performance criteria are documented in writing before starting. These terms shape how exitable the option actually is, not only the entry conditions. This is a general framework, not specific legal advice.",
+        "General framing consistent with published guidance from labor authorities on employment contract terms; for illustrative/educational use only, not a substitute for professional legal advice.",
+        ["stability_reversibility", "stability_financial_buffer"],
+    ),
+    card(
+        "stability_side_job_balance",
+        "副业与主业", "Side work",
+        ["副业", "兼职", "第二收入", "接私活", "备胎",
+         "side job", "side hustle", "second income", "freelancing on the side",
+         "backup plan", "moonlighting"],
+        f"在稳定性考量下评估副业，一个常见的框架是区分其功能：作为财务缓冲的补充收入，还是作为主业不稳定时的{Q}备用选项{QQ}。两种功能对投入精力的合理比例要求不同——前者可以适度，后者需要更早投入才能确保备用选项真正可行。以上是一般性框架，不是具体的行动建议。",
+        f"Assessing side work from a stability perspective, a common framework distinguishes its function: supplementary income serving as a financial buffer, versus a fallback option should the main role become unstable. These imply different reasonable levels of investment \u2014 the former can be modest, the latter needs earlier investment for the fallback to actually be viable. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on income diversification and career risk management; for illustrative/educational use only.",
+        ["stability_financial_buffer", "life_work_intensity_health"],
+    ),
+    card(
+        "stability_sunk_cost",
+        "已投入的成本", "Sunk cost",
+        ["已经投入", "熬了这么久", "白干了", "浪费了这几年", "不甘心",
+         "already invested", "put in so many years", "would be wasted",
+         "throwing it away", "after all this time", "sunk cost"],
+        f"在当前岗位上已经投入的时间与精力，属于无论去留都无法收回的成本，但它常在决策中被当作留下的理由（{Q}都待了这么久了{QQ}）。将{Q}已经付出多少{QQ}与{Q}接下来还能得到什么{QQ}分开评估，通常能让选项之间的比较更清楚。以上是一般性框架，不是具体的行动建议。",
+        f"Time and effort already invested in a current role cannot be recovered regardless of whether one stays or leaves, yet it frequently enters the decision as a reason to stay (\u201cI've already put in this long\u201d). Separating what has already been spent from what can still be gained going forward usually makes the comparison between options clearer. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on the sunk cost effect (cf. Arkes & Blumer, 1985, on the psychology of sunk cost); for illustrative/educational use only.",
+        ["growth_job_change_timing", "growth_specialist_generalist"],
+    ),
+    card(
+        "stability_loss_framing",
+        "得失框架", "Gain-loss framing",
+        ["会失去", "放弃现在的", "损失", "得不偿失", "舍不得",
+         "what I'd lose", "giving up what I have", "loss", "not worth losing",
+         "hard to let go", "walking away from"],
+        f"同一个选项在被表述为{Q}会得到什么{QQ}和{Q}会失去什么{QQ}时，评价往往不同：失去带来的心理分量通常大于同等程度的得到。这意味着当一个选项被自然地以{Q}放弃现有的{QQ}来描述时，它可能已经在比较中被系统性地低估。以上是一般性框架，不是具体的行动建议。",
+        f"The same option is often evaluated differently depending on whether it is described in terms of what will be gained or what will be lost: losses typically carry more psychological weight than equivalent gains. When an option is naturally framed as giving up what one currently has, it may therefore already be systematically undervalued in the comparison. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with prospect theory (cf. Kahneman & Tversky, 1979, on decision under risk); for illustrative/educational use only.",
+        ["stability_risk_tolerance_state", "stability_sunk_cost"],
+    ),
+    card(
+        "stability_reversibility",
+        "可逆性", "Reversibility",
+        ["回不去", "还能回来吗", "试试看", "一条路走到黑", "退路",
+         "can I go back", "reversible", "trying it out", "no way back",
+         "burning bridges", "keeping the door open"],
+        f"一个选择的可逆程度（做错了能否回到接近原状）与它的风险高低是两个不同的维度：高风险但可逆的选项，与低风险但不可逆的选项，需要的评估方式不同。值得注意的是，人对可逆选项的最终满意度不一定更高——保留退路本身也会影响对已选选项的投入程度。以上是一般性框架，不是具体的行动建议。",
+        "How reversible a choice is (whether one could return to something close to the original state) is a different dimension from how risky it is: a high-risk but reversible option and a low-risk but irreversible one call for different evaluation. Notably, satisfaction with reversible choices is not necessarily higher \u2014 keeping the door open can itself affect how fully one commits to the option chosen. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on changeable outcomes and satisfaction (cf. Gilbert & Ebert, 2002, on the affective forecasting of changeable outcomes); for illustrative/educational use only.",
+        ["growth_affective_forecasting", "stability_contract_pitfalls"],
+    ),
+]
+
+
+# =========================================================================
+# LIFE-CENTERED (10 cards)
+# =========================================================================
+
+life_centered = [
+    card(
+        "life_income_adaptation",
+        "收入的适应效应", "Adapting to income",
+        ["涨薪", "多赚", "工资高", "值这个钱", "薪水差距",
+         "raise", "higher salary", "more money", "pay difference",
+         "is the money worth it", "better compensation"],
+        f"收入提高带来的满意度提升，往往在一段时间后减弱：新的收入水平会较快成为新的参照点，而当初做比较时被视为{Q}值得{QQ}的差距，其体验上的持续影响可能小于预期。这一点在薪酬与其他维度权衡时值得纳入考虑。以上是一般性框架，不是具体的行动建议。",
+        "Gains in satisfaction from higher income often attenuate after a period: a new income level becomes a new reference point relatively quickly, so a pay gap that seemed decisive during comparison may have a smaller lasting experiential effect than anticipated. This is worth factoring in when weighing compensation against other dimensions. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on income and subjective well-being (cf. Kahneman & Deaton, 2010, on income and emotional well-being); for illustrative/educational use only.",
+        ["growth_affective_forecasting", "life_meaning_orientation"],
+    ),
+    card(
+        "life_commute_cost",
+        "通勤成本", "Commute cost",
+        ["通勤", "上下班", "路上要", "挤地铁", "离家远",
+         "commute", "getting to work", "travel time", "long drive",
+         "far from home", "daily travel"],
+        f"量化通勤对生活质量的影响，一个常用方式是把每日通勤时间乘以一年的工作日数，折算为一年损失的可支配时间。这个数字通常比直觉感受更大，值得在比较机会时明确纳入计算，而不只作为背景因素。以上是一般性框架，不是具体的行动建议。",
+        "A common way to quantify the effect of commuting on quality of life is to multiply daily commute time by the number of working days per year, converting it into disposable time lost annually. This figure is typically larger than it intuitively feels and is worth including explicitly in comparisons rather than treating as background. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on commuting and subjective well-being (cf. Stutzer & Frey, 2008, on the commuting paradox); for illustrative/educational use only.",
+        ["life_relocation_family_impact", "life_recovery_time"],
+    ),
+    card(
+        "life_relocation_family_impact",
+        "异地与搬迁", "Relocation impact",
+        ["异地", "搬家", "换城市", "两地分居", "离开现在的城市",
+         "relocation", "moving cities", "long distance", "leaving where I live",
+         "moving for work", "new city"],
+        "异地工作对生活的影响，评估维度不只是地理距离，还包括原有社会支持网络（朋友、亲属照顾资源）的中断程度，以及家人适应新环境所需的时间成本。这些成本在决策初期容易被低估。以上是一般性框架，不是具体的行动建议。",
+        "The life impact of relocating involves more than geographic distance: it also includes how much an existing social support network (friends, family caregiving resources) is disrupted, and the time cost for family members to adapt to a new environment. These costs are commonly underestimated early in the decision. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with work-family research (cf. Greenhaus & Beutell, 1985, on work-family role conflict); for illustrative/educational use only.",
+        ["life_partner_career", "life_nonwork_identity"],
+    ),
+    card(
+        "life_partner_career",
+        "伴侣的职业", "Partner's career",
+        ["伴侣工作", "对象的工作", "两个人的安排", "配偶", "谁迁就谁",
+         "partner's job", "spouse's career", "dual career", "whose career comes first",
+         "coordinating with my partner", "their work situation"],
+        "在双职业家庭中，一方的工作变动通常同时构成对另一方的约束：一个选项的实际可行性，取决于两人职业路径的协调结果，而不只是各自单独评估的优劣。因此某些看起来更优的选项，可能在联合评估下并不占优。以上是一般性框架，不是具体的行动建议。",
+        "In dual-career households, one partner's job change typically constitutes a constraint on the other's: an option's actual feasibility depends on how the two career paths coordinate, not only on each being evaluated separately. Options that look superior in isolation may therefore not dominate under joint evaluation. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on dual-earner couples and work-family arrangements (cf. Bianchi & Milkie, 2010, on work and family research); for illustrative/educational use only.",
+        ["life_relocation_family_impact", "stability_financial_buffer"],
+    ),
+    card(
+        "life_burnout_signals",
+        "倦怠信号", "Burnout signals",
+        ["倦怠", "耗尽了", "麻木", "没成就感", "厌倦", "撑不下去",
+         "burnout", "emotionally drained", "numb about work", "no sense of accomplishment",
+         "sick of it", "running on fumes"],
+        "职业倦怠的早期信号常沿三个维度描述：情绪耗竭（长期感到精力被榨干）、去人格化（对工作与同事产生疏离甚至冷漠）、个人成就感降低（觉得自己的工作没有价值）。三者同时出现比单一信号更值得重视。以上是一般性框架，不是具体的行动建议。",
+        "Early signs of burnout are commonly described along three dimensions: emotional exhaustion (a persistent sense of being drained), depersonalization (detachment or cynicism toward work and colleagues), and reduced personal accomplishment (a sense that one's work lacks value). Co-occurrence of all three is more significant than any single signal. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with burnout research (cf. Maslach & Leiter, 2016, on understanding the burnout experience); for illustrative/educational use only, not a substitute for professional guidance.",
+        ["life_recovery_time", "stability_job_insecurity_perception"],
+    ),
+    card(
+        "life_work_intensity_health",
+        "工作强度", "Work intensity",
+        ["加班", "工作强度", "996", "身体吃不消", "太忙了",
+         "overtime", "work intensity", "long hours", "physically drained",
+         "too demanding", "workload"],
+        f"评估工作强度的长期影响，一个常用参考不是每周工时总数本身，而是工作之后是否还有足够的恢复时间（睡眠、休息、非工作活动）。同样的工时总数下，缺乏有效恢复的工作模式，长期风险更高。以上是一般性框架，不是具体的医疗建议。",
+        "A common reference point for assessing the long-term effect of work intensity is not total weekly hours as such, but whether sufficient recovery time remains afterward (sleep, rest, non-work activity). At equivalent total hours, patterns lacking effective recovery carry higher long-term risk. This is a general framework, not specific medical advice.",
+        "General framing consistent with occupational health research on recovery from work (cf. Sonnentag & Fritz, 2007, on the recovery experience questionnaire); for illustrative/educational use only, not a substitute for professional medical guidance.",
+        ["life_recovery_time", "life_burnout_signals"],
+    ),
+    card(
+        "life_recovery_time",
+        "恢复与抽离", "Recovery and detachment",
+        ["下班还在想工作", "关不掉", "随时待命", "假期也在忙", "放不下",
+         "can't switch off", "still thinking about work", "always on call",
+         "working through holidays", "no downtime", "mentally at work"],
+        f"下班后能否在心理上从工作中抽离，与恢复效果的关联通常强于单纯的休息时长：随时待命、持续惦记工作的状态会削弱休息时间的恢复作用。因此比较两个岗位时，{Q}下班之后还需要保持多少在线状态{QQ}是一个可以独立评估的维度。以上是一般性框架，不是具体的行动建议。",
+        f"Whether one can psychologically detach from work after hours tends to relate more strongly to recovery than the amount of rest time alone: remaining on call or continuously preoccupied with work weakens the restorative value of that time. When comparing two roles, how much availability is expected after hours is therefore a dimension worth assessing on its own. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with occupational recovery research (cf. Sonnentag, 2012, on psychological detachment from work); for illustrative/educational use only.",
+        ["life_work_intensity_health", "life_remote_hybrid_tradeoffs"],
+    ),
+    card(
+        "life_remote_hybrid_tradeoffs",
+        "远程与混合办公", "Remote and hybrid",
+        ["远程", "在家办公", "混合办公", "不用去公司", "居家",
+         "remote work", "work from home", "hybrid", "not going into the office",
+         "fully remote", "in-office requirement"],
+        f"比较远程、混合与全现场办公，一个常被低估的维度是非正式沟通与职业能见度的差异：完全远程通常带来更多时间灵活性，但可能减少偶发的、非正式的职业发展机会。这一权衡因个人处境与公司文化而异。以上是一般性框架，不是具体的行动建议。",
+        "Comparing remote, hybrid, and fully on-site arrangements, an often-underweighted dimension is the difference in informal communication and career visibility: fully remote work typically offers more time flexibility but may reduce incidental, informal development opportunities. This trade-off varies with individual circumstances and company culture. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on remote work arrangements and career outcomes; for illustrative/educational use only.",
+        ["life_recovery_time", "growth_network_effects"],
+    ),
+    card(
+        "life_nonwork_identity",
+        "工作之外的身份", "Life outside work",
+        ["生活被工作占满", "没有自己的时间", "爱好", "朋友", "没有生活",
+         "no life outside work", "no time for myself", "hobbies", "friendships",
+         "work is everything", "losing myself"],
+        "一个人同时承担的非工作角色（朋友、家庭成员、社群参与者、某项爱好的实践者）构成了工作之外的评价来源。当工作占用的时间与精力压缩了这些角色，一次职业变动的影响就不止于工作本身，还包括这些来源是否还能维持。以上是一般性框架，不是具体的行动建议。",
+        "The non-work roles a person holds simultaneously (friend, family member, community participant, practitioner of some interest) constitute sources of evaluation outside work. When work compresses the time and energy available to these roles, a career change affects more than work itself \u2014 it also affects whether those sources remain sustainable. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on multiple roles and identity (cf. Thoits, 1983, on multiple identities and psychological well-being); for illustrative/educational use only.",
+        ["life_recovery_time", "growth_network_effects"],
+    ),
+    card(
+        "life_meaning_orientation",
+        "对工作的定位", "Orientation toward work",
+        ["工作对我意味着", "只是份工作", "热爱", "意义", "事业还是饭碗",
+         "what work means to me", "just a job", "passion", "meaningful work",
+         "career or paycheck", "calling"],
+        f"人对工作的定位大致可分为几种取向：视其为谋生手段、视其为持续进阶的事业、或视其本身为重要目的。取向不同，对同一个岗位的评价标准也不同——同时也决定了生活的其他部分需要在多大程度上补偿工作中未被满足的部分。以上是一般性框架，不是具体的行动建议。",
+        "People's orientation toward work can be broadly distinguished into viewing it as a means of making a living, as a career of ongoing advancement, or as important in itself. Different orientations imply different evaluation criteria for the same role \u2014 and also determine how much the rest of life is expected to compensate for what work does not provide. This is a general framework, not a specific action recommendation.",
+        "General framing consistent with research on work orientations (cf. Wrzesniewski, McCauley, Rozin, & Schwartz, 1997, on jobs, careers, and callings); for illustrative/educational use only.",
+        ["life_income_adaptation", "growth_learning_environment"],
+    ),
+]
+
+
+fallbacks = {
+    "growth_centered": {
+        "zh": f"从职业成长的视角出发，通常值得留意的是：这个选择能否在可预见的时间内积累出可迁移、可被下一次机会验证的具体能力，而不只是感觉上{Q}忙碌或有挑战{QQ}。这是一般性提醒，不针对具体情况。",
+        "en": "From a growth perspective, it is often worth noting whether a choice builds concrete, transferable capability that could be validated by a next opportunity within a foreseeable timeframe, rather than simply feeling busy or challenging. This is a general reminder, not specific to any particular situation.",
+        "source": "General framing; for illustrative/educational use only.",
+        "source_type": "academic",
+        "tag": {"zh": "成长视角", "en": "Growth lens"},
+    },
+    "stability_centered": {
+        "zh": "从稳定性的视角出发，通常值得留意的是：如果这个选择的最坏情况真的发生，实际的财务与生活缓冲能否撑住，而不只是评估最好情况下的收益。这是一般性提醒，不针对具体情况。",
+        "en": "From a stability perspective, it is often worth noting whether one's actual financial and life buffer could absorb the worst case of this choice, rather than evaluating only the best-case upside. This is a general reminder, not specific to any particular situation.",
+        "source": "General framing; for illustrative/educational use only.",
+        "source_type": "academic",
+        "tag": {"zh": "稳定视角", "en": "Stability lens"},
+    },
+    "life_centered": {
+        "zh": "从生活质量的视角出发，通常值得留意的是：这个选择会占用多少本该属于生活其他部分（健康、关系、个人时间）的资源，而不只是它在职业维度上是否划算。这是一般性提醒，不针对具体情况。",
+        "en": "From a life-quality perspective, it is often worth noting how much of the resources belonging to other parts of life (health, relationships, personal time) this choice would consume, rather than only whether it is favorable on the career dimension. This is a general reminder, not specific to any particular situation.",
+        "source": "General framing; for illustrative/educational use only.",
+        "source_type": "academic",
+        "tag": {"zh": "生活视角", "en": "Life lens"},
+    },
+}
+
+data = {
+    "growth_centered": {"topic_cards": growth_centered, "generic_fallback": fallbacks["growth_centered"]},
+    "stability_centered": {"topic_cards": stability_centered, "generic_fallback": fallbacks["stability_centered"]},
+    "life_centered": {"topic_cards": life_centered, "generic_fallback": fallbacks["life_centered"]},
+}
+
+
+def _fix(obj):
+    if isinstance(obj, str):
+        return obj.replace("{Q}", Q).replace("{QQ}", QQ)
+    if isinstance(obj, dict):
+        return {k: _fix(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_fix(v) for v in obj]
+    return obj
+
+
+data = _fix(data)
+
+out_dir = os.path.join("background_templates", "stance_knowledge")
+os.makedirs(out_dir, exist_ok=True)
+out_path = os.path.join(out_dir, "employment.json")
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+
+total = sum(len(v["topic_cards"]) for v in data.values())
+print(f"Written {out_path}")
+for stance, cfg in data.items():
+    print(f"  {stance}: {len(cfg['topic_cards'])} topic cards")
+print(f"Total topic cards: {total} (+3 fallbacks)")

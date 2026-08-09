@@ -6,6 +6,15 @@ import { AgoraLogo, AgoraLogoFull } from "../components/AgoraLogo";
 import { CustomDropdown } from "../components/ui/CustomDropdown";
 import { AppearanceModal } from "../components/AppearanceModal";
 import {
+  DecisionNavi,
+  buildDecisionNaviNodes,
+  type PhaseChangeMarker,
+} from "../components/DecisionNavi";
+import {
+  DecisionMapPanel,
+  type DecisionMapData,
+} from "../components/DecisionMapPanel";
+import {
   IntakeModal,
   ProfileModal,
   MemoryHistoryPanel,
@@ -160,6 +169,9 @@ function AnimatedGuideFrame({
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export type ChatOptionChip = { id: string; label: string };
+export type KnowledgeReference = { id: string; tag: string; source?: string };
+
 interface Message {
   id: string;
   role: "user" | "agent" | "system";
@@ -167,6 +179,33 @@ interface Message {
   content: string;
   timestamp: number;
   emotionTagSnapshot?: string | null;
+  /** Curated background actually injected for this exact agent response. */
+  knowledge?: KnowledgeReference;
+  /** Structured choice chips from agent [OPTIONS] block */
+  options?: ChatOptionChip[];
+  /** Selected option id within this message's group (locked) */
+  chosenOptionId?: string | null;
+}
+
+function historyTimestamp(raw: string | undefined, index: number, total: number): number {
+  if (raw) {
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now() - (total - index) * 1000;
+}
+
+function phaseMarkersFromApi(
+  changes: Array<{ from?: string; to?: string; time?: string }> | undefined,
+): PhaseChangeMarker[] {
+  if (!Array.isArray(changes)) return [];
+  return changes
+    .filter((c) => !!(c?.to))
+    .map((c) => ({
+      from: c.from || "",
+      to: String(c.to),
+      time: c.time,
+    }));
 }
 
 interface ConvSettings {
@@ -227,10 +266,11 @@ function buildStartAgentsPayload(
       emotion: s?.emotionTag || "Joy",
       accent_color: s?.accentColor || DEFAULT_AGENT_COLORS[key],
       stance: stance || undefined,
-      hint: (s?.hint || "").trim() || undefined,
+      hint: s?.hint?.trim() || undefined,
     };
   });
 }
+
 
 interface Conversation {
   id: string;
@@ -805,6 +845,9 @@ const AgentMessage = React.memo(function AgentMessage({
   layerAnnotations,
   onChatAnnotationDraft,
   uiLang = "en",
+  highlighted = false,
+  highlightToken = 0,
+  onChooseOption,
 }: {
   message: Message;
   agentNames: Record<AgentKey, string>;
@@ -822,6 +865,9 @@ const AgentMessage = React.memo(function AgentMessage({
   layerAnnotations?: ChatLayerAnnotation[];
   onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
   uiLang?: UiLang;
+  highlighted?: boolean;
+  highlightToken?: number;
+  onChooseOption?: (message: Message, option: ChatOptionChip) => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [infoCardOpen, setInfoCardOpen] = useState(false);
@@ -926,10 +972,11 @@ const AgentMessage = React.memo(function AgentMessage({
   return (
     <motion.div
       layout
+      data-message-id={message.id}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }}
-      className="flex flex-col gap-1 mb-4"
+      className="flex flex-col gap-1 mb-4 rounded-[10px]"
     >
       <div className="flex items-center gap-2 mb-1">
         <span
@@ -1021,33 +1068,90 @@ const AgentMessage = React.memo(function AgentMessage({
               y: sel.rect.top - 8,
             });
           }}
-          className={`text-[13px] text-black/80 leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""}`}
+          key={highlighted ? `flash-${highlightToken}` : "body"}
+          className={`text-[13px] text-black/80 leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""} ${highlighted ? "agora-msg-flash" : ""}`}
           style={{ ...monoFont, color: isError ? "#ef4444" : undefined }}
         >
           {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
             ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent", nickname)
             : highlightUserMentions(finalContent, nickname)}
         </p>
+        {message.knowledge && (
+          <div className="mt-2.5 pt-2 border-t border-black/[0.07] flex flex-wrap items-center gap-1.5">
+            <span className="text-[9px] text-black/40" style={getUiFont(uiLang)}>
+              {t(uiLang, "chat.knowledgeUsed")}
+            </span>
+            <span
+              className="text-[9px] px-2 py-0.5 rounded-[4px] border border-black/10 bg-black/[0.03] text-black/65"
+              style={getUiFont(uiLang)}
+              title={message.knowledge.source || undefined}
+            >
+              {message.knowledge.tag}
+            </span>
+          </div>
+        )}
+        {(message.options?.length || 0) >= 2 && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            <span className={`w-full text-[9px] text-black/40 ${labelCaseClass(uiLang)}`} style={getUiFont(uiLang)}>
+              {message.chosenOptionId ? t(uiLang, "chat.optionLocked") : t(uiLang, "chat.optionsPickHint")}
+            </span>
+            {message.options!.map((opt) => {
+              const chosen = message.chosenOptionId === opt.id;
+              const locked = !!message.chosenOptionId;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={locked || !onChooseOption}
+                  onClick={() => onChooseOption?.(message, opt)}
+                  className={`px-2.5 py-1 rounded-[6px] text-[11px] border transition-colors ${
+                    chosen
+                      ? "border-black bg-black text-white"
+                      : locked
+                        ? "border-black/10 text-black/35 bg-black/[0.02] cursor-default"
+                        : "border-black/15 text-black/75 hover:border-black/40 hover:bg-black/[0.03]"
+                  }`}
+                  style={getUiFont(uiLang)}
+                >
+                  {chosen ? `✓ ${opt.label}` : opt.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </motion.div>
   );
 });
 
-const SystemMessage = React.memo(function SystemMessage({ message }: { message: Message }) {
+const SystemMessage = React.memo(function SystemMessage({
+  message,
+  highlighted = false,
+  highlightToken = 0,
+}: {
+  message: Message;
+  highlighted?: boolean;
+  highlightToken?: number;
+}) {
   if (!(message.content || "").trim()) return null;
   return (
     <motion.div
       layout
+      data-message-id={message.id}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }}
-      className="flex flex-col items-center gap-1 mb-5"
+      className="flex flex-col items-center gap-1 mb-5 rounded-[10px]"
     >
       <span className="text-[10px] tracking-widest text-[var(--app-muted-text)] uppercase" style={monoFont}>
         System
       </span>
       <div className="px-3 py-2 max-w-[90%] text-center border border-black/10 bg-black/[0.03] rounded-[8px]">
-        <p className="text-[12px] text-black/70 leading-relaxed whitespace-pre-wrap" style={monoFont}>
+        <p
+          key={highlighted ? `flash-${highlightToken}` : "body"}
+          className={`text-[12px] text-black/70 leading-relaxed whitespace-pre-wrap ${highlighted ? "agora-msg-flash" : ""}`}
+          style={monoFont}
+        >
           {message.content}
         </p>
       </div>
@@ -1061,21 +1165,26 @@ const UserMessage = React.memo(function UserMessage({
   chatAnnotationMode = false,
   layerAnnotations,
   onChatAnnotationDraft,
+  highlighted = false,
+  highlightToken = 0,
 }: {
   message: Message;
   nickname: string;
   chatAnnotationMode?: boolean;
   layerAnnotations?: ChatLayerAnnotation[];
   onChatAnnotationDraft?: (d: { messageId: string; start: number; end: number; x: number; y: number }) => void;
+  highlighted?: boolean;
+  highlightToken?: number;
 }) {
   const contentRef = useRef<HTMLParagraphElement>(null);
   return (
     <motion.div
       layout
+      data-message-id={message.id}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }}
-      className="flex flex-col items-end gap-1 mb-6"
+      className="flex flex-col items-end gap-1 mb-6 rounded-[10px]"
     >
       <div className="flex items-center gap-2 mb-1">
         <span className="text-[11px] text-[var(--app-muted-text)] tracking-wider" style={monoFont}>
@@ -1088,6 +1197,7 @@ const UserMessage = React.memo(function UserMessage({
       </div>
       <div className="px-4 py-3 bg-black rounded-[10px] rounded-tr-[2px] max-w-[85%]">
         <p
+          key={highlighted ? `flash-${highlightToken}` : "body"}
           ref={contentRef}
           onMouseUp={() => {
             if (!chatAnnotationMode || !contentRef.current || !onChatAnnotationDraft) return;
@@ -1101,7 +1211,7 @@ const UserMessage = React.memo(function UserMessage({
               y: sel.rect.top - 8,
             });
           }}
-          className={`text-[13px] text-white leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""}`}
+          className={`text-[13px] text-white leading-relaxed whitespace-pre-wrap ${chatAnnotationMode ? "select-text cursor-text" : ""} ${highlighted ? "agora-msg-flash" : ""}`}
           style={monoFont}
         >
           {chatAnnotationMode && (layerAnnotations?.length ?? 0) > 0
@@ -1331,27 +1441,43 @@ function SettingsMenu({ open, onClose, anchorRef, onCustomize, onScene, onAppear
   return (
     <motion.div ref={ref} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
       className="absolute bottom-full right-0 mb-2 bg-white border border-black/10 rounded-[12px] shadow-[0_2px_12px_rgba(0,0,0,0.06)] py-2 min-w-[220px] z-50">
+      {/* Language is frozen once a session exists: the transcript was generated in
+          it, and the summary / decision map are extracted in it. Letting it change
+          mid-session produced a Chinese chat with an English map. */}
       <div className="flex items-center gap-3 px-3 py-2.5">
         <span className="opacity-40 flex-shrink-0"><GlobeIcon /></span>
-        <span className="text-[12px] flex-1" style={font}>{t(lang, "settings.language")}</span>
+        <span className={`text-[12px] flex-1 ${hasRoomId ? "text-black/35" : ""}`} style={font}>
+          {t(lang, "settings.language")}
+        </span>
         <div className="flex items-center gap-1.5 text-[11px] tracking-wide" style={getUiFont("en")}>
           <button
             type="button"
+            disabled={hasRoomId}
             onClick={() => onLangChange("en")}
-            className={`px-0.5 transition-colors ${lang === "en" ? "text-black font-semibold" : "text-black/35 hover:text-black/60"}`}
+            className={`px-0.5 transition-colors ${
+              lang === "en" ? "text-black font-semibold" : "text-black/35"
+            } ${hasRoomId ? "cursor-not-allowed opacity-45" : "hover:text-black/60"}`}
           >
             EN
           </button>
           <span className="text-black/20">/</span>
           <button
             type="button"
+            disabled={hasRoomId}
             onClick={() => onLangChange("zh")}
-            className={`px-0.5 transition-colors ${lang === "zh" ? "text-black font-semibold" : "text-black/35 hover:text-black/60"}`}
+            className={`px-0.5 transition-colors ${
+              lang === "zh" ? "text-black font-semibold" : "text-black/35"
+            } ${hasRoomId ? "cursor-not-allowed opacity-45" : "hover:text-black/60"}`}
           >
             CN
           </button>
         </div>
       </div>
+      {hasRoomId && (
+        <p className="px-3 pb-2 -mt-1 text-[10px] leading-snug text-black/40" style={font}>
+          {t(lang, "settings.languageLocked")}
+        </p>
+      )}
       <div className="my-1 border-t border-black/8" />
       <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>} label={t(lang, "settings.customizeAgent")} onClick={onCustomize} />
       <Item icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>} label={t(lang, "settings.customizeScene")} onClick={onScene} />
@@ -1458,17 +1584,29 @@ function CustomizerModal({
   const [selectedAgent, setSelectedAgent] = useState<AgentKey>(initialOpenCard || agentKeys[0] || "A");
   const [page, setPage] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
-  const [knowledgeTags, setKnowledgeTags] = useState<Array<{ id: string; label: string }>>([]);
-  const [knowledgeMatched, setKnowledgeMatched] = useState<boolean | null>(null);
   // Per-card scroll positions so switching pages does not share one scrollbar offset
   const cardScrollRef = useRef<HTMLDivElement>(null);
   const cardScrollPosRef = useRef<Record<string, number>>({});
   const pageRef = useRef(page);
   pageRef.current = page;
 
+  // Mid-session add opens this modal in the same paint as new keys — resync local
+  // copies when the roster key set changes so Save cannot drop a just-added agent.
+  // Do NOT depend on agentNames/agentSettings broadly or in-progress edits get wiped.
+  useEffect(() => {
+    setLocalNames({ ...agentNames });
+    setLocalSettings(cloneAgentSettings(agentSettings));
+    if (initialOpenCard && agentKeys.includes(initialOpenCard)) {
+      setSelectedAgent(initialOpenCard);
+    } else {
+      setSelectedAgent((prev) => (agentKeys.includes(prev) ? prev : (agentKeys[0] || "A")));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when roster membership changes
+  }, [agentKeys.join(",")]);
+
   const canEditAdvanced = experimentMode === "full";
   const agentOptions = experimentMode === "single" ? (["A"] as AgentKey[]) : agentKeys;
-  // Stance/hint UI is always available in full mode. If no agora2 scene is selected yet,
+  // Stance UI is always available in full mode. If no agora2 scene is selected yet,
   // fall back to employment options so Basic card is not empty (preview/start bind to real scene later).
   const stanceScenarioId =
     scenarioId && SCENARIO_STANCES[scenarioId] ? scenarioId : (canEditAdvanced ? "employment" : null);
@@ -1515,47 +1653,6 @@ function CustomizerModal({
       return changed ? next : prev;
     });
   }, [showStanceFields, stanceScenarioId, agentOptions.join(",")]);
-
-  // Debounced knowledge preview for selected agent's hint + stance
-  useEffect(() => {
-    if (!showStanceFields || !stanceScenarioId) {
-      setKnowledgeTags([]);
-      setKnowledgeMatched(null);
-      return;
-    }
-    const s = localSettings[selectedAgent];
-    const hint = (s?.hint || "").trim();
-    const stance = s?.stance || "";
-    if (!hint || !stance) {
-      setKnowledgeTags([]);
-      setKnowledgeMatched(hint ? false : null);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      fetch(`${API_BASE}/knowledge-preview`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scenario_type: stanceScenarioId, stance, hint, lang: uiLang }),
-      })
-        .then((r) => r.json())
-        .then((data: { matched?: boolean; tags?: Array<{ id: string; label: string }> }) => {
-          if (cancelled) return;
-          setKnowledgeMatched(!!data.matched);
-          setKnowledgeTags(Array.isArray(data.tags) ? data.tags : []);
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setKnowledgeMatched(false);
-            setKnowledgeTags([]);
-          }
-        });
-    }, 350);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [showStanceFields, selectedAgent, localSettings[selectedAgent]?.hint, localSettings[selectedAgent]?.stance, stanceScenarioId, uiLang]);
 
   const upd = (key: AgentKey, field: keyof AgentCustomSetting, value: unknown) =>
     setLocalSettings((prev) => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
@@ -1647,34 +1744,16 @@ function CustomizerModal({
               </div>
               <div>
                 <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.knowledgeHint")}</label>
-                <p className="text-[10px] text-[var(--app-muted-text)] mb-1.5" style={font}>
-                  {t(uiLang, "custom.knowledgeHelp")}
-                </p>
+                <p className="text-[10px] text-[var(--app-muted-text)] mb-2 leading-relaxed" style={font}>{t(uiLang, "custom.knowledgeHelp")}</p>
                 <textarea
-                  value={s.hint || ""}
+                  value={s.hint}
+                  maxLength={240}
+                  rows={3}
                   onChange={(e) => upd(key, "hint", e.target.value)}
                   placeholder={t(uiLang, "custom.knowledgePh")}
-                  rows={2}
-                  className="w-full text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none resize-none leading-relaxed focus:border-black/40 transition-colors"
+                  className="w-full resize-none text-[11px] px-3 py-2 border border-black/15 rounded-[6px] outline-none focus:border-black/40 transition-colors"
                   style={font}
                 />
-                <div className="mt-2 flex flex-wrap items-center justify-start gap-1.5 min-h-[22px]">
-                  {knowledgeMatched === false && (s.hint || "").trim() && (
-                    <span className="text-[9px] text-[var(--app-muted-text)]" style={font}>{t(uiLang, "custom.noKnowledge")}</span>
-                  )}
-                  {knowledgeMatched && knowledgeTags.length > 0 && (
-                    <span className="text-[9px] text-[var(--app-muted-text)]" style={font}>{t(uiLang, "custom.matchedTopic")}</span>
-                  )}
-                  {knowledgeTags.map((tag) => (
-                    <span
-                      key={tag.id}
-                      className="text-[9px] px-2 py-0.5 rounded-[4px] border border-black/10 bg-black/[0.03] text-black/70"
-                      style={font}
-                    >
-                      {tag.label}
-                    </span>
-                  ))}
-                </div>
               </div>
             </>
           )}
@@ -2004,6 +2083,9 @@ export default function Chat() {
     convId: string;
     emotionTagSnapshot: string | null;
     isSystem?: boolean;
+    messageId?: string;
+    options?: ChatOptionChip[];
+    knowledge?: KnowledgeReference;
   }>>([]);
   const agentNamesRef = useRef<Record<AgentKey, string>>(DEFAULT_AGENT_NAMES);
   const agentSettingsRef = useRef<Record<AgentKey, AgentCustomSetting>>(blankAgentSettings());
@@ -2019,6 +2101,9 @@ export default function Chat() {
   const [showFontColorInSettings, setShowFontColorInSettings] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const agentsBtnRef = useRef<HTMLButtonElement>(null);
+  const agentsPanelRef = useRef<HTMLDivElement>(null);
   const [backendOnline, setBackendOnline] = useState(false);
   const [sessionCreateError, setSessionCreateError] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -2033,6 +2118,25 @@ export default function Chat() {
   const [maxUserGap, setMaxUserGap] = useState(12);
   const [currentPhase, setCurrentPhase] = useState<string | null>(null);
   const [showPhaseIndicator, setShowPhaseIndicator] = useState(false);
+  /** Phase boundaries for Decision Navi, keyed by room_id. */
+  const [phaseMarkersByRoom, setPhaseMarkersByRoom] = useState<Record<string, PhaseChangeMarker[]>>({});
+  const lastPhaseByRoomRef = useRef<Record<string, string | null>>({});
+  const [naviActiveMessageId, setNaviActiveMessageId] = useState<string | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [highlightedMessageIds, setHighlightedMessageIds] = useState<string[]>([]);
+  const [highlightToken, setHighlightToken] = useState(0);
+  const highlightTimerRef = useRef<number | null>(null);
+  /** Ignore scroll-spy while smooth-scrolling from a Decision Navi click. */
+  const naviJumpLockRef = useRef(false);
+  const naviJumpUnlockTimerRef = useRef<number | null>(null);
+
+  const [decisionMapOpen, setDecisionMapOpen] = useState(false);
+  const [decisionMap, setDecisionMap] = useState<DecisionMapData | null>(null);
+  const [decisionMapLoading, setDecisionMapLoading] = useState(false);
+  const [decisionMapError, setDecisionMapError] = useState<string | null>(null);
+  const [decisionMapExtracting, setDecisionMapExtracting] = useState(false);
+  const [selectedMapTopicId, setSelectedMapTopicId] = useState<string | null>(null);
+  const [mapAnnotationDraft, setMapAnnotationDraft] = useState("");
 
   const [agentNames, setAgentNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
   const [agentBackendNames, setAgentBackendNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
@@ -2043,6 +2147,8 @@ export default function Chat() {
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
   const [pendingIntakeScene, setPendingIntakeScene] = useState<Scene | null>(null);
   const [pendingProfileScene, setPendingProfileScene] = useState<Scene | null>(null);
+  /** Profile → intake handoff: keep one backdrop, skip profile exit flash */
+  const [profileHandoff, setProfileHandoff] = useState(false);
   const [agora2Intake, setAgora2Intake] = useState<Agora2IntakePayload | null>(null);
   const [userProfile, setUserProfile] = useState<Record<string, unknown> | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -2129,6 +2235,7 @@ export default function Chat() {
       /* first session */
     }
     setShowSceneSelector(false);
+    setProfileHandoff(false);
     setPendingProfileScene(s);
     setShowProfileModal(true);
   }, []);
@@ -2263,12 +2370,355 @@ export default function Chat() {
   }, [auth?.token, scenes, maxAgentTurns, maxUserGap, experimentMode]);
 
   useEffect(() => {
+    setAgentsOpen(false);
+  }, [currentConvId]);
+
+  useEffect(() => {
+    if (!agentsOpen) return;
+    const h = (e: MouseEvent) => {
+      const node = e.target as Node;
+      if (agentsPanelRef.current?.contains(node) || agentsBtnRef.current?.contains(node)) return;
+      setAgentsOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [agentsOpen]);
+
+  useEffect(() => {
     setChatLayerAnnotations({});
     setChatAnnotationDraft(null);
     setChatAnnotationMode(false);
     setSummaryOpen(false);
     setSummaryError(null);
+    setNaviActiveMessageId(null);
+    setHighlightedMessageId(null);
+    setHighlightedMessageIds([]);
+    setDecisionMapOpen(false);
+    setDecisionMap(null);
+    setDecisionMapError(null);
+    setSelectedMapTopicId(null);
+    setMapAnnotationDraft("");
+    naviJumpLockRef.current = false;
+    if (naviJumpUnlockTimerRef.current) {
+      window.clearTimeout(naviJumpUnlockTimerRef.current);
+      naviJumpUnlockTimerRef.current = null;
+    }
   }, [currentConvId]);
+
+  const decisionNaviNodes = useMemo(() => {
+    if (!currentConv?.messages?.length) return [];
+    return buildDecisionNaviNodes(
+      currentConv.messages,
+      phaseMarkersByRoom[currentConv.roomId] || [],
+      currentPhase,
+      uiLang,
+    );
+  }, [currentConv?.messages, currentConv?.roomId, phaseMarkersByRoom, currentPhase, uiLang]);
+
+  const jumpToMessage = useCallback((messageId: string) => {
+    const root = messagesContainerRef.current;
+    if (!root) return;
+    const safeId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+      ? CSS.escape(messageId)
+      : messageId.replace(/["\\]/g, "\\$&");
+    const el = root.querySelector(`[data-message-id="${safeId}"]`) as HTMLElement | null;
+    if (!el) return;
+    stickToBottomRef.current = false;
+
+    // Lock scroll-spy so intermediate nodes don't flash as "active" during smooth scroll.
+    naviJumpLockRef.current = true;
+    if (naviJumpUnlockTimerRef.current) window.clearTimeout(naviJumpUnlockTimerRef.current);
+    const unlockSpy = () => {
+      naviJumpLockRef.current = false;
+      naviJumpUnlockTimerRef.current = null;
+      setNaviActiveMessageId(messageId);
+    };
+    const onScrollEnd = () => {
+      root.removeEventListener("scrollend", onScrollEnd);
+      unlockSpy();
+    };
+    root.addEventListener("scrollend", onScrollEnd);
+    naviJumpUnlockTimerRef.current = window.setTimeout(() => {
+      root.removeEventListener("scrollend", onScrollEnd);
+      unlockSpy();
+    }, 900);
+
+    setNaviActiveMessageId(messageId);
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightToken((n) => n + 1);
+    setHighlightedMessageId(messageId);
+    setHighlightedMessageIds([messageId]);
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedMessageId((prev) => (prev === messageId ? null : prev));
+      setHighlightedMessageIds([]);
+      highlightTimerRef.current = null;
+    }, 1000);
+  }, []);
+
+  const jumpToRange = useCallback((indexes: number[]) => {
+    const messages = currentConv?.messages || [];
+    const ids = indexes
+      .map((i) => messages[i]?.id)
+      .filter((id): id is string => !!id);
+    if (ids.length === 0) return;
+    jumpToMessage(ids[0]);
+    if (ids.length > 1) {
+      setHighlightedMessageIds(ids);
+      setHighlightToken((n) => n + 1);
+      if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = window.setTimeout(() => {
+        setHighlightedMessageIds([]);
+        setHighlightedMessageId((prev) => (prev === ids[0] ? null : prev));
+        highlightTimerRef.current = null;
+      }, 1200);
+    }
+  }, [currentConv?.messages, jumpToMessage]);
+
+  const fetchDecisionMap = useCallback(async (opts?: { extract?: boolean }) => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return;
+    const wantExtract = opts?.extract !== false;
+    if (wantExtract) setDecisionMapExtracting(true);
+    else setDecisionMapLoading(true);
+    setDecisionMapError(null);
+    try {
+      const qs = new URLSearchParams({
+        lang: uiLang,
+        smart: "1",
+        extract: wantExtract ? "1" : "0",
+      });
+      const res = await authFetch(`/decision-map/${roomId}?${qs}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDecisionMapError((data as { error?: string }).error || t(uiLang, "map.errorLoad"));
+        return;
+      }
+      const map = data as DecisionMapData;
+      setDecisionMap(map);
+      setSelectedMapTopicId((prev) => {
+        if (prev) return prev;
+        const issues = map.issues || [];
+        if (!issues.length) return prev;
+        const active = issues.find((i) => i.status === "leaning" || i.status === "open") || issues[0];
+        return active.id;
+      });
+    } catch {
+      setDecisionMapError(t(uiLang, "map.errorLoad"));
+    } finally {
+      setDecisionMapLoading(false);
+      setDecisionMapExtracting(false);
+    }
+  }, [currentConv?.roomId, uiLang]);
+
+  const handleOpenDecisionMap = useCallback(() => {
+    setDecisionMapOpen(true);
+    // Open → smart extract only if transcript changed (backend skips when cache is fresh).
+    void fetchDecisionMap({ extract: true });
+  }, [fetchDecisionMap]);
+
+  const handleChooseOption = useCallback(async (message: Message, option: ChatOptionChip) => {
+    const roomId = currentConv?.roomId;
+    const convId = currentConvId;
+    if (!roomId || !convId || message.chosenOptionId) return;
+    const confirmText = t(uiLang, "chat.choseOption", { label: option.label });
+    // Optimistic lock + confirmation bubble
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== convId) return c;
+        const msgs = c.messages.map((m) =>
+          m.id === message.id ? { ...m, chosenOptionId: option.id } : m,
+        );
+        const confirm: Message = {
+          id: `msg-choice-${Date.now()}`,
+          role: "user",
+          content: confirmText,
+          timestamp: Date.now(),
+        };
+        return { ...c, messages: [...msgs, confirm], preview: confirmText, timestamp: "just now" };
+      }),
+    );
+    try {
+      const res = await authFetch(`/decision-map/${roomId}/choices`, {
+        method: "POST",
+        body: JSON.stringify({
+          lang: uiLang,
+          choice_group_id: message.id,
+          option_id: option.id,
+          label: option.label,
+          proposed_by: message.agentKey,
+          options: message.options,
+          confirm_text: confirmText,
+          message_index: currentConv?.messages.findIndex((m) => m.id === message.id) ?? undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Roll back lock on conflict/error
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id !== convId
+              ? c
+              : {
+                  ...c,
+                  messages: c.messages
+                    .filter((m) => m.content !== confirmText || m.role !== "user")
+                    .map((m) => (m.id === message.id ? { ...m, chosenOptionId: null } : m)),
+                },
+          ),
+        );
+        return;
+      }
+      if (data.map) {
+        setDecisionMap(data.map as DecisionMapData);
+      } else if (decisionMapOpen) {
+        void fetchDecisionMap({ extract: false });
+      }
+    } catch {
+      /* keep optimistic UI */
+    }
+  }, [currentConv?.roomId, currentConv?.messages, currentConvId, uiLang, decisionMapOpen, fetchDecisionMap]);
+
+  // UI language switch → load/extract for that lang (skipped if same-lang cache still fresh).
+  useEffect(() => {
+    if (!decisionMapOpen || !currentConv?.roomId) return;
+    void fetchDecisionMap({ extract: true });
+  }, [uiLang]); // eslint-disable-line react-hooks/exhaustive-deps -- only on lang change
+
+  const handleExtractDecisionMap = useCallback(async () => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return;
+    setDecisionMapExtracting(true);
+    setDecisionMapError(null);
+    try {
+      const res = await authFetch(`/decision-map/${roomId}/extract`, {
+        method: "POST",
+        body: JSON.stringify({ lang: uiLang }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDecisionMapError((data as { error?: string }).error || t(uiLang, "map.errorExtract"));
+        return;
+      }
+      setDecisionMap(data as DecisionMapData);
+    } catch {
+      setDecisionMapError(t(uiLang, "map.errorExtract"));
+    } finally {
+      setDecisionMapExtracting(false);
+    }
+  }, [currentConv?.roomId, uiLang]);
+
+  const handleAddMapAnnotation = useCallback(async () => {
+    const roomId = currentConv?.roomId;
+    const text = mapAnnotationDraft.trim();
+    if (!roomId || !text) return;
+    try {
+      const res = await authFetch(`/decision-map/${roomId}/annotations`, {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          target_id: selectedMapTopicId,
+          kind: "user",
+        }),
+      });
+      if (!res.ok) return;
+      setMapAnnotationDraft("");
+      await fetchDecisionMap({ extract: false });
+    } catch {
+      /* ignore */
+    }
+  }, [currentConv?.roomId, mapAnnotationDraft, selectedMapTopicId, fetchDecisionMap]);
+
+  const handleDeleteMapAnnotation = useCallback(async (id: string) => {
+    const roomId = currentConv?.roomId;
+    if (!roomId) return;
+    try {
+      await authFetch(`/decision-map/${roomId}/annotations`, {
+        method: "DELETE",
+        body: JSON.stringify({ id }),
+      });
+      await fetchDecisionMap({ extract: false });
+    } catch {
+      /* ignore */
+    }
+  }, [currentConv?.roomId, fetchDecisionMap]);
+
+  const handlePromoteLayerAnnotations = useCallback(async () => {
+    const roomId = currentConv?.roomId;
+    const messages = currentConv?.messages || [];
+    if (!roomId) return;
+    const layers: {
+      id: string;
+      layer: string;
+      excerpt: string;
+      message_index: number;
+      target_id?: string | null;
+    }[] = [];
+    messages.forEach((msg, index) => {
+      const anns = chatLayerAnnotations[msg.id] || [];
+      for (const a of anns) {
+        if (a.layer !== "decision") continue;
+        layers.push({
+          id: a.id,
+          layer: a.layer,
+          excerpt: (msg.content || "").slice(a.start, a.end),
+          message_index: index,
+          target_id: selectedMapTopicId,
+        });
+      }
+    });
+    if (layers.length === 0) return;
+    try {
+      await authFetch(`/decision-map/${roomId}/annotations`, {
+        method: "POST",
+        body: JSON.stringify({ promote_layers: true, layers }),
+      });
+      await fetchDecisionMap({ extract: false });
+    } catch {
+      /* ignore */
+    }
+  }, [currentConv?.roomId, currentConv?.messages, chatLayerAnnotations, selectedMapTopicId, fetchDecisionMap]);
+
+  useEffect(() => {
+    const root = messagesContainerRef.current;
+    if (!root || decisionNaviNodes.length === 0) return;
+    const ids = new Set(decisionNaviNodes.map((n) => n.messageId));
+    const elements = [...root.querySelectorAll<HTMLElement>("[data-message-id]")].filter((el) =>
+      ids.has(el.dataset.messageId || ""),
+    );
+    if (elements.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (naviJumpLockRef.current) return;
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        const top = visible[0]?.target as HTMLElement | undefined;
+        const mid = top?.dataset.messageId;
+        if (mid) setNaviActiveMessageId(mid);
+      },
+      { root, threshold: [0.35, 0.6], rootMargin: "-10% 0px -45% 0px" },
+    );
+    elements.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [decisionNaviNodes, currentConvId]);
+
+  const notePhaseChange = useCallback((roomId: string, nextPhase: string | null | undefined, messageId?: string) => {
+    if (!roomId || !nextPhase) return;
+    const prev = lastPhaseByRoomRef.current[roomId] ?? null;
+    lastPhaseByRoomRef.current[roomId] = nextPhase;
+    if (!prev || prev === nextPhase) return;
+    setPhaseMarkersByRoom((markers) => {
+      const list = markers[roomId] || [];
+      if (list.some((m) => m.to === nextPhase && (m.messageId === messageId || !messageId))) {
+        return markers;
+      }
+      return {
+        ...markers,
+        [roomId]: [...list, { from: prev, to: nextPhase, messageId }],
+      };
+    });
+  }, []);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -2488,12 +2938,14 @@ export default function Chat() {
     const delay = isSystem ? 200 : 900;
     const timer = setTimeout(() => {
       const agentMsg: Message = {
-        id: `msg-${Date.now()}-${next.agentKey}`,
+        id: next.messageId || `msg-${Date.now()}-${next.agentKey}`,
         role: isSystem ? "system" : "agent",
         agentKey: isSystem ? undefined : (next.agentKey as AgentKey),
         content: next.content,
         timestamp: Date.now(),
         emotionTagSnapshot: isSystem ? null : next.emotionTagSnapshot,
+        options: next.options && next.options.length >= 2 ? next.options : undefined,
+        knowledge: isSystem ? undefined : next.knowledge,
       };
       const names = agentNamesRef.current;
       const previewLabel = isSystem ? "System" : names[next.agentKey as AgentKey];
@@ -2625,6 +3077,7 @@ export default function Chat() {
       if (isAgora2SceneId(selectedScene?.id) && (!userProfile || !agora2Intake)) {
         if (!userProfile) {
           setSessionCreateError(t(uiLang, "err.profile"));
+          setProfileHandoff(false);
           setShowProfileModal(true);
         } else {
           setSessionCreateError(t(uiLang, "err.intake"));
@@ -2756,7 +3209,9 @@ export default function Chat() {
       setConversations((prev) => [newConv, ...prev]);
       convId = newConv.id;
       setCurrentConvId(convId);
-      setCurrentPhase(null);
+      setCurrentPhase("Exploration");
+      lastPhaseByRoomRef.current[roomId] = "Exploration";
+      setPhaseMarkersByRoom((prev) => ({ ...prev, [roomId]: prev[roomId] || [] }));
     } else {
       setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, messages: [...c.messages, userMsg], timestamp: "just now" } : c));
     }
@@ -2867,10 +3322,13 @@ export default function Chat() {
         throw new Error((data as { error?: string })?.error || `HTTP ${res.status}`);
       }
       setCurrentPhase(data.phase || null);
+      notePhaseChange(roomId, data.phase || null, userMsg.id);
       const responses: Array<{
         agent_key: string;
         message: string;
-       
+        message_id?: string;
+        options?: ChatOptionChip[];
+        knowledge?: KnowledgeReference;
       }> = data.responses || [];
       if (responses.length === 0) { setTypingKeys([]); }
       else {
@@ -2880,12 +3338,20 @@ export default function Chat() {
             const isSystem = r.agent_key === "system" || r.agent_key === "System";
             const agentKey = (isSystem ? "system" : (r.agent_key || "A")) as AgentKey | "system";
             const currentSetting = !isSystem ? agentSettingsRef.current[agentKey as AgentKey] : null;
+            const opts = Array.isArray(r.options)
+              ? r.options.filter((o) => o && o.id && o.label).map((o) => ({ id: String(o.id), label: String(o.label) }))
+              : undefined;
             return {
               agentKey,
               content: r.message || "",
               convId: convId as string,
               emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
               isSystem,
+              messageId: r.message_id,
+              options: opts && opts.length >= 2 ? opts : undefined,
+              knowledge: r.knowledge?.id && r.knowledge?.tag
+                ? { id: String(r.knowledge.id), tag: String(r.knowledge.tag), source: String(r.knowledge.source || "") }
+                : undefined,
             };
           });
         const filtered = activeMode === "single"
@@ -2939,32 +3405,52 @@ export default function Chat() {
         setAgentBackendNames((prev) => ({ ...prev, ...runtimeBackendNames }));
       }
       const hist = data.history || [];
+      const choices: Array<{ choice_group_id?: string; option_id?: string }> = data.choices || [];
+      const chosenByGroup = new Map(
+        choices
+          .filter((c) => c.choice_group_id && c.option_id)
+          .map((c) => [String(c.choice_group_id), String(c.option_id)]),
+      );
       const messages: Message[] = hist.map((
-        h: { character: string; txt: string },
+        h: { id?: string; character: string; txt: string; time?: string; options?: ChatOptionChip[]; knowledge?: KnowledgeReference },
         i: number,
       ) => {
-        if (h.character === "user") return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+        const ts = historyTimestamp(h.time, i, hist.length);
+        const mid = h.id || `h-${i}`;
+        if (h.character === "user") return { id: mid, role: "user" as const, content: h.txt, timestamp: ts };
         if (h.character === "system") {
           return {
-            id: `h-${i}`,
+            id: mid,
             role: "system" as const,
             content: h.txt,
-            timestamp: Date.now() - (hist.length - i) * 1000,
+            timestamp: ts,
           };
         }
         const agentKey = runtimeMap[h.character] ?? BACKEND_NAME_TO_KEY[h.character] ?? "A";
         const currentSetting = agentSettingsRef.current[agentKey];
+        const opts = Array.isArray(h.options) && h.options.length >= 2
+          ? h.options.map((o) => ({ id: String(o.id), label: String(o.label) }))
+          : undefined;
         return {
-          id: `h-${i}`,
+          id: mid,
           role: "agent" as const,
           agentKey,
           content: h.txt,
-          timestamp: Date.now() - (hist.length - i) * 1000,
+          timestamp: ts,
           emotionTagSnapshot: currentSetting?.emotionOn ? (currentSetting.emotionTag ?? "joy") : null,
+          options: opts,
+          chosenOptionId: opts ? (chosenByGroup.get(mid) || null) : null,
+          knowledge: h.knowledge?.id && h.knowledge?.tag ? h.knowledge : undefined,
         };
       });
       setConversations((prev) => prev.map((c) => c.id === currentConvId ? { ...c, messages } : c));
       if (data.phase) setCurrentPhase(data.phase);
+      const roomId = currentConv.roomId;
+      lastPhaseByRoomRef.current[roomId] = data.phase || lastPhaseByRoomRef.current[roomId] || "Exploration";
+      const markers = phaseMarkersFromApi(data.phase_changes);
+      if (markers.length > 0) {
+        setPhaseMarkersByRoom((prev) => ({ ...prev, [roomId]: markers }));
+      }
     } catch {}
   };
 
@@ -3006,6 +3492,8 @@ export default function Chat() {
         return;
       }
       setSummaryByRoom((prev) => ({ ...prev, [roomId]: (data as { markdown?: string }).markdown || "" }));
+      // Summary caches overall JSON for the decision map — refresh if the panel is open.
+      if (decisionMapOpen) void fetchDecisionMap({ extract: false });
     } catch {
       setSummaryError(t(uiLang, "err.summaryBackend"));
     } finally {
@@ -3112,6 +3600,9 @@ export default function Chat() {
     setTypingKeys([]);
     setMsgQueue([]);
     setSidebarOpen(false);
+    if (conv?.roomId && lastPhaseByRoomRef.current[conv.roomId] == null) {
+      lastPhaseByRoomRef.current[conv.roomId] = "Exploration";
+    }
     // Past rooms restored from DB often have empty messages — pull history
     if (conv?.roomId && (!conv.messages || conv.messages.length === 0)) {
       void (async () => {
@@ -3120,27 +3611,46 @@ export default function Chat() {
           if (!res.ok) return;
           const data = await res.json();
           const hist = data.history || [];
+          const choices: Array<{ choice_group_id?: string; option_id?: string }> = data.choices || [];
+          const chosenByGroup = new Map(
+            choices
+              .filter((c) => c.choice_group_id && c.option_id)
+              .map((c) => [String(c.choice_group_id), String(c.option_id)]),
+          );
           const messages: Message[] = hist.map((
-            h: { character: string; txt: string },
+            h: { id?: string; character: string; txt: string; time?: string; options?: ChatOptionChip[]; knowledge?: KnowledgeReference },
             i: number,
           ) => {
+            const ts = historyTimestamp(h.time, i, hist.length);
+            const mid = h.id || `h-${i}`;
             if (h.character === "user") {
-              return { id: `h-${i}`, role: "user" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+              return { id: mid, role: "user" as const, content: h.txt, timestamp: ts };
             }
             if (h.character === "system") {
-              return { id: `h-${i}`, role: "system" as const, content: h.txt, timestamp: Date.now() - (hist.length - i) * 1000 };
+              return { id: mid, role: "system" as const, content: h.txt, timestamp: ts };
             }
             const agentKey = (BACKEND_NAME_TO_KEY[h.character] ?? "A") as AgentKey;
+            const opts = Array.isArray(h.options) && h.options.length >= 2
+              ? h.options.map((o) => ({ id: String(o.id), label: String(o.label) }))
+              : undefined;
             return {
-              id: `h-${i}`,
+              id: mid,
               role: "agent" as const,
               agentKey,
               content: h.txt,
-              timestamp: Date.now() - (hist.length - i) * 1000,
-                };
+              timestamp: ts,
+              options: opts,
+              chosenOptionId: opts ? (chosenByGroup.get(mid) || null) : null,
+              knowledge: h.knowledge?.id && h.knowledge?.tag ? h.knowledge : undefined,
+            };
           });
           setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, messages } : c)));
           if (data.phase) setCurrentPhase(data.phase);
+          lastPhaseByRoomRef.current[conv.roomId] = data.phase || lastPhaseByRoomRef.current[conv.roomId] || "Exploration";
+          const markers = phaseMarkersFromApi(data.phase_changes);
+          if (markers.length > 0) {
+            setPhaseMarkersByRoom((prev) => ({ ...prev, [conv.roomId]: markers }));
+          }
         } catch {
           /* ignore */
         }
@@ -3286,13 +3796,16 @@ export default function Chat() {
             agentKeys={
               (currentConv?.settings?.mode ?? experimentMode) === "single"
                 ? ["A"]
-                : (currentConv?.settings?.activeAgentKeys || activeAgentKeys)
+                : activeAgentKeys
             }
             scenarioId={selectedScene?.id || currentConv?.settings?.selectedScene?.id || null}
             uiLang={uiLang}
             onSave={(names, settings) => {
               const mode = currentConv?.settings?.mode ?? experimentMode;
-              const roster = mode === "single" ? (["A"] as AgentKey[]) : (currentConv?.settings?.activeAgentKeys || activeAgentKeys);
+              // Prefer live activeAgentKeys (and ref) — conv.settings can lag one paint behind mid-session add/remove.
+              const roster = mode === "single"
+                ? (["A"] as AgentKey[])
+                : (activeAgentKeysRef.current.length ? activeAgentKeysRef.current : activeAgentKeys);
               if (mode === "full" && currentConv?.roomId) {
                 const changes: Array<{ type: string; agent: string; before: string | null; after: string | null }> = [];
                 roster.forEach((k) => {
@@ -3302,7 +3815,6 @@ export default function Chat() {
                   if (settings[k]?.emotionOn !== agentSettings[k]?.emotionOn || settings[k]?.emotionTag !== agentSettings[k]?.emotionTag) changes.push({ type: "emotion", agent, before: agentSettings[k]?.emotionTag ?? null, after: settings[k]?.emotionTag ?? null });
                   if (settings[k]?.decisionBlock !== agentSettings[k]?.decisionBlock) changes.push({ type: "decision", agent, before: agentSettings[k]?.decisionBlock ?? null, after: settings[k]?.decisionBlock ?? null });
                   if ((settings[k]?.stance ?? null) !== (agentSettings[k]?.stance ?? null)) changes.push({ type: "stance", agent, before: agentSettings[k]?.stance ?? null, after: settings[k]?.stance ?? null });
-                  if ((settings[k]?.hint ?? "") !== (agentSettings[k]?.hint ?? "")) changes.push({ type: "hint", agent, before: agentSettings[k]?.hint ?? null, after: settings[k]?.hint ?? null });
                 });
               if (changes.length > 0) {
                   fetch(`${API_BASE}/log-param-change`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }) }).catch(() => {});
@@ -3333,57 +3845,51 @@ export default function Chat() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {showProfileModal && pendingProfileScene && (
+        {(showSceneSelector || !!pendingIntakeScene || (showProfileModal && !!pendingProfileScene)) && (
           <motion.div
-            key="profile-overlay"
+            key="scene-flow-overlay"
             className="fixed inset-0 bg-black/30 z-[60] flex items-center justify-center p-6"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             onClick={() => {
-              if (userProfile) {
-                setShowProfileModal(false);
-                setPendingProfileScene(null);
+              if (showProfileModal && pendingProfileScene) {
+                if (userProfile) {
+                  setShowProfileModal(false);
+                  setPendingProfileScene(null);
+                  setProfileHandoff(false);
+                }
+                return;
               }
-            }}
-          >
-            <ProfileModal
-              userId={webUserId}
-              scenarioType={pendingProfileScene.id}
-              lang={uiLang}
-              dismissible={!!userProfile}
-              onClose={userProfile ? () => {
-                setShowProfileModal(false);
-                setPendingProfileScene(null);
-              } : undefined}
-              onConfirm={(profile) => {
-                setUserProfile(profile);
-                setShowProfileModal(false);
-                setPendingIntakeScene(pendingProfileScene);
-                setPendingProfileScene(null);
-              }}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {(showSceneSelector || !!pendingIntakeScene) && (
-          <motion.div
-            key="scene-flow-overlay"
-            className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            onClick={() => {
               if (pendingIntakeScene) setPendingIntakeScene(null);
               else setShowSceneSelector(false);
             }}
           >
             <AnimatePresence mode="wait" initial={false}>
-              {pendingIntakeScene ? (
+              {showProfileModal && pendingProfileScene ? (
+                <ProfileModal
+                  key={`profile-${pendingProfileScene.id}`}
+                  userId={webUserId}
+                  scenarioType={pendingProfileScene.id}
+                  lang={uiLang}
+                  dismissible={!!userProfile}
+                  instantExit={profileHandoff}
+                  onClose={userProfile ? () => {
+                    setShowProfileModal(false);
+                    setPendingProfileScene(null);
+                    setProfileHandoff(false);
+                  } : undefined}
+                  onConfirm={(profile) => {
+                    const scene = pendingProfileScene;
+                    setUserProfile(profile);
+                    setProfileHandoff(true);
+                    setPendingIntakeScene(scene);
+                    setShowProfileModal(false);
+                    setPendingProfileScene(null);
+                  }}
+                />
+              ) : pendingIntakeScene ? (
                 <IntakeModal
                   key={`intake-${pendingIntakeScene.id}`}
                   scene={pendingIntakeScene}
@@ -3397,6 +3903,7 @@ export default function Chat() {
                     setSessionIndex(sessionCountBefore + 1);
                     setPendingIntakeScene(null);
                     setShowSceneSelector(false);
+                    setProfileHandoff(false);
                   }}
                 />
               ) : (
@@ -3525,6 +4032,7 @@ export default function Chat() {
                 onAccount={() => {
                   const s = selectedScene && isAgora2SceneId(selectedScene.id) ? selectedScene : null;
                   if (s) {
+                    setProfileHandoff(false);
                     setPendingProfileScene(s);
                     setShowProfileModal(true);
                   } else {
@@ -3624,44 +4132,147 @@ export default function Chat() {
                 )}
               </div>
             )}
-            {((currentConv?.settings?.mode ?? experimentMode) === "single"
-              ? (["A"] as AgentKey[])
-              : activeAgentKeys
-            ).map((key) => {
+            {currentConv && decisionNaviNodes.length > 0 && (
+              <div className="pr-3 border-r border-black/10">
+                <DecisionNavi
+                  nodes={decisionNaviNodes}
+                  count={decisionMap?.issues?.length || decisionNaviNodes.length}
+                  lang={uiLang}
+                  open={decisionMapOpen}
+                  onOpen={handleOpenDecisionMap}
+                />
+              </div>
+            )}
+            {(() => {
               const headerMode = currentConv?.settings?.mode ?? experimentMode;
+              const rosterKeys: AgentKey[] =
+                headerMode === "single" ? (["A"] as AgentKey[]) : activeAgentKeys;
               const canEditRoster = !!currentConv && headerMode === "full";
               return (
-              <div key={key} className="relative group/chip flex items-center gap-1.5 pr-1" title={agentNames[key as AgentKey]}>
-                <div className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0" style={{ backgroundColor: agentSettings[key as AgentKey]?.accentColor || DEFAULT_AGENT_COLORS[key as AgentKey] }} />
-                <span className="hidden sm:block text-[10px] tracking-widest text-black" style={monoFont}>{agentNames[key as AgentKey]}</span>
-                {canEditRoster && activeAgentKeys.length > MIN_ROSTER_AGENTS && (
+                <div className="relative flex items-center">
                   <button
+                    ref={agentsBtnRef}
                     type="button"
-                    aria-label={t(uiLang, "chat.removeAgent", { name: agentNames[key] })}
-                    onClick={(e) => { e.stopPropagation(); removeAgent(key); }}
-                    className="ml-0.5 w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover/chip:opacity-100 hover:bg-black/8 text-black/40 hover:text-black/70 transition-opacity"
+                    onClick={() => setAgentsOpen((v) => !v)}
+                    className="flex items-center gap-1.5 h-4 hover:opacity-80 transition-opacity"
+                    aria-expanded={agentsOpen}
+                    title={t(uiLang, "chat.agents")}
                   >
-                    <svg width="8" height="8" viewBox="0 0 12 12" fill="none" aria-hidden>
-                      <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    <span className="flex items-center -space-x-0.5">
+                      {rosterKeys.slice(0, 3).map((key) => (
+                        <span
+                          key={key}
+                          className="w-[7px] h-[7px] rounded-[1.5px] ring-1 ring-white"
+                          style={{
+                            backgroundColor:
+                              agentSettings[key]?.accentColor || DEFAULT_AGENT_COLORS[key],
+                          }}
+                        />
+                      ))}
+                    </span>
+                    <span
+                      className={`text-[10px] tracking-widest text-black ${labelCaseClass(uiLang)}`}
+                      style={monoFont}
+                    >
+                      {t(uiLang, "chat.agents")}
+                    </span>
+                    <svg
+                      width="8"
+                      height="8"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      aria-hidden
+                      className={`opacity-40 transition-transform ${agentsOpen ? "rotate-180" : ""}`}
+                    >
+                      <path d="M2 4L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   </button>
-                )}
-              </div>
+                  <AnimatePresence>
+                    {agentsOpen && (
+                      <motion.div
+                        ref={agentsPanelRef}
+                        initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                        transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
+                        className="absolute top-[calc(100%+8px)] right-0 z-50 min-w-[180px] rounded-[10px] border border-black/10 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.1)] py-1.5 px-1.5"
+                      >
+                        <ul className="flex flex-col gap-0.5">
+                          {rosterKeys.map((key) => (
+                            <li
+                              key={key}
+                              className="group/chip flex items-center gap-2 px-2 py-1.5 rounded-[6px] hover:bg-black/[0.03]"
+                            >
+                              <span
+                                className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0"
+                                style={{
+                                  backgroundColor:
+                                    agentSettings[key]?.accentColor || DEFAULT_AGENT_COLORS[key],
+                                }}
+                              />
+                              <span
+                                className="flex-1 text-[11px] tracking-widest text-black truncate"
+                                style={monoFont}
+                                title={agentNames[key]}
+                              >
+                                {agentNames[key]}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label={t(uiLang, "settings.customizeAgent")}
+                                title={t(uiLang, "settings.customizeAgent")}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCustomizerInitialAgent(key);
+                                  setShowCustomizer(true);
+                                  setAgentsOpen(false);
+                                }}
+                                className="w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover/chip:opacity-100 hover:bg-black/8 text-black/40 hover:text-black/70 transition-opacity"
+                              >
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                                  <circle cx="12" cy="12" r="3" />
+                                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                                </svg>
+                              </button>
+                              {canEditRoster && activeAgentKeys.length > MIN_ROSTER_AGENTS && (
+                                <button
+                                  type="button"
+                                  aria-label={t(uiLang, "chat.removeAgent", { name: agentNames[key] })}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeAgent(key);
+                                  }}
+                                  className="w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover/chip:opacity-100 hover:bg-black/8 text-black/40 hover:text-black/70 transition-opacity"
+                                >
+                                  <svg width="8" height="8" viewBox="0 0 12 12" fill="none" aria-hidden>
+                                    <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                                  </svg>
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                        {canEditRoster && activeAgentKeys.length < MAX_ROSTER_AGENTS && (
+                          <button
+                            type="button"
+                            onClick={() => addAgent()}
+                            className="mt-1 w-full flex items-center gap-2 px-2 py-1.5 rounded-[6px] text-[11px] text-black/45 hover:text-black/70 hover:bg-black/[0.03] transition-colors border border-dashed border-black/15"
+                            style={monoFont}
+                          >
+                            <span className="w-4 h-4 flex items-center justify-center">
+                              <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden>
+                                <path d="M8 1V15M1 8H15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                              </svg>
+                            </span>
+                            {t(uiLang, "chat.addAgent")}
+                          </button>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               );
-            })}
-            {!!currentConv && (currentConv?.settings?.mode ?? experimentMode) === "full"
-              && activeAgentKeys.length < MAX_ROSTER_AGENTS && (
-              <button
-                type="button"
-                onClick={() => addAgent()}
-                title={t(uiLang, "chat.addAgent")}
-                className="w-6 h-6 border border-dashed border-black/20 rounded-[6px] flex items-center justify-center text-black/30 hover:text-black/60 hover:border-black/40 transition-colors"
-              >
-                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden>
-                  <path d="M8 1V15M1 8H15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                </svg>
-              </button>
-            )}
+            })()}
             <div className="flex items-center gap-1.5 ml-1 pl-3 border-l border-black/10" title={nickname || "You"}>
               <div className="w-[7px] h-[7px] rounded-[1.5px] bg-red-500" />
               <span className="hidden sm:block text-[10px] tracking-widest text-black" style={monoFont}>{(nickname || "You").toUpperCase()}</span>
@@ -3904,6 +4515,8 @@ export default function Chat() {
                 const firstTurnAgentSeen: Partial<Record<AgentKey, boolean>> = {};
                 const emotionTagCounts: Record<string, number> = {};
                 return currentConv.messages.map((msg) => {
+                  const isHighlighted =
+                    highlightedMessageId === msg.id || highlightedMessageIds.includes(msg.id);
                   if (msg.role === "user") {
                     userTurnCount += 1;
                     return (
@@ -3914,11 +4527,20 @@ export default function Chat() {
                         chatAnnotationMode={chatAnnotationMode}
                         layerAnnotations={chatLayerAnnotations[msg.id]}
                         onChatAnnotationDraft={onChatAnnotationDraft}
+                        highlighted={isHighlighted}
+                        highlightToken={highlightToken}
                       />
                     );
                   }
                   if (msg.role === "system") {
-                    return <SystemMessage key={msg.id} message={msg} />;
+                    return (
+                      <SystemMessage
+                        key={msg.id}
+                        message={msg}
+                        highlighted={isHighlighted}
+                        highlightToken={highlightToken}
+                      />
+                    );
                   }
                   const compactRepeatedIntro = !!(msg.agentKey && userTurnCount === 1 && firstTurnAgentSeen[msg.agentKey]);
                   if (msg.agentKey && userTurnCount === 1) {
@@ -3946,6 +4568,9 @@ export default function Chat() {
                       layerAnnotations={chatLayerAnnotations[msg.id]}
                       onChatAnnotationDraft={onChatAnnotationDraft}
                       uiLang={uiLang}
+                      highlighted={isHighlighted}
+                      highlightToken={highlightToken}
+                      onChooseOption={handleChooseOption}
                     />
                   );
                 });
@@ -4106,6 +4731,25 @@ export default function Chat() {
         />
       )}
     </AnimatePresence>
-    </>
+    <DecisionMapPanel
+      open={decisionMapOpen}
+      onClose={() => setDecisionMapOpen(false)}
+      data={decisionMap}
+      loading={decisionMapLoading}
+      error={decisionMapError}
+      lang={uiLang}
+      selectedTopicId={selectedMapTopicId}
+      onSelectTopic={setSelectedMapTopicId}
+      onJumpIndexes={jumpToRange}
+      onRefresh={() => void fetchDecisionMap({ extract: true })}
+      onExtract={() => void handleExtractDecisionMap()}
+      extracting={decisionMapExtracting}
+      annotationDraft={mapAnnotationDraft}
+      onAnnotationDraftChange={setMapAnnotationDraft}
+      onAddAnnotation={() => void handleAddMapAnnotation()}
+      onDeleteAnnotation={(id) => void handleDeleteMapAnnotation(id)}
+      onPromoteLayers={() => void handlePromoteLayerAnnotations()}
+    />
+  </>
   );
 }

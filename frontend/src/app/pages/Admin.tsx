@@ -46,6 +46,7 @@ export default function Admin() {
   const [rooms, setRooms] = useState<AdminRoom[]>([]);
   const [memory, setMemory] = useState<MemoryRec[]>([]);
   const [roomDetail, setRoomDetail] = useState<string | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
 
   const reloadUsers = useCallback(async () => {
     setLoading(true);
@@ -161,6 +162,11 @@ export default function Admin() {
         return;
       }
       setActionMsg(`Deleted ${selected.user_id}`);
+      setCheckedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(selected.user_id);
+        return next;
+      });
       setSelected(null);
       setNewPassword("");
       await reloadUsers();
@@ -188,12 +194,32 @@ export default function Admin() {
     if (selected?.user_id) void loadUserSessions(selected.user_id);
   }, [selected?.user_id, loadUserSessions]);
 
-  const exportUser = async () => {
-    if (!selected) return;
+  const toggleChecked = (userId: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  };
+
+  const toggleCheckAll = () => {
+    setCheckedIds((prev) => {
+      if (prev.size === users.length) return new Set();
+      return new Set(users.map((u) => u.user_id));
+    });
+  };
+
+  const exportUsers = async (ids: string[]) => {
+    if (ids.length === 0) {
+      setActionMsg("Select at least one user to export");
+      return;
+    }
     setBusy(true);
     setActionMsg(null);
     try {
-      const res = await authFetch(`/admin/export?user_id=${encodeURIComponent(selected.user_id)}`);
+      const qs = ids.map((id) => `user_id=${encodeURIComponent(id)}`).join("&");
+      const res = await authFetch(`/admin/export?${qs}`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setActionMsg(data.error || "Export failed");
@@ -203,14 +229,18 @@ export default function Admin() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `agora_export_${selected.user_id}.zip`;
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = /filename="?([^"]+)"?/i.exec(cd);
+      a.download = m?.[1] || (ids.length === 1 ? `agora_export_${ids[0]}.zip` : `agora_export_${ids.length}users.zip`);
       a.click();
       URL.revokeObjectURL(url);
-      setActionMsg(`Exported ${selected.user_id}`);
+      setActionMsg(`Exported ${ids.length} user${ids.length === 1 ? "" : "s"}`);
     } finally {
       setBusy(false);
     }
   };
+
+  const exportSelected = () => void exportUsers(Array.from(checkedIds));
 
   const openRoom = async (roomId: string) => {
     setBusy(true);
@@ -342,8 +372,30 @@ export default function Admin() {
 
       <div className="max-w-[1100px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4">
         <section className="border border-black/10 rounded-[12px] overflow-hidden flex flex-col">
-          <div className="px-3 py-2 border-b border-black/8 text-[11px] text-[var(--app-muted-text)]" style={monoFont}>
-            Users ({users.length})
+          <div className="px-3 py-2 border-b border-black/8 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <label className="flex items-center gap-1.5 text-[11px] text-[var(--app-muted-text)] cursor-pointer" style={monoFont}>
+                <input
+                  type="checkbox"
+                  checked={users.length > 0 && checkedIds.size === users.length}
+                  onChange={toggleCheckAll}
+                  disabled={users.length === 0}
+                />
+                Users ({users.length})
+              </label>
+              {checkedIds.size > 0 && (
+                <span className="text-[10px] text-black/50" style={monoFont}>{checkedIds.size} selected</span>
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={busy || checkedIds.size === 0}
+              onClick={exportSelected}
+              className="h-[28px] px-2.5 bg-black text-white rounded-[6px] text-[11px] hover:bg-neutral-800 disabled:opacity-40 flex-shrink-0"
+              style={monoFont}
+            >
+              Export ({checkedIds.size})
+            </button>
           </div>
           <div className="px-3 py-3 border-b border-black/8 flex flex-col gap-2 bg-black/[0.015]">
             <p className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>Add user</p>
@@ -385,13 +437,24 @@ export default function Admin() {
           {error && <p className="p-3 text-[12px] text-red-600" style={monoFont}>{error}</p>}
           <ul className="max-h-[55vh] overflow-y-auto flex-1">
             {users.map((u) => (
-              <li key={u.user_id}>
+              <li
+                key={u.user_id}
+                className={`flex items-stretch border-b border-black/5 hover:bg-black/[0.03] ${
+                  selected?.user_id === u.user_id ? "bg-black/[0.05]" : ""
+                }`}
+              >
+                <label className="flex items-center px-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={checkedIds.has(u.user_id)}
+                    onChange={() => toggleChecked(u.user_id)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </label>
                 <button
                   type="button"
                   onClick={() => { setSelected(u); setActionMsg(null); }}
-                  className={`w-full text-left px-3 py-2.5 border-b border-black/5 hover:bg-black/[0.03] ${
-                    selected?.user_id === u.user_id ? "bg-black/[0.05]" : ""
-                  }`}
+                  className="flex-1 min-w-0 text-left py-2.5 pr-3"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[12px] truncate" style={monoFont}>{u.user_id}</span>
@@ -473,11 +536,11 @@ export default function Admin() {
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => void exportUser()}
-                    className="h-[32px] px-3 bg-black text-white rounded-[8px] text-[11px] hover:bg-neutral-800 disabled:opacity-40"
+                    onClick={() => void exportUsers([selected.user_id])}
+                    className="h-[32px] px-3 border border-black/15 text-black/80 rounded-[8px] text-[11px] hover:bg-black/5 disabled:opacity-40"
                     style={monoFont}
                   >
-                    Export zip
+                    Export this user
                   </button>
                 </div>
                 <ul className="border border-black/10 rounded-[8px] max-h-[220px] overflow-y-auto mb-2">

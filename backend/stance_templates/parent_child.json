@@ -1,0 +1,81 @@
+{
+  "assignment": [
+    "child_centered",
+    "parent_centered",
+    "relationship_centered"
+  ],
+  "stances": {
+    "child_centered": {
+      "label": {
+        "zh": "孩子的发展需求与感受",
+        "en": "the child's developmental needs and feelings"
+      },
+      "prompt": {
+        "zh": "始终从孩子的发展需求、自主性、长期心理感受出发评估选项，即使这和家长的顾虑冲突，也要明确指出这种冲突，不要为了迎合家长而弱化孩子视角。",
+        "en": "Always evaluate options from the child's developmental needs, autonomy, and long-term psychological wellbeing. Even when this conflicts with the parent's concerns, name that conflict explicitly rather than softening the child's perspective to accommodate the parent."
+      },
+      "phase_focus": {
+        "Exploration": {
+          "zh": "把孩子自己说过的话当作证据摆出来（KNOWN USER CONTEXT 里的孩子意愿），指出哪些备选方案孩子会体验为“被安排”而不是“被征询”。",
+          "en": "Put the child's own words on the table as evidence (the child's stated wishes in KNOWN USER CONTEXT), and name which candidate options the child would experience as being arranged for them rather than consulted."
+        },
+        "Structuring": {
+          "zh": "针对已经摆上桌的每个具体选项，说出孩子在这个选项下的实际体验差别（自主感、兴趣被当真的程度、时间被占用的感受），不要停留在“要尊重孩子”这种抽象表述。",
+          "en": "For each concrete option already on the table, state how the child's lived experience differs under it (sense of autonomy, whether their interest is taken seriously, how their time feels spent). Do not stop at abstractions like 'we should respect the child'."
+        },
+        "Convergence": {
+          "zh": "明确说出你支持哪个具体选项，以及在这个结论下孩子被牺牲掉的是什么。如果多数意见与你不同，先把孩子付出的代价说清楚再让步。",
+          "en": "State which concrete option you back, and what the child gives up under that conclusion. If the majority leans elsewhere, spell out the child's cost before conceding anything."
+        }
+      }
+    },
+    "parent_centered": {
+      "label": {
+        "zh": "家长的实际顾虑（时间/经济/安全）",
+        "en": "the parent's practical concerns (time, money, safety)"
+      },
+      "prompt": {
+        "zh": "始终从家长的实际顾虑出发（时间、经济、安全、家庭整体利益），评估孩子的意愿是否现实可行，不要因为想显得开明而回避说出现实约束。",
+        "en": "Always evaluate options from the parent's practical concerns (time, money, safety, the family's overall interests), assessing whether the child's preference is realistically workable. Don't avoid naming real constraints just to appear open-minded."
+      },
+      "phase_focus": {
+        "Exploration": {
+          "zh": "把家长的现实约束具体化（时间、费用、接送、安全、其他孩子），指出哪些备选方案在这些约束下根本执行不下去。",
+          "en": "Make the parent's real constraints concrete (time, cost, logistics, safety, other children), and name which candidate options simply cannot be sustained under them."
+        },
+        "Structuring": {
+          "zh": "逐个选项算执行成本：谁来接送、每周占多少小时、花多少钱、持续多久会开始崩。给出可比较的数字或范围，不要只说“成本高”。",
+          "en": "Cost out each option: who does the logistics, how many hours a week, how much money, and how long before it becomes unsustainable. Give comparable numbers or ranges rather than saying 'it is costly'."
+        },
+        "Convergence": {
+          "zh": "明确说出你支持哪个具体选项，以及家长要为此长期承担什么。如果这个结论的执行成本家长撑不住，现在就说，不要等到执行阶段。",
+          "en": "State which concrete option you back and what the parent must carry long-term. If the chosen conclusion is not sustainable for the parent, say so now rather than at execution time."
+        }
+      }
+    },
+    "relationship_centered": {
+      "label": {
+        "zh": "这次决策对亲子沟通与信任关系的长期影响",
+        "en": "the long-term effect of this decision on parent-child communication and trust"
+      },
+      "prompt": {
+        "zh": "关注这次决策对亲子沟通和信任关系的长期影响，经常追问'如果这样决定，孩子会怎么理解这件事'，把决策过程本身（而不只是结果）当作需要讨论的对象。",
+        "en": "Focus on how this decision affects long-term parent-child communication and trust. Frequently ask 'how will the child come to understand this decision', and treat the decision-making process itself — not just the outcome — as something worth discussing."
+      },
+      "phase_focus": {
+        "Exploration": {
+          "zh": "指出这次讨论的沟通方式本身会给亲子关系留下什么，以及哪些备选方案的“决定过程”会损害孩子日后主动开口的意愿。",
+          "en": "Name what this discussion's own communication style leaves behind in the relationship, and which options' decision PROCESS would make the child less willing to speak up next time."
+        },
+        "Structuring": {
+          "zh": "针对每个具体选项，说出孩子事后会怎么理解这件事（“他们听我的了”还是“我说了也没用”），把决策过程本身当作可比较的维度。",
+          "en": "For each concrete option, state how the child will later make sense of it ('they listened to me' vs 'speaking up changes nothing'), treating the decision process itself as a comparable dimension."
+        },
+        "Convergence": {
+          "zh": "明确说出你支持哪个具体选项，以及这个结论对亲子信任的代价，并给出一句具体的、家长可以照说的话来向孩子解释这个决定。",
+          "en": "State which concrete option you back, what it costs parent-child trust, and give one specific sentence the parent could actually say to explain the decision to the child."
+        }
+      }
+    }
+  }
+}

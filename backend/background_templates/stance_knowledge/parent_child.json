@@ -3,211 +3,605 @@
     "topic_cards": [
       {
         "id": "child_emotional_outburst",
+        "tag": {
+          "zh": "情绪失控",
+          "en": "Emotional outburst"
+        },
         "keywords": [
           "发脾气",
           "情绪失控",
           "崩溃",
+          "闹脾气",
+          "哭闹",
           "tantrum",
           "meltdown",
-          "emotional outburst"
+          "emotional outburst",
+          "blows up",
+          "loses it",
+          "screaming fit"
         ],
         "text": {
-          "zh": "儿童的情绪失控，很多时候不是“故意不听话”，而是情绪调节能力还没发展成熟、又缺乏语言表达内心需求的能力时的一种外显方式。年龄越小，这种关联越明显。以上是一般性框架，不是对具体某个孩子的判断。",
+          "zh": "儿童的情绪失控，很多时候不是“故意不听话”，而是情绪调节能力还没发展成熟、又缺乏语言表达内心需求时的一种外显方式。年龄越小，这种关联越明显。以上是一般性框架，不是对具体某个孩子的判断。",
           "en": "A child's emotional outbursts are often not willful defiance, but an outward expression of still-developing emotional regulation combined with limited language to express underlying needs. This association is stronger at younger ages. This is a general framework, not a judgment about any specific child."
         },
-        "source": "General developmental psychology framing consistent with emotion-coaching research (cf. Gottman, Katz, & Hooven, 1997, on parental meta-emotion philosophy); for illustrative/educational use only, not a substitute for professional guidance.",
+        "source": "General framing consistent with emotion socialization research (cf. Gottman, Katz, & Hooven, 1997, on parental meta-emotion philosophy); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "child_defiance",
+          "child_sleep",
           "relationship_communication_breakdown"
         ]
       },
       {
         "id": "child_defiance",
+        "tag": {
+          "zh": "对抗与自主",
+          "en": "Defiance and autonomy"
+        },
         "keywords": [
           "不听话",
           "叛逆",
           "对抗",
+          "顶嘴",
+          "唱反调",
           "defiant",
-          "rebellious"
+          "rebellious",
+          "won't listen",
+          "talks back",
+          "pushes back",
+          "refuses to listen"
         ],
         "text": {
           "zh": "儿童和青少年阶段性的“不听话”，常常和发展自主性的心理需求有关，尤其在青春期前后更明显。这不必然代表亲子关系出了问题，也是成长过程的常见部分。以上是一般性框架，不是对具体某个孩子的判断。",
           "en": "Stage-related “defiance” in children and adolescents is often linked to the developmental need for autonomy, especially around early adolescence. It does not necessarily indicate a problem in the parent-child relationship, and is a common part of development. This is a general framework, not a judgment about any specific child."
         },
-        "source": "General developmental framing consistent with autonomy-support parenting research (cf. Grolnick & Pomerantz, 2009); for illustrative/educational use only, not a substitute for professional guidance.",
+        "source": "General framing consistent with autonomy-support research (cf. Grolnick & Pomerantz, 2009, on parental control and autonomy support); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "relationship_adolescent_distancing",
+          "child_personal_jurisdiction",
+          "relationship_conflict_normativity",
           "parent_power_struggle"
         ]
       },
       {
+        "id": "child_personal_jurisdiction",
+        "tag": {
+          "zh": "私人领域归类",
+          "en": "Personal jurisdiction"
+        },
+        "keywords": [
+          "我的事",
+          "关你什么事",
+          "私人空间",
+          "凭什么管",
+          "自己决定",
+          "隐私",
+          "my business",
+          "personal choice",
+          "none of your business",
+          "my own decision",
+          "let me decide",
+          "privacy",
+          "stay out of it"
+        ],
+        "text": {
+          "zh": "家长和孩子有时会把同一件事归到不同类别：孩子视之为“属于自己的私人领域”（穿什么、房间怎么摆、跟谁来往），而家长视之为需要管理的范围。此类冲突的核心常常是归类分歧，而非孩子不服管教本身。以上是一般性框架，不是对具体某个孩子的判断。",
+          "en": "Parents and children sometimes sort the same issue into different categories: the child treats it as belonging to their own personal domain (clothing, their room, who they spend time with), while the parent treats it as within the range of legitimate parental regulation. Such conflicts often turn on this categorical disagreement rather than on defiance as such. This is a general framework, not a judgment about any specific child."
+        },
+        "source": "General framing consistent with social domain theory research (cf. Smetana, 2011, on adolescent-parent conflict and domains of social reasoning); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "child_defiance",
+          "parent_intensive_norms",
+          "relationship_psychological_control"
+        ]
+      },
+      {
+        "id": "child_participation_voice",
+        "tag": {
+          "zh": "参与和被听见",
+          "en": "Participation and voice"
+        },
+        "keywords": [
+          "没人问我",
+          "不听我的",
+          "我说了不算",
+          "为什么不问我",
+          "被决定",
+          "no one asked me",
+          "nobody listens to me",
+          "I have no say",
+          "left out of the decision",
+          "decided for me"
+        ],
+        "text": {
+          "zh": "孩子在多大程度上参与了关于自己的决定，与其对最终结果的接受程度相关：即便结论未变，被征询过意见的孩子通常更容易接受该结论。以上是一般性框架，不是对具体某个孩子的判断。",
+          "en": "The degree to which a child participates in decisions about their own life is associated with how readily they accept the outcome: even when the conclusion is unchanged, a child who was consulted tends to accept it more readily. This is a general framework, not a judgment about any specific child."
+        },
+        "source": "General framing consistent with child participation research (cf. Lansdown, 2005, on children's participation in decision-making); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "relationship_trust_disclosure",
+          "parent_power_struggle",
+          "child_personal_jurisdiction"
+        ]
+      },
+      {
         "id": "child_social_withdrawal",
+        "tag": {
+          "zh": "社交退缩",
+          "en": "Social withdrawal"
+        },
         "keywords": [
           "不合群",
           "交友困难",
           "社交退缩",
           "没朋友",
+          "内向",
+          "不爱出门",
           "social withdrawal",
-          "friendship difficulty"
+          "friendship difficulty",
+          "no friends",
+          "shy",
+          "keeps to themselves",
+          "won't go out"
         ],
         "text": {
-          "zh": "孩子在社交上表现退缩或交友困难，原因可能是气质上偏内向、社交技能仍在发展中，或是在某段关系里经历过挫折后的自我保护反应，三者需要的回应方式并不相同。以上是一般性框架，不是对具体某个孩子的判断。",
-          "en": "A child's social withdrawal or difficulty making friends may stem from an introverted temperament, still-developing social skills, or a self-protective reaction following a difficult relational experience — these three causes call for different kinds of support. This is a general framework, not a judgment about any specific child."
+          "zh": "孩子在社交上表现退缩或交友困难，可能源于气质上偏内向、社交技能仍在发展中，或是在某段关系里经历挫折后的自我保护反应，三者需要的回应方式并不相同。以上是一般性框架，不是对具体某个孩子的判断。",
+          "en": "A child's social withdrawal or difficulty making friends may stem from an introverted temperament, still-developing social skills, or a self-protective reaction following a difficult relational experience — these call for different kinds of support. This is a general framework, not a judgment about any specific child."
         },
-        "source": "General framing consistent with research on childhood shyness and peer relations (cf. Rubin, Coplan, & Bowker, 2009, on social withdrawal in childhood); for illustrative/educational use only.",
+        "source": "General framing consistent with research on shyness and peer relations in childhood (cf. Rubin, Coplan, & Bowker, 2009, on social withdrawal); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "child_learning_motivation"
+          "child_learning_motivation",
+          "relationship_shared_time"
         ]
       },
       {
         "id": "child_learning_motivation",
+        "tag": {
+          "zh": "学习动力",
+          "en": "Learning motivation"
+        },
         "keywords": [
           "不想学习",
           "学习动力不足",
           "厌学",
           "不爱学习",
+          "推一下动一下",
+          "没兴趣",
           "lack of motivation",
-          "unmotivated to study"
+          "unmotivated to study",
+          "hates school",
+          "only does it when pushed",
+          "no interest in learning",
+          "doesn't care about school"
         ],
         "text": {
-          "zh": "孩子对学习缺乏动力，常见的一个区分是：动力来自外部奖惩（怕被骂、想要奖励）还是内在兴趣（觉得这件事本身有意思）。长期只靠外部奖惩维持的学习行为，动力更容易随着奖惩撤销而消失。以上是一般性框架，不是对具体某个孩子的判断。",
-          "en": "A child's lack of motivation to study is often usefully separated into two sources: motivation driven by external reward/punishment versus motivation driven by genuine interest in the activity itself. Learning behavior sustained mainly by external reward tends to fade once that reward is removed. This is a general framework, not a judgment about any specific child."
+          "zh": "孩子对学习缺乏动力，常见的一个区分是：动力来自外部奖惩，还是来自内在兴趣。长期只靠外部奖惩维持的学习行为，动力更容易随着奖惩撤销而消失。以上是一般性框架，不是对具体某个孩子的判断。",
+          "en": "A child's lack of motivation to study is often usefully separated into motivation driven by external reward or punishment versus motivation driven by genuine interest. Learning behavior sustained mainly by external reward tends to fade once that reward is removed. This is a general framework, not a judgment about any specific child."
         },
-        "source": "General framing based on Self-Determination Theory (Ryan & Deci, 2000) on intrinsic versus extrinsic motivation; for illustrative/educational use only.",
+        "source": "General framing consistent with self-determination theory research (cf. Ryan & Deci, 2000, on intrinsic and extrinsic motivation); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "child_device_dependency"
+          "child_device_dependency",
+          "parent_academic_pressure"
         ]
       },
       {
         "id": "child_device_dependency",
+        "tag": {
+          "zh": "电子设备依赖",
+          "en": "Device dependency"
+        },
         "keywords": [
           "离不开手机",
           "沉迷游戏",
           "电子设备依赖",
+          "刷个不停",
+          "抱着手机",
           "screen addiction",
-          "device dependency"
+          "device dependency",
+          "glued to the screen",
+          "always on their phone",
+          "can't put it down",
+          "gaming all the time"
         ],
         "text": {
-          "zh": "从孩子的角度看，电子设备/游戏有时承担着社交连接或情绪调节的功能，而不只是娱乐——尤其当现实中的社交或成就感来源有限时，这种依赖可能更多是一种替代满足，而不是单纯的自控力问题。以上是一般性框架，不是对具体某个孩子的判断。",
-          "en": "From a child's perspective, devices or games can sometimes serve a social-connection or emotion-regulation function rather than pure entertainment — especially when other sources of social connection or achievement are limited, making the dependency more of a substitute satisfaction than simply a self-control issue. This is a general framework, not a judgment about any specific child."
+          "zh": "从孩子的角度看，电子设备与游戏有时承担着社交连接或情绪调节的功能，而不只是娱乐——尤其当现实中的社交或成就感来源有限时，这种依赖可能更多是一种替代满足，而不是单纯的自控力问题。以上是一般性框架，不是对具体某个孩子的判断。",
+          "en": "From a child's perspective, devices and games can serve social-connection or emotion-regulation functions rather than pure entertainment — especially when other sources of connection or achievement are limited, making the dependency more of a substitute satisfaction than simply a self-control issue. This is a general framework, not a judgment about any specific child."
         },
-        "source": "General framing consistent with research on adolescent media use and psychosocial needs (cf. Przybylski, Rigby, & Ryan, 2010, on motivational models of video game engagement); for illustrative/educational use only.",
+        "source": "General framing consistent with research on adolescent media engagement and psychosocial needs (cf. Przybylski, Rigby, & Ryan, 2010); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
           "parent_screen_time",
           "child_social_withdrawal"
         ]
+      },
+      {
+        "id": "child_sleep",
+        "tag": {
+          "zh": "睡眠与情绪",
+          "en": "Sleep and mood"
+        },
+        "keywords": [
+          "睡不好",
+          "熬夜",
+          "赖床",
+          "起不来",
+          "睡眠不足",
+          "白天没精神",
+          "sleep",
+          "won't go to bed",
+          "stays up late",
+          "can't wake up",
+          "tired all the time",
+          "sleep deprived",
+          "bedtime battles"
+        ],
+        "text": {
+          "zh": "睡眠与白天的情绪调节、注意力和行为表现之间是双向关系：睡眠不足会放大情绪反应，而白天的压力与情绪状态也会反过来影响入睡。因此单看行为表现，不容易判断因果方向。以上是一般性框架，不是对具体某个孩子的判断。",
+          "en": "Sleep and daytime emotional regulation, attention, and behavior are bidirectionally related: insufficient sleep amplifies emotional reactivity, while daytime stress and mood in turn affect falling asleep. Looking at behavior alone therefore rarely settles the direction of causation. This is a general framework, not a judgment about any specific child."
+        },
+        "source": "General framing consistent with pediatric sleep research (cf. Mindell et al., 2006, on behavioral sleep problems in children); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "child_emotional_outburst",
+          "parent_burnout"
+        ]
+      },
+      {
+        "id": "child_eating",
+        "tag": {
+          "zh": "进食与压力",
+          "en": "Eating and pressure"
+        },
+        "keywords": [
+          "挑食",
+          "不好好吃饭",
+          "喂饭",
+          "追着喂",
+          "吃得少",
+          "偏食",
+          "picky eater",
+          "won't eat",
+          "fussy about food",
+          "mealtime struggle",
+          "refuses vegetables",
+          "eating battles"
+        ],
+        "text": {
+          "zh": "在进食上施加压力（催促、条件交换、强制吃完）往往降低而非提高孩子对该食物的长期接受度。进食冲突有时更多反映的是餐桌上的互动模式，而不是孩子的食物偏好本身。以上是一般性框架，不是对具体某个孩子的判断。",
+          "en": "Applying pressure around eating (urging, bargaining, requiring a clean plate) tends to reduce rather than increase a child's long-term acceptance of that food. Mealtime conflict sometimes reflects the interaction pattern at the table more than the child's underlying food preferences. This is a general framework, not a judgment about any specific child."
+        },
+        "source": "General framing consistent with child feeding research (cf. Birch, 1999, on the development of food acceptance patterns); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "child_emotional_outburst",
+          "parent_burnout"
+        ]
       }
     ],
     "generic_fallback": {
       "zh": "从孩子的视角出发，通常值得留意的是：这个决定是否让孩子感到自己的想法被听见，而不只是被告知结果。这是一般性提醒，不针对具体情况。",
-      "en": "From the child's perspective, it is often worth noting whether the decision makes the child feel heard, not just informed of the outcome. This is a general reminder, not specific to any particular situation.",
-      "source": "General framing consistent with child-centered developmental guidance; for illustrative/educational use only.",
-      "source_type": "academic"
+      "en": "From the child's perspective, it is often worth noting whether the decision makes the child feel heard rather than simply informed of the outcome. This is a general reminder, not specific to any particular situation.",
+      "source": "General framing; for illustrative/educational use only.",
+      "source_type": "academic",
+      "tag": {
+        "zh": "孩子视角",
+        "en": "Child's perspective"
+      }
     }
   },
   "parent_centered": {
     "topic_cards": [
       {
+        "id": "parent_interparental_conflict",
+        "tag": {
+          "zh": "父母间冲突",
+          "en": "Interparental conflict"
+        },
+        "keywords": [
+          "夫妻吵架",
+          "两个人意见不合",
+          "当着孩子面吵",
+          "离婚",
+          "分居",
+          "we argue",
+          "disagree with my partner",
+          "fighting in front of the kids",
+          "divorce",
+          "separated",
+          "co-parenting conflict"
+        ],
+        "text": {
+          "zh": "对孩子影响较大的，通常是父母间冲突的暴露程度与解决方式，而非家庭结构本身（如是否离异）。这意味着评估的重点更多在于冲突如何呈现和收尾，而不只是家庭形式。以上是一般性框架，不是对具体情况的判断。",
+          "en": "What tends to matter more for children is the degree of exposure to interparental conflict and how that conflict is resolved, rather than family structure itself (such as whether parents are divorced). The focus of assessment is therefore how conflict is expressed and concluded, not only the form the family takes. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with research on interparental conflict and child adjustment (cf. Amato, 2000, on the consequences of divorce for adults and children); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "relationship_inconsistent_styles",
+          "relationship_repair_timing"
+        ]
+      },
+      {
         "id": "parent_power_struggle",
+        "tag": {
+          "zh": "决定权争夺",
+          "en": "Struggle over authority"
+        },
         "keywords": [
           "总是吵架",
           "亲子矛盾",
           "冲突",
-          "对抗",
+          "对着干",
+          "较劲",
+          "谁说了算",
           "conflict",
           "argue",
-          "fight"
+          "fight",
+          "power struggle",
+          "butting heads",
+          "who decides",
+          "constant battles"
         ],
         "text": {
-          "zh": "家长与孩子反复出现的冲突，常见的诱因之一是双方对“谁来做决定”这件事本身的争夺感，而不一定是具体事项本身的分歧。识别“这是关于决定权的冲突，还是关于这件事本身的冲突”，有时比争论对错更有帮助。以上是一般性框架，不是对具体情况的判断。",
-          "en": "Recurring parent-child conflict is often driven partly by a struggle over who gets to decide, not only by disagreement on the specific issue itself. Distinguishing “a conflict about decision-making authority” from “a conflict about the issue itself” can sometimes be more useful than arguing over who is right. This is a general framework, not a judgment about a specific situation."
+          "zh": "家长与孩子反复出现的冲突，常见诱因之一是双方对“谁来做决定”这件事本身的争夺感，而不一定是具体事项本身的分歧。区分“这是关于决定权的冲突，还是关于这件事本身的冲突”，有时比争论对错更有帮助。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Recurring parent-child conflict is often driven partly by a struggle over who gets to decide, not only by disagreement on the specific issue. Distinguishing “a conflict about decision-making authority” from “a conflict about the issue itself” can be more useful than arguing over who is right. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing drawn from parenting-style and family-communication literature (cf. Baumrind, 1991, on authoritative vs. authoritarian vs. permissive parenting); for illustrative/educational use only, not a substitute for professional guidance.",
+        "source": "General framing consistent with parenting-style research (cf. Baumrind, 1991, on authoritative, authoritarian, and permissive parenting); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "child_defiance",
-          "relationship_inconsistent_styles"
+          "child_personal_jurisdiction",
+          "relationship_inconsistent_styles",
+          "child_participation_voice"
         ]
       },
       {
         "id": "parent_screen_time",
+        "tag": {
+          "zh": "屏幕时间管理",
+          "en": "Screen time rules"
+        },
         "keywords": [
           "手机",
           "屏幕时间",
+          "游戏时间",
+          "限制使用",
+          "收手机",
+          "定规矩",
           "screen time",
-          "phone",
-          "游戏时间"
+          "phone rules",
+          "gaming limits",
+          "taking the phone away",
+          "setting limits",
+          "device rules"
         ],
         "text": {
-          "zh": "关于屏幕使用时间的家庭分歧，通常在“设定清晰、一致的规则”并“让孩子理解规则背后的原因”时，比单纯限制时长更容易被孩子接受。以上是一般性框架，不是具体的操作建议。",
-          "en": "Family disagreements over screen time are often easier for children to accept when rules are clear and consistent, and when the reasoning behind the rule is explained, rather than relying on limits alone. This is a general framework, not a specific action plan."
+          "zh": "关于屏幕使用时间的家庭分歧，通常在“规则清晰且前后一致”并“让孩子理解规则背后的原因”时，比单纯限制时长更容易被接受。以上是一般性框架，不是具体的操作建议。",
+          "en": "Family disagreements over screen time are generally easier to sustain when rules are clear and consistent and the reasoning behind them is explained, rather than relying on time limits alone. This is a general framework, not a specific action plan."
         },
-        "source": "General framing consistent with published guidance on screen-time management from pediatric and family-communication research (cf. AAP Council on Communications and Media, 2016); for illustrative/educational use only.",
-        "source_type": "government",
+        "source": "General framing consistent with published guidance on family media use (cf. AAP Council on Communications and Media, 2016); for illustrative/educational use only.",
+        "source_type": "academic",
         "related_cards": [
-          "child_device_dependency"
+          "child_device_dependency",
+          "relationship_warmth_structure"
         ]
       },
       {
         "id": "parent_academic_pressure",
+        "tag": {
+          "zh": "学业压力传导",
+          "en": "Academic pressure"
+        },
         "keywords": [
           "学习压力",
           "成绩压力",
           "补习",
+          "分数",
+          "排名",
+          "考不好",
           "academic pressure",
-          "study pressure"
+          "study pressure",
+          "grades",
+          "test scores",
+          "tutoring",
+          "falling behind",
+          "school performance"
         ],
         "text": {
-          "zh": "家长在管理孩子的学业压力时，一个常见的张力是：家长自身对结果的焦虑，可能会在无意中传递给孩子，让孩子把学业表现和自我价值感过度绑定。区分“家长自己的焦虑”和“孩子实际的能力/兴趣状况”，有助于更精准地判断需要调整的是压力管理还是学习方法本身。以上是一般性框架，不是对具体情况的判断。",
-          "en": "A common tension in managing a child's academic pressure is that a parent's own anxiety about outcomes can be unintentionally transmitted, leading the child to over-tie academic performance to self-worth. Separating “the parent's own anxiety” from “the child's actual ability or interest” can help clarify whether what needs adjusting is pressure management or the learning approach itself. This is a general framework, not a judgment about a specific situation."
+          "zh": "家长在管理孩子学业压力时，一个常见的张力是：家长自身对结果的焦虑可能在无意中传递给孩子，使孩子把学业表现与自我价值过度绑定。区分“家长自己的焦虑”与“孩子实际的能力与兴趣状况”，有助于判断需要调整的是压力管理还是学习方式本身。以上是一般性框架，不是对具体情况的判断。",
+          "en": "A common tension in managing a child's academic pressure is that a parent's own anxiety about outcomes can be unintentionally transmitted, leading the child to over-tie performance to self-worth. Separating the parent's own anxiety from the child's actual ability and interest helps clarify whether what needs adjusting is pressure management or the approach to learning. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing consistent with research on parental academic pressure and child anxiety (cf. Pomerantz, Grolnick, & Price, 2005); for illustrative/educational use only.",
+        "source": "General framing consistent with research on parental involvement and child anxiety (cf. Pomerantz, Grolnick, & Price, 2005); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "child_learning_motivation"
+          "child_learning_motivation",
+          "parent_intensive_norms"
         ]
       },
       {
         "id": "parent_sibling_comparison",
+        "tag": {
+          "zh": "多子女公平感",
+          "en": "Sibling fairness"
+        },
         "keywords": [
           "偏心",
           "多子女",
           "比较",
           "手足",
+          "老大老二",
+          "不公平",
           "sibling comparison",
-          "favoritism"
+          "favoritism",
+          "unfair",
+          "playing favorites",
+          "comparing siblings",
+          "second child"
         ],
         "text": {
-          "zh": "多子女家庭中，孩子对“公平”的感知，往往不完全取决于家长是否真的做到了资源对等分配，也取决于每个孩子是否感到自己作为独立个体被理解，而不是被拿来跟兄弟姐妹比较。以上是一般性框架，不是对具体情况的判断。",
-          "en": "In families with multiple children, a child's perception of “fairness” often depends not only on whether resources are literally divided equally, but on whether each child feels understood as an individual rather than being compared to a sibling. This is a general framework, not a judgment about a specific situation."
+          "zh": "多子女家庭中，孩子对“公平”的感知，往往不完全取决于资源是否对等分配，也取决于每个孩子是否感到自己作为独立个体被理解，而不是被拿来与兄弟姐妹比较。以上是一般性框架，不是对具体情况的判断。",
+          "en": "In families with multiple children, a child's sense of fairness often depends less on whether resources are literally divided equally than on whether each child feels understood as an individual rather than compared to a sibling. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing consistent with research on sibling relationships and parental differential treatment (cf. Suitor et al., 2008); for illustrative/educational use only.",
+        "source": "General framing consistent with research on parental differential treatment (cf. Suitor et al., 2008); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "parent_power_struggle"
+          "parent_work_family",
+          "relationship_warmth_structure"
         ]
       },
       {
         "id": "parent_financial_stress",
+        "tag": {
+          "zh": "经济压力",
+          "en": "Financial stress"
+        },
         "keywords": [
           "经济压力",
           "钱不够",
+          "负担不起",
+          "开销",
+          "学费",
           "financial stress",
-          "money worries"
+          "money worries",
+          "can't afford",
+          "tuition costs",
+          "tight budget",
+          "expenses"
         ],
         "text": {
-          "zh": "经济压力对教养行为的影响，文献里常见的一条路径是：财务压力增加家长的心理负荷和情绪疲惫，进而间接影响教养中的耐心和一致性，而不是经济状况本身直接决定教养质量。理解这条中介路径，有助于把注意力放在压力管理而不只是自责。以上是一般性框架，不是对具体情况的判断。",
-          "en": "A commonly documented pathway in the literature is that financial stress increases a parent's psychological load and emotional fatigue, which in turn indirectly affects patience and consistency in parenting — rather than financial status directly determining parenting quality on its own. Understanding this mediating pathway can help focus attention on stress management rather than self-blame. This is a general framework, not a judgment about a specific situation."
+          "zh": "经济压力对教养行为的影响，文献中常见的一条路径是：财务压力增加家长的心理负荷与情绪疲惫，进而间接影响教养中的耐心与一致性，而非经济状况直接决定教养质量。理解这条中介路径，有助于把注意力放在压力管理而不只是自责。以上是一般性框架，不是对具体情况的判断。",
+          "en": "A commonly documented pathway is that financial stress increases a parent's psychological load and emotional fatigue, which in turn indirectly affects patience and consistency in parenting — rather than financial circumstances directly determining parenting quality. Recognizing this mediating pathway helps direct attention to stress management rather than self-blame. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing consistent with the Family Stress Model (Conger & Conger, 2002); for illustrative/educational use only.",
+        "source": "General framing consistent with the family stress model (cf. Conger & Conger, 2002); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "parent_academic_pressure"
+          "parent_burnout",
+          "parent_work_family"
+        ]
+      },
+      {
+        "id": "parent_burnout",
+        "tag": {
+          "zh": "育儿倦怠",
+          "en": "Parental burnout"
+        },
+        "keywords": [
+          "太累了",
+          "撑不住",
+          "精疲力尽",
+          "喘不过气",
+          "育儿倦怠",
+          "没精力",
+          "exhausted",
+          "burned out",
+          "can't keep this up",
+          "running on empty",
+          "parental burnout",
+          "overwhelmed",
+          "no energy left"
+        ],
+        "text": {
+          "zh": "育儿倦怠被描述为一种有别于一般工作倦怠的状态，其风险因素包括长期高投入且缺少恢复时间，而非单纯的育儿时长。识别这一点有助于把“我是不是不够好”的自我评价，转为对恢复资源是否充足的评估。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Parental burnout has been described as a state distinct from general work burnout, with risk factors including sustained high investment combined with insufficient recovery time, rather than caregiving hours alone. Recognizing this can shift the question from “am I not good enough” to whether recovery resources are adequate. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with parental burnout research (cf. Roskam & Mikolajczak, 2017, on the structure of parental burnout); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "parent_financial_stress",
+          "parent_work_family",
+          "child_sleep"
+        ]
+      },
+      {
+        "id": "parent_own_upbringing",
+        "tag": {
+          "zh": "自身成长经验",
+          "en": "Own upbringing"
+        },
+        "keywords": [
+          "我小时候",
+          "我爸妈就是这样",
+          "不想像我父母",
+          "从小被这样",
+          "when I was a kid",
+          "my parents did this",
+          "don't want to repeat",
+          "how I was raised",
+          "grew up with this"
+        ],
+        "text": {
+          "zh": "养育方式部分承接自家长自身被养育的经验，有时以延续的形式出现，有时以刻意的反向操作出现（例如因自身经历过严格管束而选择放手）。意识到当前做法与自身经历的关联，有助于区分这是对孩子情况的判断，还是对自己经历的回应。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Parenting approaches partly carry over from a parent's own upbringing, sometimes as continuity and sometimes as deliberate reversal (for example, choosing to step back because of one's own experience of strict control). Noticing this connection helps distinguish a judgment about the child's situation from a response to one's own history. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with intergenerational transmission of parenting research (cf. Belsky, Conger, & Capaldi, 2009); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "parent_intensive_norms",
+          "relationship_inconsistent_styles"
+        ]
+      },
+      {
+        "id": "parent_intensive_norms",
+        "tag": {
+          "zh": "社会规范压力",
+          "en": "Social expectations"
+        },
+        "keywords": [
+          "别人家的孩子",
+          "别的家长都",
+          "好家长",
+          "应该做到",
+          "怕被说",
+          "other parents",
+          "supposed to",
+          "good parent",
+          "everyone else does",
+          "what people will think",
+          "keeping up"
+        ],
+        "text": {
+          "zh": "关于“好家长应该做什么”的社会规范，会抬高自我要求，使某些本来可行的选项显得不可接受（例如把“少投入一些”等同于失职）。把规范压力与实际约束分开评估，有助于看清哪些限制来自处境，哪些来自期待。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Social norms about what a “good parent” ought to do can raise self-imposed standards, making otherwise workable options appear unacceptable (for instance, equating investing less with failing the child). Evaluating normative pressure separately from actual constraints helps clarify which limits come from circumstances and which from expectations. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with research on intensive mothering norms (cf. Hays, 1996, on cultural contradictions of motherhood); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "parent_own_upbringing",
+          "parent_academic_pressure",
+          "child_personal_jurisdiction"
+        ]
+      },
+      {
+        "id": "parent_work_family",
+        "tag": {
+          "zh": "工作与家庭分配",
+          "en": "Work-family conflict"
+        },
+        "keywords": [
+          "没时间",
+          "加班",
+          "工作忙",
+          "陪不了",
+          "时间不够",
+          "分身乏术",
+          "no time",
+          "working late",
+          "too busy",
+          "can't be there",
+          "juggling work and family",
+          "time pressure"
+        ],
+        "text": {
+          "zh": "时间与精力在工作和家庭之间的分配冲突，通常不是单纯的时间总量问题，也涉及两个领域之间的相互溢出（工作中的疲惫影响在家的耐心，反之亦然）。因此某些教养决定的可行性，取决于当前的溢出状况而不只是日程安排。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Conflict over allocating time and energy between work and family is typically not just a matter of total hours, but also of spillover between the two domains (fatigue at work affecting patience at home, and vice versa). The feasibility of certain parenting decisions therefore depends on current spillover conditions, not only on scheduling. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with work-family research (cf. Bianchi & Milkie, 2010, on work and family research in the twenty-first century); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "parent_burnout",
+          "relationship_shared_time"
         ]
       }
     ],
@@ -215,111 +609,297 @@
       "zh": "从家长的视角出发，通常值得留意的是：这个决定的执行成本（时间、精力、一致性）是否现实可持续，而不只是这个决定本身是否“正确”。这是一般性提醒，不针对具体情况。",
       "en": "From the parent's perspective, it is often worth noting whether the practical cost of following through (time, energy, consistency) is realistically sustainable, not only whether the decision itself is “correct.” This is a general reminder, not specific to any particular situation.",
       "source": "General framing; for illustrative/educational use only.",
-      "source_type": "academic"
+      "source_type": "academic",
+      "tag": {
+        "zh": "家长处境",
+        "en": "Parent's situation"
+      }
     }
   },
   "relationship_centered": {
     "topic_cards": [
       {
         "id": "relationship_trust_disclosure",
+        "tag": {
+          "zh": "信任与主动告知",
+          "en": "Trust and disclosure"
+        },
         "keywords": [
           "信任",
-          "trust",
           "隐瞒",
-          "不愿意说"
+          "不愿意说",
+          "什么都不告诉我",
+          "藏着",
+          "trust",
+          "hiding things",
+          "won't tell me",
+          "keeps secrets",
+          "shuts me out",
+          "doesn't open up"
         ],
         "text": {
-          "zh": "亲子之间的信任感，往往更多受“决策过程是否透明”影响，而不是“最终结果是否符合孩子期待”。孩子事后是否愿意主动分享类似的事，通常和这次沟通方式的感受有关。以上是一般性框架，不是对具体情况的判断。",
-          "en": "Parent-child trust is often shaped more by whether the decision-making process felt transparent than by whether the final outcome matched the child's expectations. Whether a child later chooses to share similar things again is often related to how this conversation felt, not just its result. This is a general framework, not a judgment about a specific situation."
+          "zh": "亲子之间的信任感，往往更多受“决策过程是否透明”影响，而不是“最终结果是否符合孩子期待”。孩子日后是否愿意主动分享类似的事，通常与这次沟通方式带来的感受相关。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Parent-child trust is often shaped more by whether the decision-making process felt transparent than by whether the outcome matched the child's expectations. Whether a child later chooses to share similar things again tends to relate to how this exchange felt. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing consistent with family-communication literature (cf. Kerr & Stattin, 2000, on parental knowledge, child disclosure, and monitoring); for illustrative/educational use only, not a substitute for professional guidance.",
+        "source": "General framing consistent with research on parental knowledge and child disclosure (cf. Kerr & Stattin, 2000); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
-          "relationship_communication_breakdown"
+          "relationship_communication_breakdown",
+          "child_participation_voice"
         ]
       },
       {
         "id": "relationship_communication_breakdown",
+        "tag": {
+          "zh": "沟通中断",
+          "en": "Communication breakdown"
+        },
         "keywords": [
           "沟通不了",
           "说不上话",
           "不理我",
+          "一说就炸",
+          "懒得说",
           "communication breakdown",
-          "won't talk to me"
+          "won't talk to me",
+          "shuts down",
+          "stonewalls",
+          "every conversation turns into a fight",
+          "gives up talking"
         ],
         "text": {
-          "zh": "沟通中断有时不是“孩子不愿意说话”，而是过去的沟通经验让孩子预期“说了也没用/会被评判”，转而选择沉默作为自我保护。修复的第一步通常是重建“说了不会被立刻评判”的安全感，而不是急于获取信息本身。以上是一般性框架，不是对具体情况的判断。",
-          "en": "Communication breakdown is sometimes not a matter of “the child refusing to talk,” but of past experience leading the child to expect that speaking up “won't help / will be judged,” leading them to choose silence as self-protection. The first step toward repair is often rebuilding the sense that “speaking up won't be immediately judged,” rather than rushing to extract information. This is a general framework, not a judgment about a specific situation."
+          "zh": "沟通中断有时不是“孩子不愿意说话”，而是过去的沟通经验让孩子预期“说了也没用或会被评判”，转而以沉默作为自我保护。修复的第一步通常是重建“说了不会被立刻评判”的安全感，而非急于获取信息本身。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Communication breakdown is sometimes less about a child refusing to talk than about prior experience leading them to expect that speaking up won't help or will be judged, so silence becomes self-protective. The first step toward repair is often rebuilding the sense that speaking up won't be met with immediate judgment, rather than pressing for information. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing consistent with family-communication and emotion-coaching literature (cf. Gottman, Katz, & Hooven, 1997); for illustrative/educational use only.",
+        "source": "General framing consistent with family communication research (cf. Gottman, Katz, & Hooven, 1997); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
           "relationship_trust_disclosure",
+          "relationship_psychological_control",
           "child_emotional_outburst"
         ]
       },
       {
         "id": "relationship_adolescent_distancing",
+        "tag": {
+          "zh": "青春期疏离",
+          "en": "Adolescent distancing"
+        },
         "keywords": [
           "疏远",
           "不亲近",
           "青春期",
-          "adolescent distancing",
-          "pulling away"
+          "关房门",
+          "不愿意一起",
+          "distancing",
+          "pulling away",
+          "adolescence",
+          "closes the door",
+          "doesn't want to spend time",
+          "growing apart"
         ],
         "text": {
-          "zh": "青春期孩子在情感上与家长保持一定距离，是发展独立自我认同过程中的常见现象，本身不一定代表关系变差，但需要区分“健康的独立化”和“关系确实出现裂痕后的回避”——前者通常伴随孩子仍愿意在需要时求助，后者则伴随更全面的回避。以上是一般性框架，不是对具体情况的判断。",
-          "en": "Adolescents maintaining some emotional distance from parents is a common part of developing an independent identity, and does not by itself indicate a worsening relationship — but it is worth distinguishing “healthy individuation” from “avoidance following an actual rupture in the relationship,” the former usually still involving the child seeking help when needed, the latter involving more comprehensive avoidance. This is a general framework, not a judgment about a specific situation."
+          "zh": "青春期孩子在情感上与家长保持一定距离，是发展独立自我认同过程中的常见现象，本身不必然代表关系变差；但值得区分“健康的独立化”与“关系出现裂痕后的回避”——前者通常伴随孩子在需要时仍愿意求助，后者则伴随更全面的回避。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Adolescents keeping some emotional distance is a common part of developing an independent identity and does not by itself indicate a deteriorating relationship; it is worth distinguishing healthy individuation from avoidance following a rupture — the former usually still involves seeking help when needed, the latter a broader withdrawal. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing consistent with adolescent development literature (cf. Steinberg, 2001, on parent-adolescent relationships in retrospect and prospect); for illustrative/educational use only.",
+        "source": "General framing consistent with adolescent development research (cf. Steinberg, 2001, on parent-adolescent relationships); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
+          "relationship_conflict_normativity",
           "child_defiance"
         ]
       },
       {
+        "id": "relationship_conflict_normativity",
+        "tag": {
+          "zh": "冲突的常态性",
+          "en": "Conflict as normative"
+        },
+        "keywords": [
+          "经常吵",
+          "越来越多矛盾",
+          "以前不这样",
+          "是不是不正常",
+          "arguing more",
+          "constant conflict lately",
+          "didn't used to be like this",
+          "is this normal",
+          "more friction"
+        ],
+        "text": {
+          "zh": "亲子冲突的频率在青春期早期上升并达到峰值，属于发展过程中的常态现象；相较之下，冲突的强度与是否得到修复，比冲突的次数更值得关注。以上是一般性框架，不是对具体情况的判断。",
+          "en": "The frequency of parent-child conflict tends to rise and peak in early adolescence as a normative developmental pattern; the intensity of conflict and whether it gets repaired are generally more informative than how often it occurs. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with meta-analytic work on parent-adolescent conflict (cf. Laursen, Coy, & Collins, 1998; Laursen & Collins, 2009); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "relationship_adolescent_distancing",
+          "relationship_repair_timing",
+          "child_defiance"
+        ]
+      },
+      {
+        "id": "relationship_psychological_control",
+        "tag": {
+          "zh": "心理控制与行为管束",
+          "en": "Psychological vs behavioral control"
+        },
+        "keywords": [
+          "让他内疚",
+          "不理他",
+          "冷战",
+          "威胁",
+          "失望",
+          "翻旧账",
+          "guilt trip",
+          "silent treatment",
+          "withdrawing affection",
+          "making them feel bad",
+          "disappointed in you",
+          "emotional pressure"
+        ],
+        "text": {
+          "zh": "对行为层面的管束（规则、界限、监督）与心理层面的控制（内疚诱导、撤回关爱、以情感为条件）在文献中被区分开来，两者与孩子后续适应的关联并不相同。这一区分有助于判断一个做法是在设定界限，还是在施加情感代价。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Behavioral control (rules, limits, monitoring) and psychological control (guilt induction, withdrawal of affection, conditional regard) are distinguished in the literature and are not associated with the same downstream adjustment patterns. The distinction helps clarify whether a given approach is setting a limit or imposing an emotional cost. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with research on psychological control (cf. Barber, 1996, on parental psychological control); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "relationship_communication_breakdown",
+          "child_personal_jurisdiction",
+          "relationship_warmth_structure"
+        ]
+      },
+      {
         "id": "relationship_inconsistent_styles",
+        "tag": {
+          "zh": "父母教养不一致",
+          "en": "Inconsistent parenting"
+        },
         "keywords": [
           "教育方式不一样",
           "父母意见不合",
+          "一个唱红脸",
+          "老人插手",
+          "标准不统一",
           "inconsistent parenting",
-          "parents disagree"
+          "parents disagree",
+          "good cop bad cop",
+          "grandparents interfere",
+          "different rules"
         ],
         "text": {
-          "zh": "父母双方教养风格不一致，对孩子的影响往往不是“哪种风格更好”，而是不一致本身带来的不可预测性，会让孩子更难形成稳定的行为预期，进而更容易出现在不同家长面前表现不同的情况。以上是一般性框架，不是对具体情况的判断。",
-          "en": "When two parents have inconsistent parenting styles, the impact on the child is often less about “which style is better” and more about the unpredictability that inconsistency itself creates, making it harder for the child to form stable behavioral expectations and more likely to behave differently around each parent. This is a general framework, not a judgment about a specific situation."
+          "zh": "父母双方教养风格不一致，对孩子的影响往往不在于“哪种风格更好”，而在于不一致本身带来的不可预测性，使孩子更难形成稳定的行为预期，也更容易出现在不同家长面前表现不同的情况。以上是一般性框架，不是对具体情况的判断。",
+          "en": "When two parents have inconsistent styles, what matters is often less which style is better than the unpredictability inconsistency creates, making it harder for the child to form stable expectations and more likely that they behave differently with each parent. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing consistent with parenting-style literature on consistency effects (cf. Baumrind, 1991); for illustrative/educational use only.",
+        "source": "General framing consistent with parenting-style research on consistency (cf. Baumrind, 1991); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
+          "parent_interparental_conflict",
           "parent_power_struggle"
         ]
       },
       {
         "id": "relationship_repair_timing",
+        "tag": {
+          "zh": "修复时机",
+          "en": "Repair timing"
+        },
         "keywords": [
           "什么时候谈",
           "修复关系",
-          "道歉时机",
-          "repair timing",
-          "when to talk"
+          "道歉",
+          "缓和",
+          "冷静下来再说",
+          "when to talk",
+          "repairing things",
+          "apologize",
+          "cool off first",
+          "smooth things over",
+          "make up"
         ],
         "text": {
-          "zh": "亲子关系出现摩擦后，选择修复对话的时机，通常比修复对话的内容本身更容易被忽视——双方都处于情绪激烈状态时展开的对话，即使内容正确，也更容易被当成新一轮冲突，而不是被当成修复。以上是一般性框架，不是对具体情况的判断。",
-          "en": "After friction in a parent-child relationship, the timing of a repair conversation is often overlooked relative to its content — a conversation started while both sides are still emotionally activated is more likely to be experienced as another round of conflict than as repair, even if the content itself is reasonable. This is a general framework, not a judgment about a specific situation."
+          "zh": "亲子关系出现摩擦后，修复对话的时机往往比对话内容更容易被忽视：双方仍处于情绪激烈状态时展开的对话，即便内容合理，也更容易被体验为新一轮冲突而非修复。以上是一般性框架，不是对具体情况的判断。",
+          "en": "After friction, the timing of a repair conversation is often overlooked relative to its content: a conversation begun while both sides are still emotionally activated is more likely to be experienced as another round of conflict than as repair, even when its content is reasonable. This is a general framework, not a judgment about a specific situation."
         },
-        "source": "General framing consistent with conflict-repair literature in close relationships (cf. Gottman & Silver, 1999, on repair attempts); for illustrative/educational use only.",
+        "source": "General framing consistent with research on repair processes in close relationships (cf. Gottman & Silver, 1999); for illustrative/educational use only.",
         "source_type": "academic",
         "related_cards": [
+          "relationship_conflict_normativity",
           "relationship_communication_breakdown"
+        ]
+      },
+      {
+        "id": "relationship_shared_time",
+        "tag": {
+          "zh": "共处时间的质量",
+          "en": "Quality of shared time"
+        },
+        "keywords": [
+          "陪伴时间",
+          "一起做点什么",
+          "没时间陪",
+          "周末",
+          "多陪陪",
+          "time together",
+          "quality time",
+          "spending time with them",
+          "weekends",
+          "not around enough",
+          "doing things together"
+        ],
+        "text": {
+          "zh": "共同活动与关系质量的关联，不完全取决于相处时长；在同样的时间总量下，活动中的投入程度与互动性质，与关系体验的关联更为紧密。以上是一般性框架，不是对具体情况的判断。",
+          "en": "The association between shared activities and relationship quality does not rest on duration alone; at a given amount of time, how engaged the interaction is tends to relate more closely to the experienced quality of the relationship. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with research on parental time and child outcomes (cf. Milkie, Nomaguchi, & Denny, 2015); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "parent_work_family",
+          "child_social_withdrawal"
+        ]
+      },
+      {
+        "id": "relationship_warmth_structure",
+        "tag": {
+          "zh": "温暖与规则并存",
+          "en": "Warmth and structure"
+        },
+        "keywords": [
+          "太严还是太松",
+          "严格",
+          "放任",
+          "该不该管",
+          "宽松",
+          "too strict",
+          "too lenient",
+          "how much to control",
+          "firm or easygoing",
+          "rules versus closeness",
+          "being the bad guy"
+        ],
+        "text": {
+          "zh": "温暖与规则并非此消彼长的两端：在文献中，教养风格被视为一种整体情境，同一具体做法（如设定一条规则）在温暖的关系背景下与在疏离的关系背景下，与孩子的反应关联并不相同。以上是一般性框架，不是对具体情况的判断。",
+          "en": "Warmth and structure are not opposite ends of a single dimension: parenting style is treated in the literature as an overall context, such that the same specific practice (setting a rule, say) relates differently to a child's response depending on whether the relational backdrop is warm or distant. This is a general framework, not a judgment about a specific situation."
+        },
+        "source": "General framing consistent with the parenting style as context model (cf. Darling & Steinberg, 1993); for illustrative/educational use only.",
+        "source_type": "academic",
+        "related_cards": [
+          "relationship_psychological_control",
+          "parent_screen_time",
+          "parent_sibling_comparison"
         ]
       }
     ],
     "generic_fallback": {
       "zh": "从关系的视角出发，通常值得留意的是：这次决策之后，孩子会怎么理解和记住这次沟通本身，而不只是记住最终结果。这是一般性提醒，不针对具体情况。",
-      "en": "From a relationship-centered perspective, it is often worth noting how the child will come to understand and remember this conversation itself, not only the final outcome. This is a general reminder, not specific to any particular situation.",
+      "en": "From a relationship-centered perspective, it is often worth noting how the child will come to understand and remember this exchange itself, not only the final outcome. This is a general reminder, not specific to any particular situation.",
       "source": "General framing; for illustrative/educational use only.",
-      "source_type": "academic"
+      "source_type": "academic",
+      "tag": {
+        "zh": "关系影响",
+        "en": "Relational impact"
+      }
     }
   }
 }

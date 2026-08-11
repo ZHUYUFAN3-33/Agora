@@ -103,15 +103,12 @@ export type DecisionMapData = {
 };
 
 /**
- * Note kinds in the reader's words. `user` / `layer` / `system` are storage
- * tokens; an unknown or user-owned kind renders no chip rather than leaking a
- * raw English token into the UI. Mirrors edgeWord() in DecisionRiver.
+ * The two footer rows — the key and the hint — share one class so they cannot
+ * drift apart. Both are chrome, so both are set at the same 10px; equal padding
+ * plus a min-height makes them the same height by construction rather than by
+ * two paddings that happen to agree today.
  */
-function noteKindLabel(lang: UiLang, kind: string): string {
-  const key = `map.noteKind.${kind}`;
-  const word = t(lang, key);
-  return word === key ? "" : word;
-}
+const FOOTER_ROW = "px-4 sm:px-5 py-2 min-h-[34px] flex items-center";
 
 export function DecisionMapPanel({
   open,
@@ -126,11 +123,6 @@ export function DecisionMapPanel({
   onRefresh,
   onExtract,
   extracting = false,
-  annotationDraft,
-  onAnnotationDraftChange,
-  onAddAnnotation,
-  onDeleteAnnotation,
-  onPromoteLayers,
   userName,
   docked = false,
   onUndock,
@@ -147,11 +139,6 @@ export function DecisionMapPanel({
   onRefresh: () => void;
   onExtract?: () => void;
   extracting?: boolean;
-  annotationDraft: string;
-  onAnnotationDraftChange: (v: string) => void;
-  onAddAnnotation: () => void;
-  onDeleteAnnotation?: (id: string) => void;
-  onPromoteLayers?: () => void;
   /** The reader's account id, shown instead of a generic "you". */
   userName?: string;
   /** Docked: the map collapses to a floating "back to map" pill while the
@@ -251,13 +238,6 @@ export function DecisionMapPanel({
     if (!selectedIssue?.winning_claim_id) return null;
     return claimById.get(selectedIssue.winning_claim_id) || null;
   }, [selectedIssue, claimById]);
-
-  const annotations = useMemo(() => {
-    const all = data?.annotations || [];
-    if (!selectedNodeId) return all.slice(0, 4);
-    const focused = all.filter((a) => !a.target_id || a.target_id === selectedNodeId);
-    return (focused.length ? focused : all).slice(0, 5);
-  }, [data?.annotations, selectedNodeId]);
 
   const zoomPct = Math.round(zoom * 100);
   const insufficient = !!data?.insufficient;
@@ -806,117 +786,31 @@ export function DecisionMapPanel({
                   it painted over the world layer, so panning a card into the
                   bottom strip made the two collide. */}
               {river && !insufficient && view === "river" && (
-                <div className="px-4 sm:px-5 py-2 border-b border-black/[0.06] bg-black/[0.015]">
-                  <div className="max-w-[1100px] mx-auto">
+                <div className={`${FOOTER_ROW} border-b border-black/[0.06] bg-black/[0.015]`}>
+                  <div className="max-w-[1100px] mx-auto w-full">
                     <RiverKeyStrip lang={lang} />
                   </div>
                 </div>
               )}
 
-              <div className="px-4 sm:px-5 py-3">
-                <div className="max-w-[1100px] mx-auto grid gap-x-6 gap-y-3 sm:grid-cols-[minmax(0,1fr)_340px] items-start">
-                  <div className="min-w-0">
-                    {insufficient ? (
-                      <p className="text-[12.5px] text-black/75 leading-relaxed">{t(lang, "map.insufficient")}</p>
-                    ) : leaningDirection ? (
-                      <>
-                        <p className={`text-[10px] text-[var(--app-muted-text)] ${labelCaseClass(lang)}`}>
-                          {t(lang, "map.conclusion")}
-                        </p>
-                        <p className="text-[13px] text-black mt-1 leading-snug">{leaningDirection}</p>
-                        {leaningStrength && (
-                          <p className="text-[11px] text-black/60 mt-0.5">{leaningStrength}</p>
-                        )}
-                      </>
-                    ) : (
-                      <p className="text-[12px] text-black/60 leading-relaxed">
-                        {t(lang, view === "ledger" ? "map.ledgerHint" : "map.selectHint")}
+              <div className={FOOTER_ROW}>
+                <div className="max-w-[1100px] mx-auto min-w-0 w-full">
+                  {insufficient ? (
+                    <p className="text-[10px] text-black/75 leading-relaxed">{t(lang, "map.insufficient")}</p>
+                  ) : leaningDirection ? (
+                    <>
+                      <p className={`text-[10px] text-[var(--app-muted-text)] ${labelCaseClass(lang)}`}>
+                        {t(lang, "map.conclusion")}
                       </p>
-                    )}
-                  </div>
-
-                  {/* Notes: the input sits directly above its own list, so a
-                      note appears where it was typed. They used to be in
-                      opposite columns. */}
-                  {!insufficient && (
-                    <div className="min-w-0">
-                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                        <p className={`text-[10px] text-[var(--app-muted-text)] ${labelCaseClass(lang)}`}>
-                          {t(lang, "map.annotations")}
-                        </p>
-                        {onPromoteLayers && (
-                          <button
-                            type="button"
-                            onClick={onPromoteLayers}
-                            className="text-[11px] text-black/60 hover:text-black underline decoration-black/20 underline-offset-2 hover:decoration-black/50"
-                          >
-                            {t(lang, "map.promoteLayers")}
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="flex gap-1.5">
-                        <input
-                          type="text"
-                          value={annotationDraft}
-                          onChange={(e) => onAnnotationDraftChange(e.target.value)}
-                          placeholder={t(lang, "map.annotationPh")}
-                          className="flex-1 min-w-0 h-9 px-2.5 rounded-[6px] border border-black/15 bg-white text-[12px] text-black placeholder:text-black/40 outline-none focus:border-black/40 focus:ring-2 focus:ring-black/[0.06]"
-                          style={font}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              onAddAnnotation();
-                            }
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={onAddAnnotation}
-                          disabled={!annotationDraft.trim()}
-                          className="h-9 px-3 rounded-[6px] bg-black text-white text-[11px] disabled:opacity-30 hover:bg-black/85"
-                        >
-                          {t(lang, "map.addAnnotation")}
-                        </button>
-                      </div>
-
-                      {annotations.length > 0 && (
-                        <ul className="mt-2 max-h-[112px] overflow-y-auto overscroll-contain pr-1 space-y-px">
-                          {annotations.map((a) => {
-                            const kindWord = noteKindLabel(lang, a.kind);
-                            const canJump = !!a.message_indexes?.length;
-                            return (
-                              <li key={a.id} className="flex items-start gap-1 group">
-                                <button
-                                  type="button"
-                                  disabled={!canJump}
-                                  title={canJump ? t(lang, "map.jumpEvidence") : undefined}
-                                  className="flex-1 min-w-0 text-left px-1.5 py-1 rounded-[5px] text-[12px] text-black/75 leading-snug hover:bg-black/[0.04] hover:text-black disabled:hover:bg-transparent disabled:cursor-default"
-                                  onClick={() => canJump && onJumpIndexes(a.message_indexes!)}
-                                >
-                                  {kindWord && (
-                                    <span className="inline-block align-[1px] mr-1.5 px-1 py-px rounded-[3px] bg-black/[0.06] text-[10px] text-black/60">
-                                      {kindWord}
-                                    </span>
-                                  )}
-                                  {a.text}
-                                </button>
-                                {a.kind === "user" && onDeleteAnnotation && (
-                                  <button
-                                    type="button"
-                                    className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-[4px] text-[14px] leading-none text-black/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-red-600 hover:bg-red-500/10"
-                                    onClick={() => onDeleteAnnotation(a.id)}
-                                    aria-label={t(lang, "map.deleteAnnotation")}
-                                  >
-                                    ×
-                                  </button>
-                                )}
-                              </li>
-                            );
-                          })}
-                        </ul>
+                      <p className="text-[13px] text-black mt-1 leading-snug">{leaningDirection}</p>
+                      {leaningStrength && (
+                        <p className="text-[11px] text-black/60 mt-0.5">{leaningStrength}</p>
                       )}
-                    </div>
+                    </>
+                  ) : (
+                    <p className="text-[10px] text-black/60 leading-relaxed">
+                      {t(lang, view === "ledger" ? "map.ledgerHint" : "map.selectHint")}
+                    </p>
                   )}
                 </div>
               </div>

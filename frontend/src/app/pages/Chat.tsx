@@ -2139,7 +2139,6 @@ export default function Chat() {
   const [decisionMapError, setDecisionMapError] = useState<string | null>(null);
   const [decisionMapExtracting, setDecisionMapExtracting] = useState(false);
   const [selectedMapTopicId, setSelectedMapTopicId] = useState<string | null>(null);
-  const [mapAnnotationDraft, setMapAnnotationDraft] = useState("");
 
   const [agentNames, setAgentNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
   const [agentBackendNames, setAgentBackendNames] = useState<Record<AgentKey, string>>({ ...DEFAULT_AGENT_NAMES });
@@ -2401,7 +2400,6 @@ export default function Chat() {
     setDecisionMap(null);
     setDecisionMapError(null);
     setSelectedMapTopicId(null);
-    setMapAnnotationDraft("");
     naviJumpLockRef.current = false;
     if (naviJumpUnlockTimerRef.current) {
       window.clearTimeout(naviJumpUnlockTimerRef.current);
@@ -2622,77 +2620,6 @@ export default function Chat() {
       setDecisionMapExtracting(false);
     }
   }, [currentConv?.roomId, uiLang]);
-
-  const handleAddMapAnnotation = useCallback(async () => {
-    const roomId = currentConv?.roomId;
-    const text = mapAnnotationDraft.trim();
-    if (!roomId || !text) return;
-    try {
-      const res = await authFetch(`/decision-map/${roomId}/annotations`, {
-        method: "POST",
-        body: JSON.stringify({
-          text,
-          target_id: selectedMapTopicId,
-          kind: "user",
-        }),
-      });
-      if (!res.ok) return;
-      setMapAnnotationDraft("");
-      await fetchDecisionMap({ extract: false });
-    } catch {
-      /* ignore */
-    }
-  }, [currentConv?.roomId, mapAnnotationDraft, selectedMapTopicId, fetchDecisionMap]);
-
-  const handleDeleteMapAnnotation = useCallback(async (id: string) => {
-    const roomId = currentConv?.roomId;
-    if (!roomId) return;
-    try {
-      await authFetch(`/decision-map/${roomId}/annotations`, {
-        method: "DELETE",
-        body: JSON.stringify({ id }),
-      });
-      await fetchDecisionMap({ extract: false });
-    } catch {
-      /* ignore */
-    }
-  }, [currentConv?.roomId, fetchDecisionMap]);
-
-  const handlePromoteLayerAnnotations = useCallback(async () => {
-    const roomId = currentConv?.roomId;
-    const messages = currentConv?.messages || [];
-    if (!roomId) return;
-    const layers: {
-      id: string;
-      layer: string;
-      excerpt: string;
-      message_index: number;
-      target_id?: string | null;
-    }[] = [];
-    messages.forEach((msg, index) => {
-      const anns = chatLayerAnnotations[msg.id] || [];
-      for (const a of anns) {
-        if (a.layer !== "decision") continue;
-        layers.push({
-          id: a.id,
-          layer: a.layer,
-          excerpt: (msg.content || "").slice(a.start, a.end),
-          message_index: index,
-          target_id: selectedMapTopicId,
-        });
-      }
-    });
-    if (layers.length === 0) return;
-    try {
-      await authFetch(`/decision-map/${roomId}/annotations`, {
-        method: "POST",
-        body: JSON.stringify({ promote_layers: true, layers }),
-      });
-      await fetchDecisionMap({ extract: false });
-    } catch {
-      /* ignore */
-    }
-  }, [currentConv?.roomId, currentConv?.messages, chatLayerAnnotations, selectedMapTopicId, fetchDecisionMap]);
 
   useEffect(() => {
     const root = messagesContainerRef.current;
@@ -4904,11 +4831,6 @@ export default function Chat() {
       onRefresh={() => void fetchDecisionMap({ extract: true })}
       onExtract={() => void handleExtractDecisionMap()}
       extracting={decisionMapExtracting}
-      annotationDraft={mapAnnotationDraft}
-      onAnnotationDraftChange={setMapAnnotationDraft}
-      onAddAnnotation={() => void handleAddMapAnnotation()}
-      onDeleteAnnotation={(id) => void handleDeleteMapAnnotation(id)}
-      onPromoteLayers={() => void handlePromoteLayerAnnotations()}
       userName={auth?.user_id || undefined}
     />
   </>

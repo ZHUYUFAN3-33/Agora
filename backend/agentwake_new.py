@@ -39,6 +39,14 @@ try:
 except ImportError:
     HAVE_AGENT_ASSEMBLY = False
 
+# Option Board: room-level option state. Agent [OPTIONS] output is a proposal
+# reconciled into the board at write time; the board decides when chips render.
+try:
+    import option_board
+    HAVE_OPTION_BOARD = True
+except ImportError:
+    HAVE_OPTION_BOARD = False
+
 # Stance Knowledge: keyword-triggered, per-stance background cards injected into
 # the speaking agent's prompt. Pure local dict lookup (no network / no LLM). See
 # stance_knowledge.py. Optional import so the script still runs standalone.
@@ -660,13 +668,13 @@ class ChatAgent:
         if phase_context:
             prompt += f"\n{phase_context}"
         prompt += (
-            "\n\nOUTPUT FORMAT (required):\n"
-            "[MESSAGE]\n"
-            "your chat message here\n"
-            "[/MESSAGE]\n"
-            "[OPTIONS]\n"
-            '[{"id":"o1","label":"short option A"},{"id":"o2","label":"short option B"}]\n'
-            "[/OPTIONS]\n"
+            # ORDER MATTERS: the two one-line metadata blocks come FIRST.
+            # They used to trail the message, and since the message is the long
+            # part, hitting max_output_tokens cut the tail off — measured in
+            # room 001999, every turn whose message ran past ~250 tokens lost
+            # its [RATIONALE] entirely (4 of 6 turns), which is what left the
+            # decision map's edge tooltips with nothing to show.
+            "\n\nOUTPUT FORMAT (required, in this order):\n"
             "[MOVE]\n"
             "one word for what this message DOES, optionally plus who it responds to, e.g. "
             "\"challenge @ChatbotB\". Exactly one of: challenge (you dispute a specific claim "
@@ -678,6 +686,12 @@ class ChatAgent:
             "[RATIONALE]\n"
             "one short sentence: why you said this, given your persona and the current phase goal\n"
             "[/RATIONALE]\n"
+            "[MESSAGE]\n"
+            "your chat message here\n"
+            "[/MESSAGE]\n"
+            "[OPTIONS]\n"
+            '[{"id":"o1","label":"short option A"},{"id":"o2","label":"short option B"}]\n'
+            "[/OPTIONS]\n"
             "Tag names are literal markers: write MESSAGE / OPTIONS / MOVE / RATIONALE in English "
             "exactly as shown. Do NOT translate them "
             "(never [消息]/[选项]/[選択肢]/[オプション]/[メッセージ]/[动作]/[理由]/[根拠]). "
@@ -1352,6 +1366,11 @@ def enforce_no_refusal(agent: "ChatAgent", messages: List[dict], parsed: dict, t
 
 MAX_MENTIONS_PER_MESSAGE = 4
 
+# An @-handle only counts at the start of a line or after whitespace/an opening
+# bracket. A bare `@(\w+)` also fires inside e-mail addresses — "a@b.com" used
+# to hard-route agent B to speak — and after any word character generally.
+_MENTION_RE = re.compile(r"(?:^|[\s(（\[【,，。;；:：!！?？'\"“”])@(\w+)")
+
 def build_mention_patterns(agent_keys: List[str], name_map: Dict[str, str]) -> Dict[str, str]:
     """Maps every accepted @-alias (lowercased) to its canonical agent key:
     both the key itself (@A) and the display name (@ChatbotA)."""
@@ -1369,7 +1388,7 @@ def parse_mentions(text: str, mention_patterns: Dict[str, str],
     """Canonical agent keys @-mentioned in text, in order of first appearance,
     deduplicated, capped at max_mentions. Unknown names (@Z) are ignored."""
     found: List[str] = []
-    for token in re.findall(r"@(\w+)", text or ""):
+    for token in _MENTION_RE.findall(text or ""):
         key = mention_patterns.get(token.lower())
         if key and key not in found:
             found.append(key)
@@ -1416,7 +1435,7 @@ def run_user_turn(
     lang: str = "en",
     model: str = "gpt-4o",
     temperature: float = 0.8,
-    max_output_tokens: int = 320,
+    max_output_tokens: int = 520,
     max_history_chars: int = 12000,
     max_user_gap: int = 12,
     max_agent_turns_before_user: Optional[int] = None,
@@ -1425,6 +1444,7 @@ def run_user_turn(
     novelty_window: int = 10,
     self_novelty_threshold: Optional[float] = None,
     self_novelty_window: int = 6,
+    novelty_drop_threshold: Optional[float] = None,
     persist_chat: Optional[Callable[[dict], None]] = None,
     create_response_with_client: Optional[CreateFn] = None,
 ) -> Dict[str, Any]:
@@ -1444,6 +1464,13 @@ def run_user_turn(
         self_novelty_threshold
         if self_novelty_threshold is not None
         else os.getenv("AGORA_SELF_NOVELTY_THRESHOLD", "0.35")
+    )
+    # Discarding a retry is a much heavier call than asking for one: the
+    # alternative is the agent saying nothing at all. Separate, far lower bar.
+    drop_th = float(
+        novelty_drop_threshold
+        if novelty_drop_threshold is not None
+        else os.getenv("AGORA_NOVELTY_DROP_THRESHOLD", "0.25")
     )
 
     key_to_agent = agents
@@ -1528,6 +1555,99 @@ def run_user_turn(
     responses: List[dict] = []
     pending_knowledge_matches: Dict[str, dict] = {}
     room_id = session.get("room_id")
+
+    # ---- Option Board (option_board.py) ------------------------------------
+    # Room-level option state: agent [OPTIONS] output is reconciled into the
+    # board (repeat proposals become endorsements), and whether chips render on
+    # a message is the board's display policy — not each agent's whim.
+    _board_dir = os.path.dirname(getattr(session.get("chat_fp"), "name", "") or "") or "logs"
+    _board_on = HAVE_OPTION_BOARD and bool(room_id)
+    board_state = option_board.load_board(_board_dir, room_id) if _board_on else None
+    if _board_on and not option_board.board_has_content(board_state):
+        _intake_opts = (intake_data or {}).get("options")
+        if isinstance(_intake_opts, list) and len(_intake_opts) >= 2:
+            option_board.seed_intake(board_state, _intake_opts)
+            if option_board.board_has_content(board_state):
+                option_board.save_board(_board_dir, room_id, board_state)
+
+    def board_prompt_note() -> str:
+        if not _board_on:
+            return ""
+        note = option_board.board_prompt_block(board_state)
+        return f"\n\n{note}" if note else ""
+
+    def process_agent_options(
+        agent_key: str,
+        speaker_name: str,
+        proposed: Optional[list],
+        *,
+        force_intro: bool = False,
+    ) -> Optional[list]:
+        """Reconcile one turn's [OPTIONS] proposal; return canonical chips to
+        stamp on this message, or None. The board accumulates either way —
+        suppressing display never loses the proposal (it becomes endorsement
+        history instead).
+
+        A turn WITHOUT a proposal can still render chips when the user just
+        asked to choose: the prompt block forbids re-proposing known options,
+        so an established axis may never be "touched" again — the ask itself
+        has to be able to surface it."""
+        if not _board_on:
+            return proposed or None  # standalone/test sessions keep old behavior
+        idx = len(session.get("history") or [])
+
+        def _last_user_index() -> Optional[int]:
+            hist = session.get("history") or []
+            for j in range(len(hist) - 1, -1, -1):
+                if str(hist[j].get("character") or "").lower() == "user":
+                    return j
+            return None
+
+        if not proposed:
+            if force_intro or not option_board.user_asked_to_choose(user_message):
+                return None
+            axis = option_board.active_axis(board_state)
+            if axis is None:
+                return None
+            chips = option_board.decide_display(
+                board_state,
+                axis,
+                force_intro=force_intro,
+                phase=moderator_state.get("state") or "Exploration",
+                user_message=user_message,
+                msg_index=idx,
+                user_msg_index=_last_user_index(),
+            )
+            if chips:
+                option_board.save_board(_board_dir, room_id, board_state)
+                log_agent_event(
+                    agent_key,
+                    "option_board",
+                    f"axis={axis.get('id')} rendered on user ask (no proposal)",
+                )
+            return chips
+
+        rec = option_board.reconcile(
+            board_state, proposed, speaker=speaker_name, msg_index=idx
+        )
+        chips = option_board.decide_display(
+            board_state,
+            rec.get("axis"),
+            force_intro=force_intro,
+            phase=moderator_state.get("state") or "Exploration",
+            user_message=user_message,
+            msg_index=idx,
+            user_msg_index=_last_user_index(),
+        )
+        option_board.save_board(_board_dir, room_id, board_state)
+        axis = rec.get("axis") or {}
+        log_agent_event(
+            agent_key,
+            "option_board",
+            f"axis={axis.get('id')} added={len(rec.get('added') or [])} "
+            f"endorsed={len(rec.get('endorsed') or [])} displayed={bool(chips)}",
+        )
+        return chips
 
     def _append_jsonl(fp, obj: dict) -> None:
         if fp is None:
@@ -1896,12 +2016,25 @@ def run_user_turn(
             allow = due_user or due_fallback
             run_moderator(allow_state_change=allow)
 
-    def enforce_novelty(agent: "ChatAgent", messages: List[dict], parsed: dict, temp: float) -> dict:
+    def enforce_novelty(
+        agent: "ChatAgent",
+        messages: List[dict],
+        parsed: dict,
+        temp: float,
+        *,
+        named_by_user: bool = False,
+    ) -> dict:
         """Two-scope novelty guard (CLI-faithful): group (vs the recent window,
         all speakers) and self (vs this agent's OWN last N messages). Failing
         EITHER triggers one corrective retry; the retry must clear BOTH scopes
         or the turn is dropped. nov_th <= 0 is the master off switch for the
-        whole guard; self_nov_th <= 0 turns off only the self scope."""
+        whole guard; self_nov_th <= 0 turns off only the self scope.
+
+        named_by_user: the user @-mentioned this agent, so the retry still runs
+        (a fresher answer is better) but a failing retry is KEPT rather than
+        dropped. Silence from an agent the user called on by name reads as the
+        product ignoring them — measured in the roll-call baseline, where only
+        1 of 3 named agents ever answered."""
         txt = parsed.get("message") or ""
         if nov_th <= 0 or not transcript_lines or not txt:
             return parsed
@@ -1923,6 +2056,14 @@ def run_user_turn(
             if nov_th > 0 and group < nov_th:
                 return "group"
             if self_nov_th > 0 and own < self_nov_th:
+                return "self"
+            return None
+
+        def _failing_drop(group: float, own: float):
+            """Same, against the (much lower) bar for discarding a retry."""
+            if drop_th > 0 and group < drop_th:
+                return "group"
+            if drop_th > 0 and own < drop_th:
                 return "self"
             return None
 
@@ -1969,13 +2110,21 @@ def run_user_turn(
         retry_parsed = parse_agent_turn(retry_raw)
         retry_ratio, retry_self = _scores(retry_parsed.get("message") or "")
 
-        # The retry is the last chance: it must clear BOTH scopes on its own,
-        # or the agent says nothing at all (CLI-faithful drop rule).
-        retry_scope = _failing(retry_ratio, retry_self)
+        # The retry is judged against the DROP bar, not the trigger that asked
+        # for it. Measured: with the two equal, 21 of 28 retries were discarded
+        # and the agent simply vanished from those turns.
+        retry_scope = _failing_drop(retry_ratio, retry_self)
         if retry_scope is None:
             log_thinking(
                 "novelty_retry",
                 f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f} (kept)",
+            )
+            return retry_parsed
+        if named_by_user:
+            log_thinking(
+                "novelty_retry",
+                f"{agent.key}: retry still failing {retry_scope}, but the user named this "
+                f"agent — kept anyway (answering beats silence)",
             )
             return retry_parsed
         log_thinking(
@@ -2005,7 +2154,7 @@ def run_user_turn(
                 "You MUST make a decisive move: propose something new, force a comparison, "
                 "ask a direct question that demands an answer, or take a clear position.\n"
                 "Do NOT repeat what has already been said.\n\n"
-                f"{history}"
+                f"{history}{board_prompt_note()}"
             )
             pk = agent_configs.get(burst_agent.key, {}).get("preloaded_knowledge") or ""
             messages = [
@@ -2041,7 +2190,10 @@ def run_user_turn(
                     f"{burst_agent.key} mentioned {agent_mentions} "
                     f"(soft cue, not routed, admin still decides next speaker)",
                 )
-            append_agent(burst_agent, txt, options=parsed.get("options") or None)
+            chips = process_agent_options(
+                burst_agent.key, burst_agent.name, parsed.get("options")
+            )
+            append_agent(burst_agent, txt, options=chips)
             # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
             # the chat row. map_facts.py joins the two on (timestamp, speaker) at
             # one-second granularity, so anything between these two writes risks
@@ -2064,17 +2216,36 @@ def run_user_turn(
         extra = ""
         if force_intro:
             extra = f"\n\n(Important) This is your FIRST message. Start with: Hi, I'm {agent.name}"
+        # Board goes in front of the intro note so "options on the table" reads
+        # as context, not as part of the formatting instruction.
+        extra = board_prompt_note() + extra
         effective_temp = temperature
         if stall_triggered:
             effective_temp = min(temperature + 0.25, 1.4)
         phase_context = get_phase_context(agent.key)
         if mention_trigger:
+            # Co-named agents: without this every agent in a roll-call answers
+            # as if asked alone, so three near-identical replies come back and
+            # the novelty guard eats two of them.
+            others = [
+                key_to_agent[k].name
+                for k in (session.get("mention_named") or [])
+                if k != agent.key and k in key_to_agent
+            ]
+            group_note = (
+                f"The user named {len(others) + 1} of you in that message: "
+                f"you and {', '.join(others)}. Give YOUR own angle — do not "
+                f"restate what the others would obviously say.\n"
+                if others
+                else ""
+            )
             user_prompt = (
                 "Below is the full group chat transcript so far.\n"
                 "Each line is formatted as: Speaker: message\n"
                 "The user just mentioned YOU by name in their last message. "
                 "Respond to the user directly first — address what they asked or said to you — "
-                "before anything else. Stay in character.\n\n"
+                "before anything else. Stay in character.\n"
+                f"{group_note}\n"
                 f"{history}\n{extra}"
             )
         else:
@@ -2120,7 +2291,9 @@ def run_user_turn(
             log_think=log_thinking,
         )
         if not parsed.get("dropped"):
-            parsed = enforce_novelty(agent, messages, parsed, effective_temp)
+            parsed = enforce_novelty(
+                agent, messages, parsed, effective_temp, named_by_user=mention_trigger
+            )
         if parsed.get("dropped"):
             log_agent_event(
                 agent.key,
@@ -2142,7 +2315,10 @@ def run_user_turn(
                 f"{agent.key} mentioned {agent_mentions} "
                 f"(soft cue, not routed, admin still decides next speaker)",
             )
-        append_agent(agent, txt, options=parsed.get("options") or None)
+        chips = process_agent_options(
+            agent.key, agent.name, parsed.get("options"), force_intro=force_intro
+        )
+        append_agent(agent, txt, options=chips)
         # Self-reported move -> {room}_rationale.jsonl, written IMMEDIATELY after
         # the chat row. map_facts.py joins the two on (timestamp, speaker) at
         # one-second granularity, so anything between these two writes risks
@@ -2243,6 +2419,9 @@ def run_user_turn(
         )
 
     mentioned = parse_mentions(user_message or "", mention_patterns)
+    # Roll-call roster for this user turn: each named agent is told who else
+    # was named, so they angle their answers instead of colliding.
+    session["mention_named"] = list(mentioned)
     if mentioned:
         q = session.setdefault("mention_queue", [])
         q.extend(mentioned)
@@ -2321,11 +2500,14 @@ def main():
     ap.add_argument("--start_order", default="ABCU", help="Chars from the agent key set plus U, default ABCU")
     ap.add_argument("--model", default="gpt-4o")
     ap.add_argument("--temperature", type=float, default=0.8)
-    ap.add_argument("--max_output_tokens", type=int, default=320,
-                    help="Raised from 220 once agents had to emit [MESSAGE] plus [RATIONALE] in one "
-                         "generation: in logs/316347 two thirds of turns ran out of budget before "
-                         "the rationale block (one message was cut off mid-sentence). Watch for "
-                         "TRUNCATED in the rationale log if you lower it. Default 320")
+    ap.add_argument("--max_output_tokens", type=int, default=520,
+                    help="One generation carries four blocks: MOVE, RATIONALE, MESSAGE, OPTIONS. "
+                         "Raised 220 -> 320 in logs/316347, then 320 -> 520 after room 001999, "
+                         "where messages alone measured 174-317 tokens and every turn past ~250 "
+                         "lost its trailing block (4 of 6). MOVE and RATIONALE now lead the format "
+                         "so a squeeze truncates prose rather than metadata, but the budget also "
+                         "has to fit the prose. Watch for TRUNCATED in the rationale log if you "
+                         "lower it. Default 520")
     ap.add_argument("--max_history_chars", type=int, default=12000)
     ap.add_argument("--log_dir", default="logs", help="Directory to write jsonl logs")
     ap.add_argument("--prefer_agents", type=float, default=0.85,
@@ -2334,7 +2516,7 @@ def main():
                     help="Force U if user hasn't spoken in this many transcript lines. Default 12")
 
     # ---- Message quality guards ----
-    ap.add_argument("--novelty_threshold", type=float, default=0.5,
+    ap.add_argument("--novelty_threshold", type=float, default=0.4,
                     help="If a reply's share of content words unseen in the recent transcript falls "
                          "below this, the agent gets one corrective retry (one extra API call); if "
                          "the retry still misses the bar the turn is DROPPED and the agent stays "
@@ -2344,6 +2526,15 @@ def main():
                          "rule: retries used to be kept merely for scoring better than the "
                          "original (0.52 > 0.00 was 'kept'), independently of this threshold. "
                          "Default 0.5")
+    ap.add_argument("--novelty_drop_threshold", type=float, default=0.25,
+                    help="A retried reply is DISCARDED (the agent stays silent) only below this "
+                         "much lower bar. Measured over 7 rooms: when the drop bar equalled the "
+                         "retry trigger (0.5), 21 of 28 retries were discarded — agents went "
+                         "silent on three quarters of the turns they were asked to redo, and 11 "
+                         "of 28 retries scored WORSE than the first attempt because engaging with "
+                         "a specific claim necessarily reuses that claim's words. At 0.25 only 3 "
+                         "of those 28 are discarded: silence now requires near-verbatim repetition, "
+                         "not merely a middling score. 0 disables dropping entirely.")
     ap.add_argument("--novelty_window", type=int, default=10,
                     help="How many recent transcript lines the novelty check compares against. Short "
                          "enough that a deliberate callback to something said 20 turns ago isn't "
@@ -3327,6 +3518,15 @@ def main():
                     return "self"
                 return None
 
+            def _failing_drop(group: float, own: float):
+                """Same, against the much lower bar for DISCARDING a retry."""
+                bar = args.novelty_drop_threshold
+                if bar > 0 and group < bar:
+                    return "group"
+                if bar > 0 and own < bar:
+                    return "self"
+                return None
+
             ratio, self_ratio = _scores(txt)
             scope = _failing(ratio, self_ratio)
             if scope is None:
@@ -3376,7 +3576,11 @@ def main():
             # guard itself had flagged as recycled, promoted purely for being less
             # bad. Silence is an allowed turn (the system prompt says so
             # explicitly); a rephrased restatement is not.
-            retry_scope = _failing(retry_ratio, retry_self)
+            # …but the bar for throwing the retry AWAY is far lower than the one
+            # that asked for it. Measured over 7 rooms with the two equal: 21 of
+            # 28 retries discarded, and 11 of 28 scored worse than the original
+            # because engaging a specific claim reuses that claim's words.
+            retry_scope = _failing_drop(retry_ratio, retry_self)
             if retry_scope is None:
                 log_thinking("novelty_retry",
                              f"{agent.key}: retry novelty group={retry_ratio:.2f} "

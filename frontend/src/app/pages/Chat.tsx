@@ -2131,6 +2131,9 @@ export default function Chat() {
   const naviJumpUnlockTimerRef = useRef<number | null>(null);
 
   const [decisionMapOpen, setDecisionMapOpen] = useState(false);
+  // Docked: map collapsed to a floating pill while the user reads evidence in
+  // chat; the panel stays mounted so selection/zoom survive the round trip.
+  const [decisionMapDocked, setDecisionMapDocked] = useState(false);
   const [decisionMap, setDecisionMap] = useState<DecisionMapData | null>(null);
   const [decisionMapLoading, setDecisionMapLoading] = useState(false);
   const [decisionMapError, setDecisionMapError] = useState<string | null>(null);
@@ -2394,6 +2397,7 @@ export default function Chat() {
     setHighlightedMessageId(null);
     setHighlightedMessageIds([]);
     setDecisionMapOpen(false);
+    setDecisionMapDocked(false);
     setDecisionMap(null);
     setDecisionMapError(null);
     setSelectedMapTopicId(null);
@@ -2513,9 +2517,20 @@ export default function Chat() {
 
   const handleOpenDecisionMap = useCallback(() => {
     setDecisionMapOpen(true);
+    setDecisionMapDocked(false);
     // Open → smart extract only if transcript changed (backend skips when cache is fresh).
     void fetchDecisionMap({ extract: true });
   }, [fetchDecisionMap]);
+
+  // Jump from the map: dock it (chat becomes visible), then scroll+flash the
+  // evidence. The pill rendered by DecisionMapPanel is the way back.
+  const handleMapJumpIndexes = useCallback(
+    (indexes: number[]) => {
+      setDecisionMapDocked(true);
+      jumpToRange(indexes);
+    },
+    [jumpToRange],
+  );
 
   const handleChooseOption = useCallback(async (message: Message, option: ChatOptionChip) => {
     const roomId = currentConv?.roomId;
@@ -3665,7 +3680,89 @@ export default function Chat() {
     await logoutRequest();
     navigate("/");
   };
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { if (e.key === "Enter" && (e.metaKey || e.altKey)) { e.preventDefault(); handleSend(); } };
+  // --- @-mention picker -------------------------------------------------
+  // Typing "@" opens the roster; picking an agent completes the handle. The
+  // composer then states who will reply, so a mistyped handle can no longer
+  // fail silently (the backend hard-routes only names it recognises).
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionHighlight, setMentionHighlight] = useState(0);
+
+  const mentionCandidates = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    return activeAgentKeys
+      .map((k) => ({ key: k, name: agentNames[k] || `Chatbot${k}` }))
+      .filter((a) => !q || a.name.toLowerCase().startsWith(q) || a.key.toLowerCase() === q);
+  }, [mentionQuery, activeAgentKeys, agentNames]);
+
+  /** Agents the current draft would summon, in the backend's own order. */
+  const draftMentions = useMemo(() => {
+    const byAlias = new Map<string, AgentKey>();
+    activeAgentKeys.forEach((k) => {
+      byAlias.set(k.toLowerCase(), k);
+      byAlias.set((agentNames[k] || `Chatbot${k}`).toLowerCase(), k);
+    });
+    const out: AgentKey[] = [];
+    // Mirrors backend _MENTION_RE: an @ only counts at a boundary.
+    const re = /(?:^|[\s(（[【,，。;；:：!！?？'"“”])@(\w+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(inputValue)) !== null) {
+      const key = byAlias.get(m[1].toLowerCase());
+      if (key && !out.includes(key)) out.push(key);
+      if (out.length >= 4) break; // backend MAX_MENTIONS_PER_MESSAGE
+    }
+    return out;
+  }, [inputValue, activeAgentKeys, agentNames]);
+
+  const syncMentionQuery = useCallback((el: HTMLTextAreaElement) => {
+    const upto = el.value.slice(0, el.selectionStart ?? el.value.length);
+    const m = /(?:^|[\s(（[【])@(\w*)$/.exec(upto);
+    setMentionQuery(m ? m[1] : null);
+    setMentionHighlight(0);
+  }, []);
+
+  const applyMention = useCallback(
+    (name: string) => {
+      const el = inputRef.current;
+      if (!el) return;
+      const caret = el.selectionStart ?? inputValue.length;
+      const head = inputValue.slice(0, caret);
+      const replaced = head.replace(/@(\w*)$/, `@${name} `);
+      const next = replaced + inputValue.slice(caret);
+      setInputValue(next);
+      setMentionQuery(null);
+      requestAnimationFrame(() => {
+        el.focus();
+        const pos = replaced.length;
+        el.setSelectionRange(pos, pos);
+      });
+    },
+    [inputValue],
+  );
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionQuery !== null && mentionCandidates.length > 0) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionHighlight((i) => {
+          const n = mentionCandidates.length;
+          return (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+        });
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        applyMention(mentionCandidates[mentionHighlight].name);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+    if (e.key === "Enter" && (e.metaKey || e.altKey)) { e.preventDefault(); handleSend(); }
+  };
   const autoResizeInput = useCallback((el: HTMLTextAreaElement | null) => {
     if (!el) return;
     const maxHeight = 120;
@@ -4614,6 +4711,60 @@ export default function Chat() {
                 fillColor={GUIDE_FRAME_FILL}
                 pulse
               />
+              {/* Who this draft will summon — stated before sending, so a
+                  handle the backend does not recognise is visibly absent. */}
+              {currentConv && (draftMentions.length > 0 || mentionQuery !== null) && (
+                <div className="relative z-10 flex items-center gap-1.5 flex-wrap mb-1.5 px-1" style={uiFont}>
+                  <span className={`text-[10px] text-[var(--app-muted-text)] ${labelCaseClass(uiLang)}`}>
+                    {t(uiLang, "chat.willReply")}
+                  </span>
+                  {draftMentions.length > 0 ? (
+                    draftMentions.map((k) => (
+                      <span
+                        key={k}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[5px] text-[10px] text-black bg-black/[0.06]"
+                      >
+                        <span
+                          className="w-1.5 h-1.5 rounded-[1px]"
+                          style={{ backgroundColor: agentSettings[k]?.accentColor || DEFAULT_AGENT_COLORS[k] }}
+                        />
+                        {agentNames[k]}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-[10px] text-[var(--app-muted-text)]">
+                      {t(uiLang, "chat.willReplyAuto")}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* @-picker */}
+              {mentionQuery !== null && mentionCandidates.length > 0 && (
+                <div
+                  className="absolute bottom-[calc(100%+8px)] left-[56px] z-30 min-w-[190px] rounded-[10px] border border-black/10 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.12)] py-1"
+                  style={uiFont}
+                >
+                  {mentionCandidates.map((a, i) => (
+                    <button
+                      key={a.key}
+                      type="button"
+                      onMouseEnter={() => setMentionHighlight(i)}
+                      onMouseDown={(e) => { e.preventDefault(); applyMention(a.name); }}
+                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] ${
+                        i === mentionHighlight ? "bg-black/[0.06]" : "hover:bg-black/[0.03]"
+                      }`}
+                    >
+                      <span
+                        className="w-2 h-2 rounded-[2px] flex-shrink-0"
+                        style={{ backgroundColor: agentSettings[a.key]?.accentColor || DEFAULT_AGENT_COLORS[a.key] }}
+                      />
+                      <span className="text-black">{a.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="relative z-10 flex gap-2 items-end min-h-[48px]">
               <div className="relative flex">
                 <motion.button ref={attachBtnRef} onClick={() => setAttachMenuOpen((v) => !v)} type="button"
@@ -4628,7 +4779,11 @@ export default function Chat() {
                 </AnimatePresence>
               </div>
               <div className="flex-1 min-h-[48px] bg-black rounded-[12px] flex items-center px-4 py-3">
-                <textarea ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={handleKeyDown}
+                <textarea ref={inputRef} value={inputValue}
+                  onChange={(e) => { setInputValue(e.target.value); syncMentionQuery(e.currentTarget); }}
+                  onClick={(e) => syncMentionQuery(e.currentTarget)}
+                  onBlur={() => setMentionQuery(null)}
+                  onKeyDown={handleKeyDown}
                   placeholder={t(uiLang, "chat.inputPh")}
                   rows={1} disabled={isLoading}
                   className="flex-1 min-h-[24px] bg-transparent resize-none outline-none text-white placeholder-[#828282] leading-relaxed disabled:opacity-50"
@@ -4733,14 +4888,19 @@ export default function Chat() {
     </AnimatePresence>
     <DecisionMapPanel
       open={decisionMapOpen}
-      onClose={() => setDecisionMapOpen(false)}
+      onClose={() => {
+        setDecisionMapOpen(false);
+        setDecisionMapDocked(false);
+      }}
+      docked={decisionMapDocked}
+      onUndock={() => setDecisionMapDocked(false)}
       data={decisionMap}
       loading={decisionMapLoading}
       error={decisionMapError}
       lang={uiLang}
       selectedTopicId={selectedMapTopicId}
       onSelectTopic={setSelectedMapTopicId}
-      onJumpIndexes={jumpToRange}
+      onJumpIndexes={handleMapJumpIndexes}
       onRefresh={() => void fetchDecisionMap({ extract: true })}
       onExtract={() => void handleExtractDecisionMap()}
       extracting={decisionMapExtracting}
@@ -4749,6 +4909,7 @@ export default function Chat() {
       onAddAnnotation={() => void handleAddMapAnnotation()}
       onDeleteAnnotation={(id) => void handleDeleteMapAnnotation(id)}
       onPromoteLayers={() => void handlePromoteLayerAnnotations()}
+      userName={auth?.user_id || undefined}
     />
   </>
   );

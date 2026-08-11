@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { t, type UiLang } from "../i18n/ui";
+import { t, userLabel, type UiLang } from "../i18n/ui";
 
 /**
  * ReplyGraph — the deterministic "who answered whom" strip.
@@ -66,10 +66,12 @@ function arcPath(x1: number, y1: number, x2: number, y2: number): string {
 export function ReplyGraph({
   facts,
   lang = "en",
+  userName,
   onJumpIndexes,
 }: {
   facts?: FactLayer | null;
   lang?: UiLang;
+  userName?: string;
   onJumpIndexes?: (indexes: number[]) => void;
 }) {
   const [open, setOpen] = useState(true);
@@ -141,7 +143,7 @@ export function ReplyGraph({
             {/* lane guides + speaker labels */}
             {lanes.map((lane, i) => {
               const y = PAD_Y + i * ROW_H + ROW_H / 2;
-              const label = lane === "__user__" ? t(lang, "map.replyGraphUser") : lane;
+              const label = lane === "__user__" ? userLabel(lang, userName) : lane;
               return (
                 <g key={lane}>
                   <line x1={PAD_X - 12} y1={y} x2={width - 16} y2={y} stroke="rgba(0,0,0,0.06)" strokeWidth={1} />

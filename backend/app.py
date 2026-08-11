@@ -107,8 +107,14 @@ load_dotenv(os.path.join(os.path.dirname(BASE_DIR), ".env"))
 API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 # Faithful CLI default (Agora-2 backend-dev): prefer_agents=0.85
 PREFER_AGENTS = float(os.getenv("AGORA_PREFER_AGENTS") or "0.85")
-# Faithful CLI default: --novelty_threshold 0.5
-NOVELTY_THRESHOLD = float(os.getenv("AGORA_NOVELTY_THRESHOLD") or "0.5")
+# Recalibrated over 7 real rooms (see --novelty_threshold help in
+# agentwake_new.py): 0.5 sat at the very top of the natural score distribution
+# — every one of 28 first-attempt "failures" scored 0.24-0.48, i.e. the guard
+# was firing on ordinary replies rather than on outliers.
+NOVELTY_THRESHOLD = float(os.getenv("AGORA_NOVELTY_THRESHOLD") or "0.4")
+# Discarding a retry means the agent says nothing at all; that needs much
+# stronger evidence than asking for one.
+NOVELTY_DROP_THRESHOLD = float(os.getenv("AGORA_NOVELTY_DROP_THRESHOLD") or "0.25")
 
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
@@ -417,6 +423,18 @@ AGENT_POOL: Dict[str, dict] = {
         ),
     },
 }
+
+# Pool personas are editable files: personas/{key}.txt replaces the inline
+# role_text above (same contract chatbot1/2/3.txt already provides for A/B/C).
+PERSONAS_DIR = os.path.join(BASE_DIR, "personas")
+for _pool_key, _pool_prof in AGENT_POOL.items():
+    _persona_path = os.path.join(PERSONAS_DIR, f"{_pool_key}.txt")
+    if os.path.exists(_persona_path):
+        _persona_txt = read_text(_persona_path).strip()
+        if _persona_txt:
+            _pool_prof["role_text"] = _sanitize_runtime_controlled_role_text(
+                _pool_prof.get("name") or f"Chatbot{_pool_key}", _persona_txt
+            )
 
 
 def _normalize_limited_keys(keys: List[str]) -> List[str]:
@@ -1078,6 +1096,7 @@ def send_message():
             max_agent_turns_before_user=max_agent_turns_before_user,
             prefer_agents=PREFER_AGENTS,
             novelty_threshold=NOVELTY_THRESHOLD,
+            novelty_drop_threshold=NOVELTY_DROP_THRESHOLD,
             persist_chat=lambda msg: _persist_chat_message_db(room_id, msg, session),
             create_response_with_client=create_response_with_client,
         )
@@ -1574,26 +1593,71 @@ def _load_room_msgs_and_agents(room_id: str, ctx: dict) -> Tuple[List[dict], Lis
     return msgs, agents, scenario_type
 
 
-def _with_fact_layer(payload: dict, room_id: str) -> dict:
-    """Attach the deterministic reply graph to a decision-map payload.
+def _load_option_board(room_id: str):
+    """Option Board state for a room, or None (missing file / legacy room)."""
+    try:
+        from option_board import load_board, board_has_content
+        board = load_board(LOG_DIR, room_id)
+        return board if board_has_content(board) else None
+    except Exception:  # noqa: BLE001 — map falls back to read-time layer
+        return None
 
-    Who answered whom, derived from the [MOVE] self-reports already sitting in
-    {room}_rationale.jsonl. A pure log join — no LLM, no network — so it rides
-    along on every map response instead of being gated behind the extract.
 
-    Its own key on purpose: the IBIS layer is about CLAIMS and is LLM-inferred,
-    this is about TURNS and is not. Merging them would blur which half of the
-    map is a guess.
+def _with_fact_layer(payload: dict, room_id: str, *, generate_summaries: bool = False) -> dict:
+    """Attach the deterministic layers to a decision-map payload.
 
-    Never fatal: a half-written or malformed log degrades to an empty graph
-    rather than 500-ing the whole endpoint.
+    facts — who answered whom, joined from the [MOVE] self-reports in
+    {room}_rationale.jsonl. Pure log join, no LLM.
+
+    river — the map's main view: every turn with its per-turn summary
+    (turn_summaries.py cache; generated here only when generate_summaries is
+    set — map opens and explicit extracts, never choice clicks), move edges,
+    option milestones and the verdict. Assembly is deterministic; the only
+    LLM work is the incremental per-turn summarization.
+
+    Never fatal: any failing layer degrades to absent/empty rather than
+    500-ing the endpoint.
     """
     try:
         from map_facts import load_room_facts
-        payload["facts"] = load_room_facts(LOG_DIR, room_id)
+        facts = load_room_facts(LOG_DIR, room_id)
     except Exception as e:  # noqa: BLE001 — the map must still render
         print(f"⚠ decision-map fact layer skipped: {e}")
-        payload["facts"] = {"turns": [], "relations": [], "roster": {}, "stats": {}}
+        facts = {"turns": [], "relations": [], "roster": {}, "stats": {}}
+    payload["facts"] = facts
+
+    try:
+        from decision_map import load_choices as _river_choices
+        from decision_map import load_summary_overall as _river_overall
+        from map_river import build_river, extract_guidance, flat_board_options
+        from option_board import load_board
+        from turn_summaries import ensure_turn_summaries, load_summaries
+
+        lang = payload.get("lang") or "en"
+        board = load_board(LOG_DIR, room_id)
+        options = flat_board_options(board)
+        if generate_summaries and facts.get("turns") and not payload.get("insufficient"):
+            summaries = ensure_turn_summaries(
+                LOG_DIR,
+                room_id,
+                facts["turns"],
+                lang=lang,
+                options=options,
+                create_response=agent_module.create_response,
+            )
+        else:
+            summaries = load_summaries(LOG_DIR, room_id, lang=lang)
+        payload["river"] = build_river(
+            facts=facts,
+            board=board,
+            choices=_river_choices(LOG_DIR, room_id),
+            summaries=summaries,
+            phase_spine=payload.get("phase_spine") or [],
+            lang=lang,
+            guidance=extract_guidance(_river_overall(LOG_DIR, room_id, lang)),
+        )
+    except Exception as e:  # noqa: BLE001 — old clients still get facts
+        print(f"⚠ decision-map river skipped: {e}")
     return payload
 
 
@@ -1686,12 +1750,14 @@ def get_decision_map(room_id):
         agents=agents,
         choices=choices,
         intake_options=intake_options,
+        board=_load_option_board(room_id),
     )
     if fresh or cached or payload.get("options"):
         payload["extracted"] = True
     payload["extract_skipped"] = bool(do_extract and not need_extract and cached)
 
-    return jsonify(_with_fact_layer(payload, room_id))
+    # Map open: generate per-turn summaries for whatever turns lack them.
+    return jsonify(_with_fact_layer(payload, room_id, generate_summaries=True))
 
 
 @app.route('/api/decision-map/<room_id>/annotations', methods=['GET', 'POST', 'DELETE'])
@@ -1797,6 +1863,7 @@ def decision_map_extract(room_id):
         return None
 
     choices = _load_choices(LOG_DIR, room_id)
+    board = _load_option_board(room_id)
     if not enough_messages(msgs):
         payload = assemble_smart_map(
             room_id=room_id,
@@ -1808,6 +1875,7 @@ def decision_map_extract(room_id):
             agents=agents,
             choices=choices,
             intake_options=_intake_opts(),
+            board=board,
         )
         return jsonify(_with_fact_layer(payload, room_id))
 
@@ -1836,9 +1904,10 @@ def decision_map_extract(room_id):
         agents=agents,
         choices=choices,
         intake_options=_intake_opts(),
+        board=board,
     )
     payload["extracted"] = True
-    return jsonify(_with_fact_layer(payload, room_id))
+    return jsonify(_with_fact_layer(payload, room_id, generate_summaries=True))
 
 
 @app.route('/api/decision-map/<room_id>/choices', methods=['GET', 'POST'])
@@ -1911,6 +1980,17 @@ def decision_map_choices(room_id):
         },
     )
 
+    # Board rooms: a hand choice mutates room state — the option becomes
+    # chosen, open siblings on its axis become rejected. Legacy ids miss the
+    # board and no-op (their rooms are handled by the read-time layer).
+    try:
+        from option_board import load_board, mark_chosen, save_board, board_has_content
+        board = load_board(LOG_DIR, room_id)
+        if board_has_content(board) and mark_chosen(board, option_id):
+            save_board(LOG_DIR, room_id, board)
+    except Exception as ex:  # noqa: BLE001 — the choice itself is already logged
+        print(f"⚠ option board update skipped: {ex}")
+
     # Return updated map slice so the client can refresh without full extract
     msgs, agents, _ = _load_room_msgs_and_agents(room_id, ctx or {})
     if not msgs and room_id in chat_sessions:
@@ -1933,6 +2013,7 @@ def decision_map_choices(room_id):
         agents=agents,
         choices=load_choices(LOG_DIR, room_id),
         intake_options=intake_options,
+        board=_load_option_board(room_id),
     )
     return jsonify({"choice": row, "map": payload, "selection_message_index": selection_message_index})
 

@@ -56,7 +56,7 @@ IBIS_PROMPT = {
         '  "claims": [{"id":"claim_1","issue_id":"issue_1","speaker":"user或角色名",'
         '"text":"可核对的主张一句（中文）","badge":null,"message_indexes":[0]}],\n'
         '  "edges": [{"id":"e1","type":"emerged_from|supports|opposes","from":"…","to":"…"}],\n'
-        '  "room_leaning": {"direction":"全场倾向一句（中文）或空","strength":"明确|倾向|未定"}\n'
+        '  "room_leaning": {"direction":"用一句话说明全场倾向哪个选择；没有形成倾向就填 \\"\\"","strength":"明确|倾向|未定"}\n'
         "}\n"
         "规则：\n"
         "1) 每条 claim 至少 1 个 message_indexes（原文行号，从 0 起），禁止无依据主张。\n"
@@ -81,7 +81,7 @@ IBIS_PROMPT = {
         '  "claims": [{"id":"claim_1","issue_id":"issue_1","speaker":"user or agent name",'
         '"text":"one verifiable claim","badge":null,"message_indexes":[0]}],\n'
         '  "edges": [{"id":"e1","type":"emerged_from|supports|opposes","from":"…","to":"…"}],\n'
-        '  "room_leaning": {"direction":"room leaning or empty","strength":"clear|leaning|undecided"}\n'
+        '  "room_leaning": {"direction":"one sentence naming what the room leans to; use \\"\\" if it never picked one","strength":"clear|leaning|undecided"}\n'
         "}\n"
         "Rules:\n"
         "1) Every claim needs ≥1 message_indexes (0-based). No invented positions.\n"
@@ -106,7 +106,7 @@ IBIS_PROMPT = {
         '  "claims": [{"id":"claim_1","issue_id":"issue_1","speaker":"userまたは役名",'
         '"text":"検証可能な主張一句（日本語）","badge":null,"message_indexes":[0]}],\n'
         '  "edges": [{"id":"e1","type":"emerged_from|supports|opposes","from":"…","to":"…"}],\n'
-        '  "room_leaning": {"direction":"場の傾向一句（日本語）または空","strength":"明確|傾向|未定"}\n'
+        '  "room_leaning": {"direction":"場の傾向を一文で；決まっていなければ \\"\\"","strength":"明確|傾向|未定"}\n'
         "}\n"
         "規則：\n"
         "1) 各 claim に message_indexes を1つ以上（0始まり）。根拠のない主張は禁止。\n"
@@ -790,6 +790,145 @@ def build_structured_option_layer(
     }
 
 
+def build_option_layer_from_board(
+    board: Optional[dict],
+    choices: List[dict],
+    *,
+    lang: str = "en",
+) -> dict:
+    """Option layer straight off the Option Board (option_board.py).
+
+    The board is write-time-normalized room state, so none of the legacy
+    read-time archaeology (alias tables, label dedup, five-pass choice
+    resolution) applies here: canonical options, endorsements and statuses are
+    read as-is. Selection claims / chooses edges still come from the choices
+    log, which stays the truth source for WHO picked WHAT and WHEN.
+    """
+    lang = normalize_lang(lang)
+    issue_id = "issue_choice"
+    issue_label = ISSUE_FALLBACK_LABEL.get(lang) or ISSUE_FALLBACK_LABEL["en"]
+
+    options: List[dict] = []
+    opt_by_id: Dict[str, dict] = {}
+    for axis in (board or {}).get("axes") or []:
+        for bo in axis.get("options") or []:
+            if bo.get("status") == "retired":
+                continue
+            indexes = [bo.get("first_index")] + [
+                e.get("index") for e in bo.get("endorsed_by") or []
+            ]
+            indexes = [i for i in indexes if isinstance(i, int) and i >= 0]
+            row = {
+                "id": bo["id"],
+                "issue_id": issue_id,
+                "label": _truncate(str(bo.get("label") or ""), 40),
+                "summary": None,
+                "proposed_by": bo.get("proposed_by") or "agent",
+                "endorsed_by": [
+                    e.get("by") for e in bo.get("endorsed_by") or [] if e.get("by")
+                ],
+                "status": bo.get("status") if bo.get("status") in OPTION_STATUSES else "open",
+                "message_indexes": list(dict.fromkeys(indexes)),
+                "choice_group_id": axis.get("id"),
+            }
+            options.append(row)
+            opt_by_id[row["id"]] = row
+
+    claims: List[dict] = []
+    edges: List[dict] = []
+    for ch in choices or []:
+        oid = str(ch.get("option_id") or "")
+        target = opt_by_id.get(oid)
+        if target is None:
+            # Pre-board choice in a board room: match by normalized label.
+            want = re.sub(r"\s+", "", str(ch.get("label") or "")).lower()
+            target = next(
+                (
+                    o
+                    for o in options
+                    if want
+                    and re.sub(r"\s+", "", o["label"]).lower() == want
+                ),
+                None,
+            )
+        label = str(ch.get("label") or (target or {}).get("label") or oid)
+        sel_idx = ch.get("selection_message_index")
+        if sel_idx is None:
+            sel_idx = ch.get("message_index")
+        sel_id = f"sel-{ch.get('id') or oid}"
+        claims.append({
+            "id": sel_id,
+            "issue_id": issue_id,
+            "speaker": "user",
+            "text": _truncate(label, 120),
+            "badge": "selection",
+            "message_indexes": [sel_idx] if isinstance(sel_idx, int) and sel_idx >= 0 else [],
+        })
+        if target is not None:
+            target["status"] = "chosen"
+            edges.append({
+                "id": f"e-chooses-{sel_id}-{target['id']}",
+                "type": "chooses",
+                "from": sel_id,
+                "to": target["id"],
+            })
+
+    if not options and not claims:
+        return {"issues": [], "options": [], "claims": [], "edges": []}
+
+    winning = next((o["id"] for o in options if o.get("status") == "chosen"), None)
+    return {
+        "issues": [{
+            "id": issue_id,
+            "label": issue_label,
+            "parent_id": None,
+            "status": "settled" if winning else "open",
+            "winning_claim_id": None,
+            "winning_option_id": winning,
+            "phase": None,
+            "summary": None,
+        }],
+        "options": options[:24],
+        "claims": claims[:24],
+        "edges": edges,
+        "room_leaning": None,
+    }
+
+
+_LEANING_PLACEHOLDERS = (
+    "room leaning or empty",
+    "room leaning",
+    "全场倾向一句",
+    "全场倾向",
+    "場の傾向一句",
+    "場の傾向",
+    "or empty",
+)
+
+
+# Single words the model returns when it has nothing to say — including the
+# bare enum tokens from the prompt's own schema. These have to be matched
+# EXACTLY, not as substrings: "empty" alone was slipping through the substring
+# list above ("or empty" is not in "empty") and rendering as the room's
+# conclusion, so the most authoritative line in the panel read "CONCLUSION /
+# empty / clear".
+_LEANING_PLACEHOLDER_EXACT = frozenset({
+    "empty", "none", "null", "n/a", "na", "-", "--", "tbd", "unknown",
+    "direction", "room leaning", "strength",
+    "clear", "leaning", "undecided",
+    "无", "空", "未知", "なし", "不明",
+})
+
+
+def _is_leaning_placeholder(direction: Any) -> bool:
+    d = str(direction or "").strip().strip("\"'`。.").lower()
+    if not d:
+        return False
+    if d in _LEANING_PLACEHOLDER_EXACT:
+        return True
+    return any(p in d for p in _LEANING_PLACEHOLDERS)
+
+
 def _coerce_indexes(raw: Any, msg_count: int) -> List[int]:
     out: List[int] = []
     if not isinstance(raw, list):
@@ -863,6 +1002,7 @@ def normalize_ibis(data: Optional[dict], *, msg_count: int = 0) -> dict:
             "label": _truncate(label, 40),
             "summary": _truncate(str(o.get("summary") or ""), 80) or None,
             "proposed_by": str(o.get("proposed_by") or "agent"),
+            "endorsed_by": [str(x) for x in (o.get("endorsed_by") or []) if x],
             "status": status,
             "message_indexes": indexes,
             "choice_group_id": o.get("choice_group_id"),
@@ -944,6 +1084,10 @@ def normalize_ibis(data: Optional[dict], *, msg_count: int = 0) -> dict:
                 seen_e.add(eid)
 
     leaning = data.get("room_leaning")
+    if isinstance(leaning, dict) and _is_leaning_placeholder(leaning.get("direction")):
+        # The model copied the prompt's field description back verbatim
+        # ("room leaning or empty"); render nothing rather than the template.
+        leaning = None
     if not isinstance(leaning, dict):
         # Legacy conclusions
         conclusions = data.get("conclusions") or []
@@ -1104,6 +1248,8 @@ def apply_overall_leaning(map_data: dict, overall: Optional[dict]) -> dict:
     if not overall or not isinstance(overall, dict):
         return map_data
     direction = (overall.get("direction") or "").strip()
+    if _is_leaning_placeholder(direction):
+        direction = ""
     strength = (overall.get("strength") or "").strip()
     if not direction and not strength:
         return map_data
@@ -1135,16 +1281,22 @@ def assemble_smart_map(
     agents: Optional[List[dict]] = None,
     choices: Optional[List[dict]] = None,
     intake_options: Optional[List[Any]] = None,
+    board: Optional[dict] = None,
 ) -> dict:
     """Assemble API payload. Caller decides whether to LLM; this never invents claims."""
     lang = normalize_lang(lang)
     # Structured options/choices can render even before LLM threshold.
-    structured = build_structured_option_layer(
-        msgs or [],
-        choices or [],
-        lang=lang,
-        intake_options=intake_options,
-    )
+    # Board rooms read the write-time-normalized state; the legacy read-time
+    # reconstruction only runs for rooms that predate the Option Board.
+    if board and any(ax.get("options") for ax in board.get("axes") or []):
+        structured = build_option_layer_from_board(board, choices or [], lang=lang)
+    else:
+        structured = build_structured_option_layer(
+            msgs or [],
+            choices or [],
+            lang=lang,
+            intake_options=intake_options,
+        )
     has_structured = bool(structured.get("options") or structured.get("claims"))
     insufficient = not enough_messages(msgs) and not has_structured
     phase_spine = build_phase_spine(msgs, phase_changes)

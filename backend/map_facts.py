@@ -26,6 +26,15 @@ WHY concede IS NOT AN EDGE: 6 of 7 observed concede records carry no target.
 It becomes a "softened_by" marker on the conceder's OWN most recent prior turn
 ("this speaker later walked this back"), which is what it actually means.
 
+WHY "answers" EXISTS: an agent replying to the user almost always self-reports
+new_point — from the agent's side it IS raising a new point — so the move layer
+alone leaves the user's turns completely unconnected (measured in room 001999:
+4 of 6 moves were new_point, every one of them addressing @U). A turn whose
+text explicitly addresses the user therefore earns one backward edge to the
+user's latest prior turn. One primary target per turn: a turn that already
+resolved an agent target keeps that edge instead, so the map shows the
+argument, not a duplicate of the backbone.
+
 Join contract (measured over rooms 641306/778329/205171/209915/021808/078400/
 236995): a move event and its chat row are written in the same call path and
 share the same second-resolution timestamp; the minimum same-speaker gap is
@@ -51,9 +60,14 @@ KIND_SIGN = {
     "extend": "neutral",
     "clarify": "neutral",
     "mention": "neutral",
+    "answers": "neutral",
 }
 
 _AT_TOKEN_RE = re.compile(r"@([\w\-]+)")
+# The turn addresses the user directly. Agents write "@U" in the log; the UI
+# swaps it for the reader's nickname at render time, so the log form is what
+# matters here.
+_AT_USER_RE = re.compile(r"@(?:U|user|you|用户|您|あなた)\b", re.IGNORECASE)
 _MENTION_LIST_RE = re.compile(r"mentioned\s*\[([^\]]*)\]")
 _MENTION_KEY_RE = re.compile(r"'([^']+)'")
 
@@ -198,12 +212,16 @@ def load_room_facts(log_dir: str, room_id: str) -> Dict[str, Any]:
         "at_u_recovered": 0, "mention_extras": 0,
         "dangling_dropped": 0, "concede_badges": 0,
     }
+    # Turn indexes that already produced an outgoing edge — the "one primary
+    # target per turn" rule for the answers-the-user pass below.
+    sourced: set = set()
 
     def add_relation(src: int, dst: int, kind: str, source: str) -> None:
         pair = (turns[src]["id"], turns[dst]["id"])
         if pair in seen_pairs or src == dst:
             return
         seen_pairs.add(pair)
+        sourced.add(src)
         relations.append({
             "id": f"r-{turns[src]['id']}-{turns[dst]['id']}",
             "from_id": turns[src]["id"],
@@ -254,7 +272,6 @@ def load_room_facts(log_dir: str, room_id: str) -> Dict[str, Any]:
                 turns[own_prev]["softened_by"] = turns[idx]["id"]
                 stats["concede_badges"] += 1
             continue
-        resolved = False
         for tok in targets:
             name = roster.resolve_token(tok)
             if not name:
@@ -265,15 +282,24 @@ def load_room_facts(log_dir: str, room_id: str) -> Dict[str, Any]:
                 continue
             add_relation(idx, dst, kind, "move")
             stats["targets_resolved"] += 1
-            resolved = True
-        if not resolved:
-            # @U override: a targetless move on a turn that addresses the user
-            # answers the user's latest message.
-            if re.search(r"@U\b|@用户", turns[idx]["txt"]):
-                dst = last_index_by_speaker("user", idx)
-                if dst is not None:
-                    add_relation(idx, dst, kind, "at_u_override")
-                    stats["at_u_recovered"] += 1
+
+    # Answers-the-user pass: every agent turn whose TEXT addresses the user and
+    # which has no edge yet points back at the user's latest prior turn. Runs
+    # over all agent turns, not just parsed moves, so a garbled [MOVE] still
+    # keeps the backbone intact (see the module docstring for why new_point
+    # cannot be trusted to mean "not a reply" here).
+    for t in turns:
+        if t["is_user"] or t["index"] in sourced:
+            continue
+        if not _AT_USER_RE.search(t["txt"]):
+            continue
+        dst = last_index_by_speaker("user", t["index"])
+        if dst is None:
+            continue
+        before = len(relations)
+        add_relation(t["index"], dst, "answers", "at_user")
+        if len(relations) > before:
+            stats["at_u_recovered"] += 1
 
     # Third pass: soft mentions recover the co-addressed targets MOVE's single
     # @slot truncated away. Neutral by construction.

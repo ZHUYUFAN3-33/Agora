@@ -1,12 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { getUiFont, labelCaseClass, phaseLabel, t, type UiLang } from "../i18n/ui";
+import { getUiFont, labelCaseClass, phaseLabel, t, userLabel, type UiLang } from "../i18n/ui";
 import {
   DecisionMapCanvas,
   MAX_ZOOM,
   MIN_ZOOM,
 } from "./DecisionMapCanvas";
 import { ReplyGraph, type FactLayer } from "./ReplyGraph";
+import {
+  DecisionRiver,
+  RiverKeyStrip,
+  RiverVerdictBanner,
+  type RiverData,
+  type RiverTurn,
+} from "./DecisionRiver";
+import { OptionLedger } from "./OptionLedger";
 
 export type DecisionMapIssue = {
   id: string;
@@ -81,11 +89,29 @@ export type DecisionMapData = {
    * claim graph. Absent on older responses.
    */
   facts?: FactLayer | null;
+  /**
+   * The river payload (map_river.py): time-ordered turns with per-turn
+   * summaries, reply edges, option milestones and the verdict. When present,
+   * the panel renders DecisionRiver as the main view; the legacy IBIS canvas
+   * + ReplyGraph strip remain only as the fallback for old responses.
+   */
+  river?: RiverData | null;
   /** @deprecated legacy */
   topics?: unknown[];
   stances?: unknown[];
   conclusions?: unknown[];
 };
+
+/**
+ * Note kinds in the reader's words. `user` / `layer` / `system` are storage
+ * tokens; an unknown or user-owned kind renders no chip rather than leaking a
+ * raw English token into the UI. Mirrors edgeWord() in DecisionRiver.
+ */
+function noteKindLabel(lang: UiLang, kind: string): string {
+  const key = `map.noteKind.${kind}`;
+  const word = t(lang, key);
+  return word === key ? "" : word;
+}
 
 export function DecisionMapPanel({
   open,
@@ -105,6 +131,9 @@ export function DecisionMapPanel({
   onAddAnnotation,
   onDeleteAnnotation,
   onPromoteLayers,
+  userName,
+  docked = false,
+  onUndock,
 }: {
   open: boolean;
   onClose: () => void;
@@ -123,6 +152,13 @@ export function DecisionMapPanel({
   onAddAnnotation: () => void;
   onDeleteAnnotation?: (id: string) => void;
   onPromoteLayers?: () => void;
+  /** The reader's account id, shown instead of a generic "you". */
+  userName?: string;
+  /** Docked: the map collapses to a floating "back to map" pill while the
+   * user reads evidence in the chat. The panel stays mounted so selection,
+   * zoom and pan survive the round trip. */
+  docked?: boolean;
+  onUndock?: () => void;
 }) {
   const font = getUiFont(lang);
   const [zoom, setZoom] = useState(1);
@@ -136,6 +172,7 @@ export function DecisionMapPanel({
     if (!open) {
       setEnterReady(false);
       setSelectedNodeId(null);
+      setViewPref(null);
       return;
     }
     const t = window.setTimeout(() => setEnterReady(true), 40);
@@ -148,6 +185,23 @@ export function DecisionMapPanel({
     }
   }, [selectedTopicId]);
 
+  const river = useMemo(
+    () => (data?.river && (data.river.turns?.length || 0) > 0 ? data.river : null),
+    [data?.river],
+  );
+  // The ledger answers "what were my options and what was said about each" with
+  // no diagram literacy at all, so it is what the map opens on. The river is
+  // the drill-down for when the reader doubts a line.
+  const hasLedger = (river?.ledger?.length || 0) > 0;
+  // Derived, not sticky: the ledger arrives with the payload, so a stored
+  // default set before the fetch resolves would strand the reader on the river.
+  const [viewPref, setViewPref] = useState<"ledger" | "river" | null>(null);
+  const view: "ledger" | "river" = hasLedger ? viewPref ?? "ledger" : "river";
+  const setView = setViewPref;
+  const selectedTurn = useMemo<RiverTurn | null>(
+    () => river?.turns.find((x) => x.id === selectedNodeId) || null,
+    [river, selectedNodeId],
+  );
   const selectedIssue = useMemo(
     () => data?.issues?.find((x) => x.id === selectedNodeId) || null,
     [data, selectedNodeId],
@@ -210,6 +264,7 @@ export function DecisionMapPanel({
   const busy = !!(loading || extracting);
 
   const bumpZoom = (dir: 1 | -1) => {
+    if (view !== "river") return;
     const host = canvasHostRef.current;
     const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * (dir > 0 ? 1.12 : 1 / 1.12)));
     if (!host) {
@@ -228,10 +283,34 @@ export function DecisionMapPanel({
   };
 
   const leaning = data?.room_leaning;
+  // Last line of defence against the model echoing its own prompt schema. The
+  // backend guard catches these too, but this is the string that renders under
+  // the word CONCLUSION — the most authoritative line in the panel — so it does
+  // not get to fail open.
+  const leaningDirection = useMemo(() => {
+    const d = (leaning?.direction || "").trim();
+    if (!d) return "";
+    const bare = d.replace(/["'`。.\s]/g, "").toLowerCase();
+    const junk = new Set([
+      "empty", "none", "null", "na", "tbd", "unknown",
+      "clear", "leaning", "undecided", "direction", "roomleaning",
+      "无", "空", "未知", "なし", "不明",
+    ]);
+    return junk.has(bare) ? "" : d;
+  }, [leaning?.direction]);
+  // Strength arrives as a bare enum token; translate it or drop it.
+  const leaningStrength = useMemo(() => {
+    const s = (leaning?.strength || "").trim();
+    if (!s) return "";
+    const key = `map.strength.${s.toLowerCase()}`;
+    const localized = t(lang, key);
+    return localized === key ? (/^[a-z]+$/i.test(s) ? "" : s) : localized;
+  }, [leaning?.strength, lang]);
 
   return (
+    <>
     <AnimatePresence>
-      {open && (
+      {open && !docked && (
         <div className="fixed inset-0 z-[200]" style={font}>
           <motion.button
             type="button"
@@ -255,16 +334,45 @@ export function DecisionMapPanel({
             transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
             onClick={(e) => e.stopPropagation()}
           >
-            <header className="flex items-center justify-between gap-3 px-4 sm:px-5 h-12 border-b border-black/8 bg-white/90 backdrop-blur-sm flex-shrink-0">
+            <header className="flex items-center justify-between gap-3 px-4 sm:px-5 h-14 border-b border-black/8 bg-white/90 backdrop-blur-sm flex-shrink-0">
               <div className="min-w-0 flex items-center gap-3">
                 <div className="min-w-0">
                   <p className={`text-[12px] text-black ${labelCaseClass(lang)}`}>{t(lang, "map.title")}</p>
                   <p className="text-[10px] text-[var(--app-muted-text)] truncate hidden sm:block">
-                    {busy ? t(lang, "map.extracting") : t(lang, "map.subtitleSmart")}
+                    {busy
+                      ? t(lang, "map.extracting")
+                      : t(lang, view === "ledger" ? "map.subtitleLedger" : "map.subtitleSmart")}
                   </p>
                 </div>
-                {(data?.phase_spine?.length || 0) > 0 && (
-                  <div className="hidden md:flex items-center gap-1 ml-2 pl-2 border-l border-black/8">
+
+                {/* The two views sit in the title bar rather than on a rule of
+                    their own: a third full-width horizontal divider directly
+                    under two others read as a stripe, not as structure. */}
+                {hasLedger && !insufficient && (
+                  <div className="flex items-center gap-0.5 ml-1 p-0.5 rounded-[7px] bg-black/[0.05] flex-shrink-0">
+                    {(["ledger", "river"] as const).map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setView(v)}
+                        className={`px-2.5 py-1 rounded-[5px] text-[11px] transition-colors ${
+                          view === v
+                            ? "bg-white text-black shadow-[0_1px_2px_rgba(0,0,0,0.10)]"
+                            : "text-black/55 hover:text-black/80"
+                        }`}
+                      >
+                        {t(lang, v === "ledger" ? "map.view.ledger" : "map.view.river")}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Clicking a phase chip jumps into the chat, which collapses
+                    the whole map — surprising on the ledger, where it reads as
+                    a status badge rather than a control. Hidden below lg now
+                    that the view switch shares this row. */}
+                {view === "river" && (data?.phase_spine?.length || 0) > 0 && (
+                  <div className="hidden lg:flex items-center gap-1 ml-2 pl-2 border-l border-black/8">
                     {data!.phase_spine.slice(0, 5).map((p, i) => (
                       <button
                         key={`phase-${p.to}-${i}`}
@@ -300,7 +408,13 @@ export function DecisionMapPanel({
                   </button>
                 )}
 
-                <div className="flex items-center gap-0.5 ml-1 pl-1 border-l border-black/8">
+                {/* Zoom belongs to the canvas only. On the ledger — a plain
+                    scrolling list — these used to move the percentage readout
+                    while nothing on screen changed, which reads as a broken app
+                    within the first ten seconds. */}
+                <div className={`items-center gap-0.5 ml-1 pl-1 border-l border-black/8 ${
+                  view === "river" && !insufficient ? "flex" : "hidden"
+                }`}>
                   <button
                     type="button"
                     onClick={() => bumpZoom(-1)}
@@ -349,29 +463,61 @@ export function DecisionMapPanel({
               <p className="px-4 py-2 text-[11px] text-red-600/90 bg-white border-b border-black/6">{error}</p>
             )}
 
+            {river && !insufficient && view === "river" && (
+              <RiverVerdictBanner
+                river={river}
+                lang={lang}
+                onPickTurn={(id) => setSelectedNodeId(id)}
+              />
+            )}
+
             <div ref={canvasHostRef} className="relative flex-1 min-h-0 flex flex-col">
-              <CanvasFitBridge fitNonce={fitNonce}>
-                <DecisionMapCanvas
-                  data={data}
+              {hasLedger && view === "ledger" && !insufficient && river ? (
+                <OptionLedger
+                  river={river}
                   lang={lang}
-                  selectedId={selectedNodeId}
-                  insufficient={insufficient}
-                  onSelect={(id, kind) => {
-                    setSelectedNodeId(id);
-                    if (kind === "issue" && id) onSelectTopic(id);
-                  }}
-                  onJumpIndexes={onJumpIndexes}
-                  zoom={zoom}
-                  onZoomChange={setZoom}
-                  pan={pan}
-                  onPanChange={setPan}
-                  enterReady={enterReady}
+                  userName={userName}
+                  onPick={(_id, index) => onJumpIndexes([index])}
                 />
+              ) : (
+              <CanvasFitBridge fitNonce={fitNonce}>
+                {river && !insufficient ? (
+                  <DecisionRiver
+                    river={river}
+                    lang={lang}
+                    userName={userName}
+                    selectedId={selectedNodeId}
+                    onSelect={(id) => setSelectedNodeId(id)}
+                    zoom={zoom}
+                    onZoomChange={setZoom}
+                    pan={pan}
+                    onPanChange={setPan}
+                    enterReady={enterReady}
+                  />
+                ) : (
+                  <DecisionMapCanvas
+                    data={data}
+                    lang={lang}
+                    selectedId={selectedNodeId}
+                    insufficient={insufficient}
+                    onSelect={(id, kind) => {
+                      setSelectedNodeId(id);
+                      if (kind === "issue" && id) onSelectTopic(id);
+                    }}
+                    onJumpIndexes={onJumpIndexes}
+                    zoom={zoom}
+                    onZoomChange={setZoom}
+                    pan={pan}
+                    onPanChange={setPan}
+                    enterReady={enterReady}
+                  />
+                )}
               </CanvasFitBridge>
+              )}
 
               {/* TD-style parameter panel (top-right) */}
               <AnimatePresence>
-                {(selectedIssue || selectedClaim || selectedOption) && !insufficient && (
+                {view === "river" && (selectedIssue || selectedClaim || selectedOption || selectedTurn) && !insufficient && (
                   <motion.aside
                     key={selectedNodeId || "params"}
                     initial={{ opacity: 0, x: 16 }}
@@ -398,13 +544,72 @@ export function DecisionMapPanel({
                         lang={lang}
                         label={t(lang, "map.param.type")}
                         value={
-                          selectedIssue
-                            ? t(lang, "map.issues")
-                            : selectedOption
-                              ? t(lang, "map.options")
-                              : t(lang, "map.claims")
+                          selectedTurn
+                            ? t(lang, "map.param.turn")
+                            : selectedIssue
+                              ? t(lang, "map.issues")
+                              : selectedOption
+                                ? t(lang, "map.options")
+                                : t(lang, "map.claims")
                         }
                       />
+
+                      {selectedTurn && (
+                        <>
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.speaker")}
+                            value={
+                              selectedTurn.is_user
+                                ? userLabel(lang, userName)
+                                : selectedTurn.speaker
+                            }
+                          />
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.move")}
+                            value={selectedTurn.move_detail || selectedTurn.move_kind || t(lang, "map.param.none")}
+                          />
+                          {selectedTurn.rationale && (
+                            <ParamRow
+                              lang={lang}
+                              label={t(lang, "map.param.rationale")}
+                              value={selectedTurn.rationale}
+                              multiline
+                            />
+                          )}
+                          {selectedTurn.stance && (
+                            <ParamRow
+                              lang={lang}
+                              label={t(lang, "map.param.stance")}
+                              value={`${selectedTurn.stance.sign === "support" ? "▲" : "⚠"} ${
+                                river?.options.find((o) => o.id === selectedTurn.stance?.option_id)?.label ||
+                                selectedTurn.stance.option_id
+                              }`}
+                              multiline
+                            />
+                          )}
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.summary")}
+                            value={selectedTurn.summary || selectedTurn.fallback_text}
+                            multiline
+                          />
+                          {selectedTurn.badges?.choice && (
+                            <ParamRow
+                              lang={lang}
+                              label={t(lang, "map.milestone.choice")}
+                              value={selectedTurn.badges.choice.label}
+                              multiline
+                            />
+                          )}
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.evidence")}
+                            value={`#${selectedTurn.index}`}
+                          />
+                        </>
+                      )}
 
                       {selectedIssue && (
                         <>
@@ -534,6 +739,15 @@ export function DecisionMapPanel({
                     </div>
 
                     <div className="sticky bottom-0 px-2.5 py-2 border-t border-black/10 bg-[#e6e6e4]/95 flex flex-wrap gap-1.5">
+                      {selectedTurn && (
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded-[3px] bg-black text-white text-[10px] hover:bg-black/85"
+                          onClick={() => onJumpIndexes([selectedTurn.index])}
+                        >
+                          {t(lang, "map.jumpEvidence")}
+                        </button>
+                      )}
                       {selectedClaim && (selectedClaim.message_indexes?.length || 0) > 0 && (
                         <button
                           type="button"
@@ -579,109 +793,175 @@ export function DecisionMapPanel({
               </AnimatePresence>
             </div>
 
-            {/* Fact layer, below the inferred one: collapsible, and absent
-                entirely when the logs carry no turns. */}
-            {!insufficient && (
+            {/* Legacy fact strip: only for old responses without the river —
+                the river IS the reply graph now, with content on the nodes. */}
+            {!insufficient && !river && (
               <div className="flex-shrink-0">
-                <ReplyGraph facts={data?.facts} lang={lang} onJumpIndexes={onJumpIndexes} />
+                <ReplyGraph facts={data?.facts} lang={lang} userName={userName} onJumpIndexes={onJumpIndexes} />
               </div>
             )}
 
-            <footer className="flex-shrink-0 border-t border-black/8 bg-white/95 backdrop-blur-sm px-4 py-3">
-              <div className="max-w-[1100px] mx-auto flex flex-col sm:flex-row gap-3 sm:items-start">
-                <div className="flex-1 min-w-0">
-                  {insufficient ? (
-                    <p className="text-[12px] text-black/65 leading-relaxed pt-0.5">{t(lang, "map.insufficient")}</p>
-                  ) : leaning?.direction ? (
-                    <>
-                      <p className={`text-[9px] tracking-widest text-[var(--app-muted-text)] ${labelCaseClass(lang)}`}>
-                        {t(lang, "map.conclusion")}
-                      </p>
-                      <p className="text-[12px] text-black mt-0.5">{leaning.direction}</p>
-                      {leaning.strength && (
-                        <p className="text-[10px] text-black/45 mt-0.5">{leaning.strength}</p>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-[11px] text-[var(--app-muted-text)] pt-1">{t(lang, "map.selectHint")}</p>
-                  )}
+            <footer className="flex-shrink-0 border-t border-black/10 bg-white">
+              {/* The key sits above the hint and off the canvas: on the canvas
+                  it painted over the world layer, so panning a card into the
+                  bottom strip made the two collide. */}
+              {river && !insufficient && view === "river" && (
+                <div className="px-4 sm:px-5 py-2 border-b border-black/[0.06] bg-black/[0.015]">
+                  <div className="max-w-[1100px] mx-auto">
+                    <RiverKeyStrip lang={lang} />
+                  </div>
+                </div>
+              )}
 
-                  {!insufficient && annotations.length > 0 && (
-                    <ul className="mt-2 space-y-1 max-h-[72px] overflow-y-auto">
-                      {annotations.map((a) => (
-                        <li key={a.id} className="flex items-start gap-1.5 text-[10px] text-black/60">
+              <div className="px-4 sm:px-5 py-3">
+                <div className="max-w-[1100px] mx-auto grid gap-x-6 gap-y-3 sm:grid-cols-[minmax(0,1fr)_340px] items-start">
+                  <div className="min-w-0">
+                    {insufficient ? (
+                      <p className="text-[12.5px] text-black/75 leading-relaxed">{t(lang, "map.insufficient")}</p>
+                    ) : leaningDirection ? (
+                      <>
+                        <p className={`text-[10px] text-[var(--app-muted-text)] ${labelCaseClass(lang)}`}>
+                          {t(lang, "map.conclusion")}
+                        </p>
+                        <p className="text-[13px] text-black mt-1 leading-snug">{leaningDirection}</p>
+                        {leaningStrength && (
+                          <p className="text-[11px] text-black/60 mt-0.5">{leaningStrength}</p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-[12px] text-black/60 leading-relaxed">
+                        {t(lang, view === "ledger" ? "map.ledgerHint" : "map.selectHint")}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Notes: the input sits directly above its own list, so a
+                      note appears where it was typed. They used to be in
+                      opposite columns. */}
+                  {!insufficient && (
+                    <div className="min-w-0">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <p className={`text-[10px] text-[var(--app-muted-text)] ${labelCaseClass(lang)}`}>
+                          {t(lang, "map.annotations")}
+                        </p>
+                        {onPromoteLayers && (
                           <button
                             type="button"
-                            className="flex-1 text-left hover:text-black"
-                            onClick={() => a.message_indexes?.length && onJumpIndexes(a.message_indexes)}
+                            onClick={onPromoteLayers}
+                            className="text-[11px] text-black/60 hover:text-black underline decoration-black/20 underline-offset-2 hover:decoration-black/50"
                           >
-                            <span className="text-black/30 mr-1">[{a.kind}]</span>
-                            {a.text}
+                            {t(lang, "map.promoteLayers")}
                           </button>
-                          {a.kind === "user" && onDeleteAnnotation && (
-                            <button
-                              type="button"
-                              className="text-black/30 hover:text-red-500"
-                              onClick={() => onDeleteAnnotation(a.id)}
-                              aria-label={t(lang, "map.deleteAnnotation")}
-                            >
-                              ×
-                            </button>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+                        )}
+                      </div>
 
-                {!insufficient && (
-                  <div className="sm:w-[320px] flex-shrink-0 space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <p className={`text-[9px] tracking-widest text-[var(--app-muted-text)] ${labelCaseClass(lang)}`}>
-                        {t(lang, "map.annotations")}
-                      </p>
-                      {onPromoteLayers && (
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={annotationDraft}
+                          onChange={(e) => onAnnotationDraftChange(e.target.value)}
+                          placeholder={t(lang, "map.annotationPh")}
+                          className="flex-1 min-w-0 h-9 px-2.5 rounded-[6px] border border-black/15 bg-white text-[12px] text-black placeholder:text-black/40 outline-none focus:border-black/40 focus:ring-2 focus:ring-black/[0.06]"
+                          style={font}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              onAddAnnotation();
+                            }
+                          }}
+                        />
                         <button
                           type="button"
-                          onClick={onPromoteLayers}
-                          className="text-[10px] text-black/50 hover:text-black/80"
+                          onClick={onAddAnnotation}
+                          disabled={!annotationDraft.trim()}
+                          className="h-9 px-3 rounded-[6px] bg-black text-white text-[11px] disabled:opacity-30 hover:bg-black/85"
                         >
-                          {t(lang, "map.promoteLayers")}
+                          {t(lang, "map.addAnnotation")}
                         </button>
+                      </div>
+
+                      {annotations.length > 0 && (
+                        <ul className="mt-2 max-h-[112px] overflow-y-auto overscroll-contain pr-1 space-y-px">
+                          {annotations.map((a) => {
+                            const kindWord = noteKindLabel(lang, a.kind);
+                            const canJump = !!a.message_indexes?.length;
+                            return (
+                              <li key={a.id} className="flex items-start gap-1 group">
+                                <button
+                                  type="button"
+                                  disabled={!canJump}
+                                  title={canJump ? t(lang, "map.jumpEvidence") : undefined}
+                                  className="flex-1 min-w-0 text-left px-1.5 py-1 rounded-[5px] text-[12px] text-black/75 leading-snug hover:bg-black/[0.04] hover:text-black disabled:hover:bg-transparent disabled:cursor-default"
+                                  onClick={() => canJump && onJumpIndexes(a.message_indexes!)}
+                                >
+                                  {kindWord && (
+                                    <span className="inline-block align-[1px] mr-1.5 px-1 py-px rounded-[3px] bg-black/[0.06] text-[10px] text-black/60">
+                                      {kindWord}
+                                    </span>
+                                  )}
+                                  {a.text}
+                                </button>
+                                {a.kind === "user" && onDeleteAnnotation && (
+                                  <button
+                                    type="button"
+                                    className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-[4px] text-[14px] leading-none text-black/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-red-600 hover:bg-red-500/10"
+                                    onClick={() => onDeleteAnnotation(a.id)}
+                                    aria-label={t(lang, "map.deleteAnnotation")}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
                       )}
                     </div>
-                    <div className="flex gap-1.5">
-                      <input
-                        type="text"
-                        value={annotationDraft}
-                        onChange={(e) => onAnnotationDraftChange(e.target.value)}
-                        placeholder={t(lang, "map.annotationPh")}
-                        className="flex-1 min-w-0 h-8 px-2 rounded-[6px] border border-black/10 text-[11px] outline-none focus:border-black/25 bg-white"
-                        style={font}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            onAddAnnotation();
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={onAddAnnotation}
-                        disabled={!annotationDraft.trim()}
-                        className="h-8 px-2.5 rounded-[6px] bg-black text-white text-[10px] disabled:opacity-30"
-                      >
-                        {t(lang, "map.addAnnotation")}
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </footer>
           </motion.div>
         </div>
       )}
     </AnimatePresence>
+
+    {/* Docked pill: the way back after "jump to evidence". Kept outside the
+        fullscreen tree so the chat is fully interactive while it shows. */}
+    <AnimatePresence>
+      {open && docked && (
+        <motion.div
+          initial={{ opacity: 0, y: 14, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 14, scale: 0.96 }}
+          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+          className="fixed bottom-24 right-4 z-[190] flex items-center gap-1.5"
+          style={font}
+        >
+          <button
+            type="button"
+            onClick={onUndock}
+            className="h-9 pl-3 pr-3.5 rounded-full bg-black text-white text-[11px] shadow-[0_10px_28px_rgba(0,0,0,0.28)] hover:bg-black/85 flex items-center gap-1.5"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <path d="M9 20l-6-2V6l6 2m0 12l6-2m-6 2V8m6 10l6 2V8l-6-2m0 12V6M9 8l6-2" />
+            </svg>
+            {t(lang, "map.backToMap")}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t(lang, "map.close")}
+            className="w-9 h-9 rounded-full bg-white border border-black/12 text-black/55 shadow-[0_10px_28px_rgba(0,0,0,0.16)] hover:bg-black/[0.04] flex items-center justify-center"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+    </>
   );
 }
 

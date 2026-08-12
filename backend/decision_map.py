@@ -26,6 +26,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lang_utils import normalize_lang
 
+# Structured IBIS extraction, not generation — shares the summariser's cheap tier.
+# Kept lower than the summariser's fallback because this path ran on 4o-mini already.
+EXTRACT_MODEL = os.getenv("AGORA_SUMMARY_MODEL") or "gpt-4o-mini"
+
 MIN_USER_MSGS = 2
 MIN_AGENT_MSGS = 3
 MIN_TOTAL_MSGS = 6
@@ -1166,7 +1170,7 @@ def extract_ibis_llm(
     create_response: Callable[..., str],
     *,
     prior: Optional[dict] = None,
-    model: str = "gpt-4o-mini",
+    model: str = EXTRACT_MODEL,
     max_messages: int = 50,
 ) -> Optional[dict]:
     lang = normalize_lang(lang)

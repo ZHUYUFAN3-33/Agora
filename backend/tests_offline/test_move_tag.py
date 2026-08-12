@@ -60,7 +60,13 @@ _sp = aw.ChatAgent("A", "ChatbotA", "(role)").system_prompt(
 check("OUTPUT FORMAT declares the MOVE block", "[MOVE]" in _sp and "[/MOVE]" in _sp)
 check("prompt lists every accepted move",
       all(m in _sp for m in aw.AGENT_MOVES), aw.AGENT_MOVES)
-check("prompt says MOVE is private", "MOVE and RATIONALE are private" in _sp)
+# Used to assert the prompt called MOVE/RATIONALE "private". That wording was
+# false — both render in the decision map — and it was why rationales came back
+# written as internal notes about "the user". The contract the model actually
+# needs is: not spoken in the room, but read by the person being advised.
+check("prompt says MOVE/RATIONALE are not spoken aloud", "not spoken aloud" in _sp)
+check("prompt says the advised person reads them in the map",
+      "decision map" in _sp and "written to be read by that person" not in _sp.split("decision map")[0])
 
 # --------------------------------------- the fact layer's parsing caveat holds
 # map_facts.py takes the kind off the FIRST token rather than calling

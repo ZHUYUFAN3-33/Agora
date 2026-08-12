@@ -274,12 +274,24 @@ generation.jsonl
 
 novelty.jsonl
   The repetition guard, structured. One row per scored generation.
-  Fields: seq, agent, agent_name, group_ratio, self_ratio, group_threshold,
+  Fields: seq, agent, agent_name, group_ratio, self_ratio, group_ratio_raw,
+  self_ratio_raw, quote_target, quote_excluded, group_threshold,
   self_threshold, drop_threshold, group_window, self_window, group_failed,
   self_failed, named_by_user, retried, kept, dropped, reason. Retry rows also
   carry first_group_ratio / first_self_ratio from before the retry.
-    group_ratio  novelty against the recent transcript window.
-    self_ratio   novelty against this agent's own earlier messages.
+    group_ratio  novelty against the recent transcript window, AFTER excluding
+                 the reply-target's last message (quote exclusion). Rooms
+                 recorded before quote exclusion landed have no *_raw fields
+                 and their group_ratio is the raw value; cross-period
+                 comparisons must use group_ratio_raw / self_ratio_raw, which
+                 keep the original semantics on both sides of the change.
+    self_ratio   novelty against this agent's own earlier messages, same
+                 exclusion applied.
+    quote_target agent key whose last message was excluded (from the [MOVE]
+                 @target, falling back to body @mentions); null when no target
+                 resolved or the target had not spoken — in which case
+                 group_ratio == group_ratio_raw.
+    quote_excluded  number of content tokens excluded.
     reason       pass, trigger:<scope>, retry_cleared_drop_bar,
                  kept_named_by_user:<scope>, dropped:<scope>, dropped:empty_retry.
   Thresholds are recorded per row rather than assumed: the HTTP and CLI defaults

@@ -22,7 +22,10 @@ SESSION_DAYS = 30
 # spelling of each in the codebase.
 SURVEY_POINTS: Tuple[str, ...] = ("pre", "post_first", "mid", "post_final")
 SURVEY_STATUSES: Tuple[str, ...] = ("completed", "waived")
-ENROLLMENT_STATUSES: Tuple[str, ...] = ("active", "completed", "withdrawn", "excluded")
+# Only what a human has to assert. "Finished the study" is *derived* from the
+# session count and the four survey records, so it is deliberately not here —
+# nobody should have to tell the tracker something it can already see.
+ENROLLMENT_STATUSES: Tuple[str, ...] = ("active", "withdrawn", "excluded")
 
 
 def _now() -> datetime:

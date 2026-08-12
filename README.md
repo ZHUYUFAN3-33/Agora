@@ -113,10 +113,23 @@ Two details that matter when reading the data:
   collected retroactively. Back-dating `completed on` clears it — that is the
   legitimate case where the participant filled it on time and you recorded late.
 
-Participants with no sessions need a **start date** before the tracker can say
-anything about them; without one it asks for a date rather than inventing an
-anchor. Setting someone to `withdrawn` or `excluded` drops them out of every
-count and off the attention badge.
+**Setup is one field.** Put the **study start date** in Settings and the whole
+cohort is anchored; a late joiner overrides it on their own row. Nothing is
+guessed from the enrolment timestamp — that records when the code deployed, not
+when credentials went out, so guessing would flag all 32 as silent before the
+study even opened. Until a start date is set, participants with no sessions sit
+at `WATCH` asking for one rather than being judged against an invented anchor.
+
+**Two things are asserted by a human, and only two:** that someone withdrew, and
+that someone is excluded. Neither is visible in any data — a participant who quit
+and one who is merely slow look identical — so each is a deliberate button, and
+both are reversible.
+
+Everything else is observed. In particular there is **no "mark as finished"**:
+`DONE` is derived from having enough sessions and all four surveys on file, both
+of which the tracker can already see. Setting someone to withdrawn or excluded
+drops them out of every count and off the attention badge, so the badge can
+always be driven to zero.
 
 ### 2. Backend (terminal 1)
 

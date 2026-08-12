@@ -89,6 +89,7 @@ export type StudyConfig = {
   min_sessions: number;
   min_gap_days: number;
   window_days: number;
+  study_start_on: string;
   timezone: string;
   surveys: Record<string, { label: string; url: string }>;
   [key: string]: unknown;
@@ -116,7 +117,14 @@ const POINTS = ["pre", "post_first", "mid", "post_final"] as const;
 const POINT_HEADS: Record<string, string> = {
   pre: "PRE", post_first: "POST1", mid: "MID", post_final: "FINAL",
 };
-const STATUSES = ["active", "completed", "withdrawn", "excluded"] as const;
+// Only what a human has to assert. Finishing the study is derived from the
+// session count and the survey records, so there is no button for it.
+const DROP_ACTIONS = [
+  { status: "withdrawn", label: "Withdrew", verb: "Mark withdrawn",
+    hint: "the participant chose to stop" },
+  { status: "excluded", label: "Excluded", verb: "Exclude",
+    hint: "you are removing their data from the study" },
+] as const;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -539,20 +547,17 @@ function DetailPanel({
 function EnrollmentForm({
   detail, busy, base, onMutate,
 }: { detail: Detail; busy: boolean; base: string; onMutate: Mutate }) {
-  const [status, setStatus] = useState(detail.enrollment.status);
   const [startOn, setStartOn] = useState(detail.enrollment.start_on);
   const [cohort, setCohort] = useState(detail.enrollment.cohort);
   const [note, setNote] = useState(detail.enrollment.note);
 
   useEffect(() => {
-    setStatus(detail.enrollment.status);
     setStartOn(detail.enrollment.start_on);
     setCohort(detail.enrollment.cohort);
     setNote(detail.enrollment.note);
   }, [detail.user_id, detail.enrollment]);
 
   const dirty =
-    status !== detail.enrollment.status ||
     startOn !== detail.enrollment.start_on ||
     cohort !== detail.enrollment.cohort ||
     note !== detail.enrollment.note;
@@ -560,26 +565,21 @@ function EnrollmentForm({
   const save = () =>
     void onMutate(
       `${base}/enrollment`,
-      {
-        method: "POST",
-        body: JSON.stringify({ status, start_on: startOn, cohort, note }),
-      },
+      { method: "POST", body: JSON.stringify({ start_on: startOn, cohort, note }) },
       `Saved ${detail.user_id}`,
     );
 
+  const setStatus = (next: string, okMsg: string) =>
+    void onMutate(
+      `${base}/enrollment`,
+      { method: "POST", body: JSON.stringify({ status: next }) },
+      okMsg,
+    );
+
+  const dropped = detail.status === "withdrawn" || detail.status === "excluded";
+
   return (
     <div className="flex flex-wrap items-end gap-2">
-      <label className="flex flex-col gap-1">
-        <span className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>Status</span>
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="h-[32px] px-2 border border-black/15 rounded-[8px] text-[11px] bg-white outline-none"
-          style={monoFont}
-        >
-          {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-      </label>
       <label className="flex flex-col gap-1">
         <span className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>
           Start date
@@ -622,6 +622,47 @@ function EnrollmentForm({
       >
         Save
       </button>
+
+      {/* The only thing here a human has to assert. Whether someone finished is
+          read off their sessions and surveys; whether they dropped out is not
+          visible in any data, so it stays a deliberate click. */}
+      <div className="flex items-center gap-2 ml-auto">
+        {dropped ? (
+          <>
+            <span className="text-[10px] text-black/50" style={monoFont}>
+              {detail.status === "withdrawn" ? "Withdrew" : "Excluded"} — not counted
+            </span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setStatus("active", `${detail.user_id} is back in the study`)}
+              className="h-[32px] px-3 border border-black/15 rounded-[8px] text-[11px] text-black/70 hover:bg-black/[0.03] disabled:opacity-40"
+              style={monoFont}
+            >
+              Put back in the study
+            </button>
+          </>
+        ) : (
+          DROP_ACTIONS.map((a) => (
+            <button
+              key={a.status}
+              type="button"
+              disabled={busy}
+              title={a.hint}
+              onClick={() => {
+                if (!window.confirm(
+                  `${a.verb}: ${detail.user_id} drops out of every count and off the `
+                  + `attention badge. You can undo this.`)) return;
+                setStatus(a.status, `${detail.user_id}: ${a.label.toLowerCase()}`);
+              }}
+              className="h-[32px] px-3 border border-red-200 text-red-600 rounded-[8px] text-[11px] hover:bg-red-50 disabled:opacity-40"
+              style={monoFont}
+            >
+              {a.verb}
+            </button>
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -815,6 +856,7 @@ function SettingsPanel({
   config, busy, onMutate,
 }: { config: StudyConfig; busy: boolean; onMutate: Mutate }) {
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const [startOn, setStartOn] = useState("");
   const [surveys, setSurveys] = useState<Record<string, { label: string; url: string }>>({});
   const [showTiming, setShowTiming] = useState(false);
 
@@ -824,6 +866,7 @@ function SettingsPanel({
       nums[key] = String(config[key] ?? "");
     }
     setDraft(nums);
+    setStartOn(String(config.study_start_on ?? ""));
     const sv: Record<string, { label: string; url: string }> = {};
     for (const p of POINTS) {
       sv[p] = {
@@ -837,7 +880,7 @@ function SettingsPanel({
   const save = () => {
     if (!window.confirm(
       "Changing these re-evaluates every participant against the new rules. Continue?")) return;
-    const payload: Record<string, unknown> = { surveys };
+    const payload: Record<string, unknown> = { surveys, study_start_on: startOn };
     for (const [k, v] of Object.entries(draft)) {
       if (v.trim() !== "") payload[k] = Number(v);
     }
@@ -849,6 +892,19 @@ function SettingsPanel({
   return (
     <section className="border border-black/10 rounded-[12px] p-3 flex flex-col gap-3 bg-black/[0.015]">
       <div className="flex flex-wrap gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] text-black/70" style={monoFont}>Study start date</span>
+          <input
+            type="date"
+            value={startOn}
+            onChange={(e) => setStartOn(e.target.value)}
+            className="h-[32px] px-2 border border-black/15 rounded-[8px] text-[11px] outline-none"
+            style={monoFont}
+          />
+          <span className="text-[9px] text-black/40 max-w-[200px]" style={monoFont}>
+            when the study opens for everyone; a late joiner overrides it on their own row
+          </span>
+        </label>
         {NUMERIC_SETTINGS.map(({ key, label, hint }) => (
           <label key={key} className="flex flex-col gap-1">
             <span className="text-[10px] text-black/70" style={monoFont}>{label}</span>

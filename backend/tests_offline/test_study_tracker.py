@@ -158,11 +158,14 @@ check("perfect run is ok",
       and perfect["gap_violations"] == [] and perfect["span_days"] == 8,
       perfect["reasons"])
 check("hitting the session target mid-study is not itself an alert",
-      "ready_to_complete" not in codes(perfect["reasons"]), perfect["reasons"])
-finished = ev(sessions_on([0, 2, 4, 6, 8]), DONE3, today_n=12)
-check("once the exit survey is in play, closing them out becomes a nudge",
-      "ready_to_complete" in codes(finished["reasons"])
-      and finished["severity"] == "watch", finished["reasons"])
+      perfect["severity"] == "ok", perfect["reasons"])
+ALL4 = clean("pre", "post_first", "mid", "post_final")
+done_auto = ev(sessions_on([0, 2, 4, 6, 8]), ALL4, today_n=12)
+check("DONE is derived, with nothing for the researcher to click",
+      done_auto["severity"] == "done" and done_auto["status"] == "active",
+      done_auto["reasons"])
+check("a legacy hand-set 'completed' status reads as an ordinary participant",
+      ev(sessions_on([0, 2]), DONE3, today_n=4, status="completed")["status"] == "active")
 
 tooclose = ev(sessions_on([0, 1, 3, 5, 7]), DONE3)
 check("gap under 2 days is a violation, naming the pair",
@@ -195,6 +198,15 @@ nostart = ev([], today_n=5)
 check("no sessions and no start date asks for one instead of guessing",
       nostart["severity"] == "watch" and "no_start_date" in codes(nostart["reasons"]),
       nostart["reasons"])
+
+# One study-wide date beats typing 32 of them; a per-participant date still wins.
+wide = st._merge(CFG, {"study_start_on": day(0)})
+check("the study-wide start date anchors everyone",
+      ev([], today_n=5, cfg=wide)["severity"] == "action"
+      and "never_started" in codes(ev([], today_n=5, cfg=wide)["reasons"]))
+check("a late joiner's own start date overrides the study-wide one",
+      ev([], today_n=5, cfg=wide, start_on=day(4))["start_on"] == day(4)
+      and ev([], today_n=5, cfg=wide, start_on=day(4))["severity"] == "watch")
 
 gone = ev(sessions_on([0, 1, 3]), today_n=16, status="withdrawn")
 check("withdrawn is muted despite violations", gone["severity"] == "muted")
@@ -261,10 +273,6 @@ check("mid anchor breaks ties toward the earlier session",
       tie["survey_detail"]["mid"]["anchor"]["session_index"] == 2,
       tie["survey_detail"]["mid"]["anchor"])
 
-fin_marked = ev(sessions_on([0, 2, 4, 6, 8]), {"pre": record("pre", day(-1))},
-                today_n=9, status="completed", updated_at=f"{day(9)}T00:00:00+00:00")
-check("post_final fires when marked completed",
-      fin_marked["surveys"]["post_final"] == "due")
 fin_idle = ev(sessions_on([0, 2, 4, 6, 8]), {"pre": record("pre", day(-1))}, today_n=11)
 check("post_final fires after enough sessions and idle time",
       fin_idle["surveys"]["post_final"] == "due"
@@ -378,10 +386,12 @@ check("no admin lands in the roster",
       roster == {u["user_id"] for u in seeded}
       and not any(u["user_id"] in roster for u in seeded if u.get("is_admin")))
 
-seed_db.upsert_enrollment("P01", status="completed", start_on=day(0))
+check("a status nobody can assert is rejected",
+      seed_db.upsert_enrollment("P01", status="completed")[1] is not None)
+seed_db.upsert_enrollment("P01", status="withdrawn", start_on=day(0))
 seed_db.ensure_enrollment_from_seed(seed_path)
 check("re-seeding never overwrites an admin's edits",
-      seed_db.get_enrollment("P01")["status"] == "completed")
+      seed_db.get_enrollment("P01")["status"] == "withdrawn")
 
 seed_db.upsert_survey_response("P01", "pre", completed_on=day(0))
 seed_db.ensure_admin_from_env()

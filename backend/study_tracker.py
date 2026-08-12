@@ -42,6 +42,12 @@ DEFAULTS: Dict[str, Any] = {
     "min_sessions": 5,
     "min_gap_days": 2,
     "window_days": 14,
+    # The day the study opens, for everyone. One deliberate date beats asking the
+    # researcher to type 32 of them, and beats guessing from the enrolment
+    # timestamp -- that is when the code deployed, not when credentials went out,
+    # so guessing would flag the whole cohort as silent before the study began.
+    # A participant who joins late overrides it on their own row.
+    "study_start_on": "",
     # --- how long to wait before something becomes someone's problem ---
     "silent_start_grace_days": 3,   # enrolled, still zero sessions -> action
     "stall_grace_days": 3,          # min_gap + this with no session -> action
@@ -112,6 +118,17 @@ def _validate_config(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
             errors.append("timezone cannot be empty")
         else:
             out["timezone"] = tz
+
+    if "study_start_on" in cfg:
+        raw = str(cfg.get("study_start_on") or "").strip()
+        if raw:
+            try:
+                datetime.strptime(raw, "%Y-%m-%d")
+                out["study_start_on"] = raw
+            except ValueError:
+                errors.append("Study start date must be YYYY-MM-DD")
+        else:
+            out["study_start_on"] = ""
 
     if out["min_sessions"] < 1:
         errors.append("min_sessions must be at least 1")
@@ -246,7 +263,7 @@ def save_config(patch: Dict[str, Any], *, actor: str = "") -> Tuple[Dict[str, An
         return load_config(), errors
 
     to_save: Dict[str, Any] = {}
-    for key in _INT_KEYS + ("timezone",):
+    for key in _INT_KEYS + ("timezone", "study_start_on"):
         if effective[key] != DEFAULTS[key]:
             to_save[key] = effective[key]
     surveys: Dict[str, Any] = {}
@@ -420,13 +437,20 @@ def evaluate_participant(
     min_gap = int(cfg["min_gap_days"])
     window = int(cfg["window_days"])
     status = (enrollment.get("status") or "active").strip() or "active"
+    # 'completed' used to be a status a human set by hand; it is derived now.
+    # Rows written before that change read as ordinary active participants.
+    if status not in ("active", "withdrawn", "excluded"):
+        status = "active"
 
     days = [d for d in (_parse_day(s.get("day")) for s in sessions) if d]
     days.sort()
     count = len(days)
     first_day = days[0] if days else None
     last_day = days[-1] if days else None
-    start_on = _parse_day(enrollment.get("start_on"))
+    # This participant's own date wins, then the study-wide one, then the day
+    # they actually showed up. Only somebody with zero sessions and no configured
+    # start date has no anchor at all.
+    start_on = _parse_day(enrollment.get("start_on")) or _parse_day(cfg.get("study_start_on"))
     anchor_day = start_on or first_day
 
     gaps = [(days[i + 1] - days[i]).days for i in range(len(days) - 1)]
@@ -479,7 +503,7 @@ def evaluate_participant(
                 f"No sessions yet, {_plural((today - start_on).days, 'day')} after {start_on}")
         elif not start_on:
             add("no_start_date", "watch",
-                "No sessions and no start date — set one to track this participant")
+                "No sessions yet — set the study start date in Settings to track this")
     else:
         if window_exceeded:
             add("window_exceeded", "action",
@@ -499,19 +523,16 @@ def evaluate_participant(
             add("stalled", "action",
                 f"No session for {_plural(days_since_last, 'day')}, "
                 f"{needed} still needed")
-        # Only once the exit survey is in play. The protocol has no upper limit on
-        # sessions, so flagging everyone the moment they hit five would leave
-        # participants who are still happily working pinned at "needs attention".
-        if (needed == 0 and status == "active"
-                and survey_states["post_final"]["state"] != "not_due"):
-            add("ready_to_complete", "watch",
-                f"{count} sessions done and the study looks finished — "
-                f"mark the participant completed")
+    # "Finished" is observed, never asserted: enough sessions and all four
+    # surveys on file is the whole definition, and both halves are already in
+    # the data. Nothing for the researcher to remember to click.
+    finished = (needed == 0
+                and all(survey_states[p]["state"] in ("done", "waived")
+                        for p in SURVEY_POINTS))
 
     if status in ("withdrawn", "excluded"):
         severity = "muted"
-    elif (status == "completed" and needed == 0
-          and all(survey_states[p]["state"] in ("done", "waived") for p in SURVEY_POINTS)):
+    elif finished:
         severity = "done"
     else:
         severity = "ok"
@@ -674,9 +695,6 @@ def _evaluate_surveys(
                           "day": _fmt(last_day), "provisional": status == "active"}
     if pfin["state"] not in ("done", "waived"):
         triggers = []
-        if status == "completed":
-            marked = _parse_day((enrollment.get("updated_at") or "")[:10])
-            triggers.append(marked or today)
         if deadline_day and today > deadline_day:
             triggers.append(deadline_day + timedelta(days=1))
         idle = int(cfg["post_final_idle_days"])
@@ -723,7 +741,7 @@ def cohort_overview(
 
     counts = {
         "enrolled": len(participants),
-        "active": 0, "completed": 0, "withdrawn": 0, "excluded": 0,
+        "active": 0, "withdrawn": 0, "excluded": 0,
         "action": 0, "watch": 0, "ok": 0, "done": 0, "muted": 0,
         "not_started": 0,
     }

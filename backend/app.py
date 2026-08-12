@@ -1479,6 +1479,67 @@ def _write_room_subtree(zf, room_id: str, prefix: str = "",
     )
 
 
+MAX_UX_EVENTS_PER_POST = 200
+MAX_UX_EVENT_NAME = 64
+MAX_UX_PROPS_CHARS = 2000
+
+
+@app.route('/api/telemetry/<room_id>', methods=['POST'])
+def ingest_telemetry(room_id):
+    """Client-side behavior events -> {room}_ux.jsonl.
+
+    What the user DID, as opposed to what they typed: which option chips were shown and
+    whether they were clicked, how long the decision map was actually on screen, how long
+    someone paused before replying, drafts they abandoned. None of that is recoverable from
+    the server-side logs.
+
+    Counts and durations only. Never draft text and never per-key timing -- transcripts in
+    this system cover layoffs, burnout and family conflict, and a keystroke stream would
+    reconstruct content the user chose not to send.
+    """
+    rid = _safe_room_id(room_id)
+    if not rid:
+        return jsonify({"error": "Invalid room id"}), 400
+    _, err = _authorize_room_read(rid)
+    if err:
+        return err
+
+    # force=True: navigator.sendBeacon sends text/plain unless the Blob carries an explicit
+    # type, and Flask's get_json() returns None for that. The client sets the type too;
+    # this is the second half of the same fix.
+    data = request.get_json(force=True, silent=True) or {}
+    events = data.get("events") or []
+    if not isinstance(events, list):
+        return jsonify({"error": "events must be a list"}), 400
+
+    written = 0
+    path = os.path.join(LOG_DIR, f"{rid}_ux.jsonl")
+    with open(path, "a", encoding="utf-8") as f:
+        for ev in events[:MAX_UX_EVENTS_PER_POST]:
+            if not isinstance(ev, dict):
+                continue
+            name = str(ev.get("event") or "").strip()[:MAX_UX_EVENT_NAME]
+            if not name:
+                continue
+            props = ev.get("props")
+            if not isinstance(props, dict):
+                props = {}
+            # Bound what a client can append per event.
+            encoded = json.dumps(props, ensure_ascii=False)
+            if len(encoded) > MAX_UX_PROPS_CHARS:
+                props = {"_truncated": True, "_bytes": len(encoded)}
+            f.write(json.dumps({
+                "chat_room_id": rid,
+                "time": now_local_iso(),
+                "client_ts": ev.get("client_ts"),
+                "event": name,
+                "props": props,
+            }, ensure_ascii=False) + "\n")
+            written += 1
+        f.flush()
+    return jsonify({"ok": True, "written": written}), 200
+
+
 @app.route('/api/export-logs/<room_id>', methods=['GET'])
 def export_logs(room_id):
     """Export this session's logs as a zip (disk jsonl + SQLite transcript when available)."""

@@ -156,10 +156,10 @@ is written live as the session runs.
 Read manifest.json first: it records the line count of every file, flags empty
 rooms, and flags rooms where the on-disk log and the SQLite copy disagree.
 
-NOT YET WRITTEN: generation.jsonl, novelty.jsonl and ux.jsonl are documented
-below and are collected by the export, but the code that writes them has not
-landed yet. Rooms recorded before it does will have these files empty or absent.
-Check manifest.json rather than assuming a file has content.
+NOT YET WRITTEN: generation.jsonl and novelty.jsonl are documented below and are
+collected by the export, but the code that writes them has not landed yet. Rooms
+recorded before it does will have these files empty or absent. Check
+manifest.json rather than assuming a file has content.
 
 
 WHAT EACH FILE RECORDS
@@ -275,10 +275,41 @@ novelty.jsonl
 
 ux.jsonl
   Client-side behavior: what the user did, as opposed to what they typed.
-  Option chips shown/clicked with dwell time, decision-map opens and dwell,
-  composer timing (pause before typing, time spent composing, keystroke and
-  backspace counts, abandoned drafts), scroll-back, panel opens.
-  Counts and durations only -- never draft text and never per-key timing.
+  Fields: chat_room_id, time (server receipt), client_ts (browser clock at the
+  moment of the event), event, props.
+    map_opened / map_closed / map_docked / map_undocked
+        The decision map. map_closed carries dwell_ms, docked_ms and focused_ms.
+        Use focused_ms, not dwell_ms: the panel stays mounted while docked, so
+        dwell_ms includes time the user spent reading chat with the map parked.
+        A map_closed with reason "room_switch" was synthesized on conversation
+        change rather than by the user closing the panel.
+        These are the real open counts -- decision_map.jsonl only gets a row when
+        the extract cache misses, so it undercounts.
+    map_node_selected / map_view_changed
+        Which node was selected and which view (ledger/river) was showing. There
+        is no server-side trace of either.
+    option_group_shown / option_clicked
+        Chip exposure is also in chat.jsonl's `options` field, so shown-vs-clicked
+        is computable without this file. What is only here is dwell_ms: how long
+        the chips sat on screen before the user picked one.
+        There is no "dismissed" event, and it is not an oversight: the UI has no
+        dismiss control, chips simply grey out after a choice. Derive "ignored"
+        as a shown with no matching click.
+    composer_first_keystroke / composer_send / composer_draft_abandoned
+        Reply timing. reply_latency_ms is the pause before typing started,
+        compose_ms the time spent writing. chat.jsonl timestamps mark only when a
+        message was SENT and are second-precision, so they cannot separate
+        thinking from typing from having walked away.
+        composer_draft_abandoned means text was written and then discarded on
+        conversation switch -- carries a length, never the text.
+  Counts and durations only. Never draft text, never per-key timing.
+  client_ts comes from the browser and is not trustworthy for ordering across
+  clients; `time` is the server's receipt clock. Events are buffered and flushed
+  every ~2s, so `time` lags the action by up to that much.
+  Delivery is best-effort: telemetry failures are swallowed so they cannot affect
+  a session, and page-close flushes go out via sendBeacon, which cannot carry an
+  auth header. Treat this file as lossy -- absence of an event is not evidence
+  the action did not happen.
 
 db.json
   The SQLite side of the same room: the chat_rooms row, its messages, the intake

@@ -35,6 +35,9 @@ primary_region = "nrt"
   AGORA_STATIC_DIR = "/app/frontend/dist"
   PORT = "8080"
   FLASK_DEBUG = "0"
+  # Must stay identical to fly.toml -- the two shards run the same study, so a
+  # participant's experience cannot depend on which link they were handed.
+  AGORA_PREFER_AGENTS = "0.5"
 
 [http_service]
   internal_port = 8080

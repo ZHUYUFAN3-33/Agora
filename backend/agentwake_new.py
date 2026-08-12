@@ -2320,7 +2320,13 @@ def run_user_turn(
             raw = create(client_chat, messages, stall_temp, max_output_tokens,
                          call_kind="stall_burst", agent_key=burst_agent.key)
             parsed = parse_agent_turn(raw)
-            txt = parsed.get("message") or "…"
+            txt = (parsed.get("message") or "").strip()
+            if not txt:
+                # Same silent-turn rule as agent_turn: no [MESSAGE] block means nothing to
+                # say, and a "…" bubble reads as broken. Skip to the next burst agent.
+                log_agent_event(burst_agent.key, "turn_dropped",
+                                "generation carried no MESSAGE block; agent stayed silent this turn")
+                continue
             if parsed.get("rationale"):
                 session["latest_rationale"][burst_agent.key] = parsed["rationale"]
                 log_agent_event(burst_agent.key, "rationale", parsed["rationale"])
@@ -2455,7 +2461,17 @@ def run_user_turn(
             log_agent_event(agent.key, "turn_dropped", detail)
             maybe_run_moderator()
             return
-        txt = parsed.get("message") or "…"
+        txt = (parsed.get("message") or "").strip()
+        if not txt:
+            # The call succeeded but carried no [MESSAGE] block — the model wrote only its
+            # private RATIONALE and never spoke. parse_agent_turn strips private blocks, so
+            # nothing visible survives. This used to publish a "…" placeholder, which read
+            # to participants as a broken turn (2 of 72 logged agent messages, ~2.8%).
+            # Staying silent matches how the refusal and novelty guards already drop a turn.
+            log_agent_event(agent.key, "turn_dropped",
+                            "generation carried no MESSAGE block; agent stayed silent this turn")
+            maybe_run_moderator()
+            return
         if parsed.get("rationale"):
             session["latest_rationale"][agent.key] = parsed["rationale"]
             log_agent_event(agent.key, "rationale", parsed["rationale"])

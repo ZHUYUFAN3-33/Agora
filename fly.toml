@@ -19,6 +19,16 @@ primary_region = "nrt"
   AGORA_STATIC_DIR = "/app/frontend/dist"
   PORT = "8080"
   FLASK_DEBUG = "0"
+  # When the moderator decides the user should speak next, this is the chance that
+  # decision is overridden and another agent speaks instead. At the previous 0.85 the
+  # override won so often that every user message ran the full 5 agent turns -- both
+  # logged rooms ended on "Force U: consecutive_agent_turns >= 5", so turn length was
+  # effectively constant rather than responsive to the conversation. At 0.5 the
+  # moderator's judgement actually carries, and turn length varies.
+  # Coupled to phase pacing: phases advance every MODERATOR_USER_TURN_INTERVAL user
+  # turns, so a lower value here also advances phases faster. Pilot before changing it
+  # again, and change only one of the two at a time.
+  AGORA_PREFER_AGENTS = "0.5"
 
 [http_service]
   internal_port = 8080

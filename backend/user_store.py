@@ -156,6 +156,68 @@ class UserStore:
             conn.commit()
         return admin_id
 
+    def seed_users_from_file(self, path: str, reset: bool = False) -> Tuple[int, int, int]:
+        """Create the pre-made study accounts listed in a seed file.
+
+        The seed file carries password *hashes*, never plaintext — the plaintext
+        list stays out of the repo and is handed to participants directly (see
+        scripts/make_test_users.py). Safe to run on every boot: accounts that
+        already exist are left alone, so a participant's work is never touched.
+        Profiles are created empty on purpose — intake is the participant's to fill.
+
+        With reset=True (AGORA_SEED_USERS_RESET=1) existing seeded accounts have
+        their password reset back to the seed hash and their sessions dropped.
+        Use it only to hand out a fresh sheet; it does not delete rooms or logs.
+
+        Returns (created, skipped, reset).
+        """
+        if not path or not os.path.isfile(path):
+            return 0, 0, 0
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except Exception as exc:
+            print(f"⚠ Seed users: cannot read {path}: {exc}")
+            return 0, 0, 0
+        entries = payload.get("users") if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            print(f"⚠ Seed users: {path} has no 'users' list")
+            return 0, 0, 0
+
+        created = skipped = reset_count = 0
+        with self._connect() as conn:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                uid = validate_user_id(entry.get("user_id") or "")
+                pw_hash = (entry.get("password_hash") or "").strip()
+                if not uid or not pw_hash:
+                    print(f"⚠ Seed users: skipping malformed entry {entry!r}")
+                    continue
+                is_admin = 1 if entry.get("is_admin") else 0
+                exists = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (uid,)).fetchone()
+                if exists:
+                    if reset:
+                        conn.execute(
+                            "UPDATE users SET password_hash = ? WHERE user_id = ?", (pw_hash, uid)
+                        )
+                        conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
+                        reset_count += 1
+                    else:
+                        skipped += 1
+                    continue
+                conn.execute(
+                    "INSERT INTO users (user_id, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)",
+                    (uid, pw_hash, is_admin, _iso(_now())),
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO profiles (user_id, profile_json, updated_at) VALUES (?, '{}', ?)",
+                    (uid, _iso(_now())),
+                )
+                created += 1
+            conn.commit()
+        return created, skipped, reset_count
+
     def register(self, user_id: str, password: str) -> Tuple[Optional[dict], Optional[str]]:
         uid = validate_user_id(user_id)
         if not uid:
@@ -967,6 +1029,11 @@ def profile_complete(profile: dict, fields: List[dict]) -> bool:
 
 _store: Optional[UserStore] = None
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Ships inside the image (Dockerfile copies backend/ to /app), so a Fly deploy
+# carries the study accounts with it — no shell into the machine needed.
+DEFAULT_SEED_USERS_PATH = os.path.join(BASE_DIR, "seed_users.json")
+
 
 def get_user_store() -> UserStore:
     global _store
@@ -976,4 +1043,12 @@ def get_user_store() -> UserStore:
         admin = _store.ensure_admin_from_env()
         if admin:
             print(f"✓ Admin account ready: {admin}")
+        seed_path = (os.getenv("AGORA_SEED_USERS_FILE") or "").strip() or DEFAULT_SEED_USERS_PATH
+        reset = (os.getenv("AGORA_SEED_USERS_RESET") or "").strip().lower() in ("1", "true", "yes", "on")
+        created, skipped, reset_count = _store.seed_users_from_file(seed_path, reset=reset)
+        if created or reset_count:
+            print(
+                f"✓ Study accounts seeded: {created} created, {skipped} already present"
+                + (f", {reset_count} password-reset" if reset_count else "")
+            )
     return _store

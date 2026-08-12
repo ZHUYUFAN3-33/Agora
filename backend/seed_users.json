@@ -1,0 +1,166 @@
+{
+  "note": "Study accounts seeded into SQLite on boot (user_store.seed_users_from_file). Hashes only — the plaintext sheet is gitignored, see scripts/make_test_users.py.",
+  "generated_at": "2026-08-12T01:41:40.544522+00:00",
+  "users": [
+    {
+      "user_id": "P01",
+      "password_hash": "pbkdf2:sha256:1000000$xZX9eHw8FJt9oEVF$0ed1550fc8f76e70b1484b9805723229c43ac953e4dc44c66f3e27a549740cc1",
+      "is_admin": false
+    },
+    {
+      "user_id": "P02",
+      "password_hash": "pbkdf2:sha256:1000000$Qb93tCWXYiluGD4d$993fc7745d6e3acb279086a6c76fa404aa115038c177e47052fdc4fee544e6c1",
+      "is_admin": false
+    },
+    {
+      "user_id": "P03",
+      "password_hash": "pbkdf2:sha256:1000000$DmA8IY8pLWsf0FjZ$03eabc507ee187706edcf05013a9d5dc50813cfd524e32b0d3dae2280167483c",
+      "is_admin": false
+    },
+    {
+      "user_id": "P04",
+      "password_hash": "pbkdf2:sha256:1000000$gRcLC7xubQvPj6Sl$86f36ff8c69de7fdd20dba55cd02329550486094f29d93c1f411134e5ea48dd0",
+      "is_admin": false
+    },
+    {
+      "user_id": "P05",
+      "password_hash": "pbkdf2:sha256:1000000$AlWQL3cNyUoFfcz4$9611b2bcd7687b8017fe95202e2a361dcf33937cebe5c5aa589261e3fcc7bbad",
+      "is_admin": false
+    },
+    {
+      "user_id": "P06",
+      "password_hash": "pbkdf2:sha256:1000000$sJZm4NKtsaMh0WnG$01e706462697b8d5394c81e9c412b00ff1b2c2216f6a0536756ace65ad3c4492",
+      "is_admin": false
+    },
+    {
+      "user_id": "P07",
+      "password_hash": "pbkdf2:sha256:1000000$zKvDf9SAWMVHixsm$7c23ff488df568dcafb3961c45e289d24f0adc965456dba96b5e3288d6b9793c",
+      "is_admin": false
+    },
+    {
+      "user_id": "P08",
+      "password_hash": "pbkdf2:sha256:1000000$E3hklR8AiI7swLtV$b447cf27db4379bb9eb33ef13bbfed6f82584bb6170f997ae321473d98391aba",
+      "is_admin": false
+    },
+    {
+      "user_id": "P09",
+      "password_hash": "pbkdf2:sha256:1000000$aervfrQKtclPcgq5$47879499b96e951f28d4a9e02c3fefac5f0922e8ec48bb267964620062c18405",
+      "is_admin": false
+    },
+    {
+      "user_id": "P10",
+      "password_hash": "pbkdf2:sha256:1000000$EkKI3RAkvbyWzfuk$9509639e42be9a33794969649a82a56a3298fb16aea8e61806515be85d18be58",
+      "is_admin": false
+    },
+    {
+      "user_id": "P11",
+      "password_hash": "pbkdf2:sha256:1000000$c2C8SLN0cozBCuko$367145dd11fc88d12ee5d8f9ae66267b072e9a93a03e166c0aa00b672d08f976",
+      "is_admin": false
+    },
+    {
+      "user_id": "P12",
+      "password_hash": "pbkdf2:sha256:1000000$mQy0YYI2dJ8TEHpX$7d4fd314d0803193885a983b82b20e218612b0fd5dab1c47a44faa3bcedc8c09",
+      "is_admin": false
+    },
+    {
+      "user_id": "P13",
+      "password_hash": "pbkdf2:sha256:1000000$wjFKiGYvl83eiskb$db0a10bf117c8809fbeb361b5c897f1ad0b6bc4394966460e3d9b611f7c6a870",
+      "is_admin": false
+    },
+    {
+      "user_id": "P14",
+      "password_hash": "pbkdf2:sha256:1000000$VJ6PigW7tinGkutv$076d6287f2aec6c48f2a8b9f94e4d708dcc486b7355b5e5f121fe79f9023e930",
+      "is_admin": false
+    },
+    {
+      "user_id": "P15",
+      "password_hash": "pbkdf2:sha256:1000000$FTBBhJKJwuXzfG69$520bd01c96baa668c44d0d4b899ea404482d19a9f90676e91694013aafb5960b",
+      "is_admin": false
+    },
+    {
+      "user_id": "P16",
+      "password_hash": "pbkdf2:sha256:1000000$5SooXAcuK1RSFn9w$081fe7f9ebfe2bf8a9264ad2b341ae71827ae736a16993ffdabee624a50839d9",
+      "is_admin": false
+    },
+    {
+      "user_id": "P17",
+      "password_hash": "pbkdf2:sha256:1000000$5qtPlAt5lBAJABdJ$f443c15a537cddefa019330251c5a9ff74b08595e7453811ed0a2acb1e3577d7",
+      "is_admin": false
+    },
+    {
+      "user_id": "P18",
+      "password_hash": "pbkdf2:sha256:1000000$RVpMy04vowYotXWE$372ca9876fcff2a90ff922c7a4391dbfbfba1961b936290441646c57328dc7c4",
+      "is_admin": false
+    },
+    {
+      "user_id": "P19",
+      "password_hash": "pbkdf2:sha256:1000000$2RQlWtN3iRHVG41Y$32db236362465f4c976229fd31e1b32e9c236543f2301d82d278b25665a27027",
+      "is_admin": false
+    },
+    {
+      "user_id": "P20",
+      "password_hash": "pbkdf2:sha256:1000000$9YBTrExvGlMIA8LE$e968ffc9da5ab2e13369180ad57c91f1b5a953a29d65fd957af4d08cb2ee4299",
+      "is_admin": false
+    },
+    {
+      "user_id": "P21",
+      "password_hash": "pbkdf2:sha256:1000000$iukTiiz9SL5K8bJs$a9ad9f441ea3f7d0d27db017f4be0906ea38b36ce6b73cf53a91e8582ec0238a",
+      "is_admin": false
+    },
+    {
+      "user_id": "P22",
+      "password_hash": "pbkdf2:sha256:1000000$X3hfE4vA6DmokPBv$cb7385c30c74a0be8b7a3c2512c04ed2c34ce79d24a8831524142ed23863c413",
+      "is_admin": false
+    },
+    {
+      "user_id": "P23",
+      "password_hash": "pbkdf2:sha256:1000000$f87OEDzgeR2JIdk1$a01af4f5895e7bdb676cde42f1663c2fabf0ad156548157152e74a12c31af719",
+      "is_admin": false
+    },
+    {
+      "user_id": "P24",
+      "password_hash": "pbkdf2:sha256:1000000$vIiDbuSiBNA182BF$827441025edc890e5e59a00f8ffa004e316b365368e53044575b6e8ba349d195",
+      "is_admin": false
+    },
+    {
+      "user_id": "P25",
+      "password_hash": "pbkdf2:sha256:1000000$QUQa0ZOwh1DeNyFn$3f4943ae9d5b3bcc12a94eb286aec68306c820c0c49d83ce381e8eb90d9b4a9a",
+      "is_admin": false
+    },
+    {
+      "user_id": "P26",
+      "password_hash": "pbkdf2:sha256:1000000$ycTyPXe8yeKx7BXy$99d8ba1e2457113ce137beb865235ca2ac0a85a7e0750c01acec55cbc413a532",
+      "is_admin": false
+    },
+    {
+      "user_id": "P27",
+      "password_hash": "pbkdf2:sha256:1000000$F95tIUwv3T2feWJi$93619a9cb45711d1aab7bc8e84c71a3911080c5d3fc8a7bbded7ce0730a97259",
+      "is_admin": false
+    },
+    {
+      "user_id": "P28",
+      "password_hash": "pbkdf2:sha256:1000000$AAzC4nuGHKLhXoXs$1c5ec596295107da19078a40f9441202024c684cf161dcaae28f502e67e1315f",
+      "is_admin": false
+    },
+    {
+      "user_id": "P29",
+      "password_hash": "pbkdf2:sha256:1000000$cIKfY354qErQzLT1$8e29d8132196444966860b2d159564016b0dee5ee671d9dddc4aa96c78d0aeee",
+      "is_admin": false
+    },
+    {
+      "user_id": "P30",
+      "password_hash": "pbkdf2:sha256:1000000$tFw5U1Pnughrt5G1$74e7ccc671d2cde4fe3aa10464bee52c324b15250990eec218f5563099892e8d",
+      "is_admin": false
+    },
+    {
+      "user_id": "P31",
+      "password_hash": "pbkdf2:sha256:1000000$2uviNDr0jDdovrUg$ae645446cf9863d9035f2ae44567287e63eac126421e3efd669adc9c49b212a0",
+      "is_admin": false
+    },
+    {
+      "user_id": "P32",
+      "password_hash": "pbkdf2:sha256:1000000$zkeMoHMPN5hhrfOt$596a7f56fbb8760d11b4dbdfed33cd019f0e8b3ae99dce460622e920a03d1888",
+      "is_admin": false
+    }
+  ]
+}

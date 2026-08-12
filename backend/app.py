@@ -24,7 +24,8 @@ from dotenv import load_dotenv
 import sys
 import importlib.util
 
-from data_paths import BASE_DIR, LOG_DIR, DATA_DIR
+from data_paths import BASE_DIR, LOG_DIR, DATA_DIR, MEMORY_DIR
+import export_bundle
 
 # ─── Load emotion module (optional) ───────────────────────────────────────────
 EMOTION_MODULE_LOADED = False
@@ -115,6 +116,10 @@ NOVELTY_THRESHOLD = float(os.getenv("AGORA_NOVELTY_THRESHOLD") or "0.4")
 # Discarding a retry means the agent says nothing at all; that needs much
 # stronger evidence than asking for one.
 NOVELTY_DROP_THRESHOLD = float(os.getenv("AGORA_NOVELTY_DROP_THRESHOLD") or "0.25")
+
+# Passed to run_user_turn explicitly rather than left to its default, so the value written
+# into {room}_config.jsonl is the value that actually ran and cannot drift from it.
+MODEL = os.getenv("AGORA_MODEL") or "gpt-4o"
 
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
@@ -391,6 +396,53 @@ def _agents_payload_for_session(session: dict, session_agents: Dict[str, ChatAge
         })
     return agents_payload
 
+def log_config_event(session: dict, event: str, **extra) -> None:
+    """Append one line to {room}_config.jsonl carrying the FULL effective config.
+
+    Full state every time, never a delta. Deltas are not replayable here: when the user
+    switches an agent's emotion off, the frontend omits the override key entirely and the
+    server keeps the previous value, so replaying {room}_params.jsonl onto a baseline
+    reconstructs an emotion that was never actually in force. A snapshot at room creation
+    is also not enough -- /api/roster can replace the whole roster mid-session and
+    /api/message re-asserts decision/emotion on every turn.
+
+    Written for every room regardless of mode, unlike params.jsonl.
+    """
+    fp = session.get("config_fp")
+    if not fp or getattr(fp, "closed", True):
+        return
+    try:
+        session_agents, _, _ = _make_session_agents(session)
+        agents = _agents_payload_for_session(session, session_agents)
+    except Exception:
+        agents = []
+    record = {
+        "chat_room_id": session.get("room_id"),
+        "time": now_local_iso(),
+        "event": event,
+        "mode": session.get("mode"),
+        "scene_id": session.get("scene_id"),
+        "scenario_type": session.get("scenario_type"),
+        "user_id": session.get("user_id"),
+        "slot_keys": list(_session_slot_keys(session)),
+        "slot_to_profile": dict(session.get("slot_to_profile") or {}),
+        "agents": agents,
+        # Recorded per event rather than assumed at read time: the HTTP and CLI defaults
+        # for these disagree, and the documented values do not match the code.
+        "runtime": {
+            "model": MODEL,
+            "novelty_threshold": NOVELTY_THRESHOLD,
+            "novelty_drop_threshold": NOVELTY_DROP_THRESHOLD,
+        },
+    }
+    record.update(extra)
+    try:
+        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        fp.flush()
+    except Exception:
+        pass
+
+
 AGENT_POOL: Dict[str, dict] = {
     "A": {"name": "ChatbotA", "role_text": bot1},
     "B": {"name": "ChatbotB", "role_text": bot2},
@@ -484,19 +536,34 @@ def _runtime_config_from_slot_profiles(slot_to_profile: Dict[str, str], slot_key
     return conf
 
 
+# One append-mode handle per per-room log, opened at /api/start and held for the life of
+# the session. Adding a log here is enough to have it opened, registered on the session,
+# closed on room delete (SESSION_LOG_HANDLES) and -- via ROOM_ARTIFACTS -- exported and
+# deleted. Keep the suffixes in sync with ROOM_ARTIFACTS.
+#   (session key for the handle, session key for the path, filename suffix)
+SESSION_LOG_FILES: Tuple[Tuple[str, str, str], ...] = (
+    ("chat_fp", "chat_log_path", ""),
+    ("think_fp", "thinking_log_path", "_thinkinglog"),
+    ("moderator_fp", "moderator_log_path", "_moderator"),
+    ("rationale_fp", "rationale_log_path", "_rationale"),
+    ("memory_fp", "memory_log_path", "_memory"),
+    ("config_fp", "config_log_path", "_config"),
+    ("generation_fp", "generation_log_path", "_generation"),
+    ("novelty_fp", "novelty_log_path", "_novelty"),
+)
+SESSION_LOG_HANDLES: Tuple[str, ...] = tuple(fp_key for fp_key, _, _ in SESSION_LOG_FILES)
+
+
 def init_session(room_id: str) -> dict:
     """Initialize a new chat session"""
-    chat_log_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
-    thinking_log_path = os.path.join(LOG_DIR, f"{room_id}_thinkinglog.jsonl")
-    moderator_log_path = os.path.join(LOG_DIR, f"{room_id}_moderator.jsonl")
-    rationale_log_path = os.path.join(LOG_DIR, f"{room_id}_rationale.jsonl")
-    memory_log_path = os.path.join(LOG_DIR, f"{room_id}_memory.jsonl")
-
-    chat_fp = open(chat_log_path, "a", encoding="utf-8")
-    think_fp = open(thinking_log_path, "a", encoding="utf-8")
-    moderator_fp = open(moderator_log_path, "a", encoding="utf-8")
-    rationale_fp = open(rationale_log_path, "a", encoding="utf-8")
-    memory_fp = open(memory_log_path, "a", encoding="utf-8")
+    log_paths = {
+        path_key: os.path.join(LOG_DIR, f"{room_id}{suffix}.jsonl")
+        for _fp_key, path_key, suffix in SESSION_LOG_FILES
+    }
+    log_handles = {
+        fp_key: open(log_paths[path_key], "a", encoding="utf-8")
+        for fp_key, path_key, _suffix in SESSION_LOG_FILES
+    }
 
     default_slots = list(SLOT_KEYS)
     session = {
@@ -523,16 +590,8 @@ def init_session(room_id: str) -> dict:
         "mention_queue": [],
         "consecutive_count": 0,
         "has_spoken": {k: False for k in default_slots},
-        "chat_log_path": chat_log_path,
-        "thinking_log_path": thinking_log_path,
-        "moderator_log_path": moderator_log_path,
-        "rationale_log_path": rationale_log_path,
-        "memory_log_path": memory_log_path,
-        "chat_fp": chat_fp,
-        "think_fp": think_fp,
-        "moderator_fp": moderator_fp,
-        "rationale_fp": rationale_fp,
-        "memory_fp": memory_fp,
+        **log_paths,
+        **log_handles,
         # In-session per-agent position snapshots (CLI maybe_distill_snippet)
         "memory_snippets": {k: [] for k in default_slots},
         "turns_since_distill": {k: 0 for k in default_slots},
@@ -820,6 +879,10 @@ def start_chat():
 
     session_agents, _, _ = _make_session_agents(session)
     chat_sessions[room_id] = session
+    # Baseline. Placed here rather than inside the DB block below on purpose: that block
+    # only runs when a user id resolves, so anonymous and legacy rooms would get no config
+    # record at all (9 of the 21 rooms in the reference corpus have no chat_rooms row).
+    log_config_event(session, "session_start", created_at=now_local_iso())
 
     # Persist room row for re-login / admin (even for legacy pipeline)
     if HAVE_USER_STORE:
@@ -943,6 +1006,9 @@ def update_roster():
             print(f"⚠ roster assemble: {assemble_err}")
 
     session_agents, _, _ = _make_session_agents(session)
+    # The roster can be replaced wholesale mid-session, which is why a creation-time
+    # snapshot alone would describe the wrong configuration for most of the conversation.
+    log_config_event(session, "roster_change")
     return jsonify({
         "room_id": room_id,
         "mode": mode,
@@ -993,7 +1059,10 @@ def send_message():
         base_scene = (session.get("agora2") or {}).get("scene_text") or ""
     else:
         req_scene_id = (data.get("scene_id") or "").strip()
-        if req_scene_id and req_scene_id in SCENES:
+        if req_scene_id and req_scene_id in SCENES and req_scene_id != session.get("scene_id"):
+            session["scene_id"] = req_scene_id
+            log_config_event(session, "scene_change")
+        elif req_scene_id and req_scene_id in SCENES:
             session["scene_id"] = req_scene_id
         base_scene = SCENES.get(session.get("scene_id", "scene1"), scene)
 
@@ -1066,6 +1135,10 @@ def send_message():
     agent_emotion_overrides = data.get("agent_emotion_overrides") or {}
     agent_decision_block = data.get("agent_decision_block") or {}
     additional_rules = data.get("additional_rules") or {}
+    # Snapshot before, so we only log a config event when this turn actually changed
+    # something. The client re-sends these overrides on every message, so logging
+    # unconditionally would write one full config row per turn.
+    _runtime_before = json.dumps(session.get("agent_runtime_config") or {}, sort_keys=True)
     for slot in _session_slot_keys(session):
         conf = session.setdefault("agent_runtime_config", {}).setdefault(slot, {})
         if slot in agent_decision_block and agent_decision_block[slot]:
@@ -1074,6 +1147,8 @@ def send_message():
             conf["emotion"] = agent_emotion_overrides[slot]
         # Rebuild role if additional rules (append once per turn into role via agora2_specs is heavy;
         # skip — Agora-2 path uses assembled role_text)
+    if json.dumps(session.get("agent_runtime_config") or {}, sort_keys=True) != _runtime_before:
+        log_config_event(session, "runtime_override")
 
     try:
         from agentwake_new import run_user_turn
@@ -1095,6 +1170,7 @@ def send_message():
             max_user_gap=max_user_gap,
             max_agent_turns_before_user=max_agent_turns_before_user,
             prefer_agents=PREFER_AGENTS,
+            model=MODEL,
             novelty_threshold=NOVELTY_THRESHOLD,
             novelty_drop_threshold=NOVELTY_DROP_THRESHOLD,
             persist_chat=lambda msg: _persist_chat_message_db(room_id, msg, session),
@@ -1295,18 +1371,31 @@ def get_history(room_id):
 
 @app.route('/api/log-param-change', methods=['POST'])
 def log_param_change():
-    """Log user parameter modifications (Full mode only). Records timestamp, change type, agent (full name), before/after values."""
+    """Log user parameter modifications. Records timestamp, change type, agent (full name), before/after values.
+
+    This is a DIFF log: it only carries fields the user actually changed. It cannot be
+    replayed onto a baseline to recover state (the frontend omits agent_emotion_overrides
+    when emotionOn is false, so the server keeps the old emotion while this log records the
+    toggle). {room}_config.jsonl is the authoritative record of effective config; this file
+    exists to show what the user touched and when.
+    """
     data = request.json or {}
-    room_id = (data.get("room_id") or "").strip()
+    room_id = _safe_room_id((data.get("room_id") or "").strip())
     mode = data.get("mode") or "full"
     changes = data.get("changes") or []
 
-    if mode != "full":
-        return jsonify({"ok": True, "skipped": "mode is not full"}), 200
+    # Unauthenticated writes used to be possible here, and room_id went straight into a
+    # path join -- "../../x" escaped LOG_DIR. Both are guarded now.
+    if not room_id:
+        return jsonify({"error": "Invalid room id"}), 400
+    if not changes:
+        return jsonify({"ok": True, "skipped": "no changes"}), 200
+    _, err = _authorize_room_read(room_id)
+    if err:
+        return err
 
-    if not room_id or not changes:
-        return jsonify({"ok": True, "skipped": "no room_id or changes"}), 200
-
+    # No mode gate: limited/single customization used to be dropped on the floor by both
+    # this handler and the caller. mode is recorded as a field instead.
     params_log_path = os.path.join(LOG_DIR, f"{room_id}_params.jsonl")
     change_count = 0
     if os.path.exists(params_log_path):
@@ -1317,6 +1406,7 @@ def log_param_change():
     entry = {
         "room_id": room_id,
         "time": now_local_iso(),
+        "mode": mode,
         "changes": changes,
         "change_count": change_count,
     }
@@ -1334,6 +1424,61 @@ def _safe_room_id(room_id: str) -> Optional[str]:
     return room_id
 
 
+def _room_artifact_paths(room_id: str) -> List[Tuple[str, str, int]]:
+    """(arcname, abs_path, size) for every artifact of this room. See export_bundle."""
+    return export_bundle.room_artifact_paths(LOG_DIR, room_id)
+
+
+def _stamp() -> str:
+    return datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
+
+
+def _user_memory_files(user_id: str) -> List[Tuple[str, str]]:
+    """(filename, abs_path) for this user's on-disk cross-session memory files.
+
+    Uses data_paths.MEMORY_DIR. The room-delete path builds this directory as
+    os.path.join(BASE_DIR, "memory") instead, which resolves to /app/backend/memory rather
+    than the mounted /data/memory whenever AGORA_DATA_DIR is set -- do not copy that idiom.
+    """
+    if not user_id:
+        return []
+    out: List[Tuple[str, str]] = []
+    try:
+        names = os.listdir(MEMORY_DIR)
+    except OSError:
+        return []
+    for name in sorted(names):
+        if name.startswith(f"{user_id}__") and name.endswith(".jsonl"):
+            out.append((name, os.path.join(MEMORY_DIR, name)))
+    return out
+
+
+def _room_db_payload(room_id: str, db_room: Optional[dict]) -> Optional[dict]:
+    """The SQLite side of one room, or None when the room has no DB row (CLI/legacy/anon)."""
+    if not (HAVE_USER_STORE and db_room):
+        return None
+    store = get_user_store()
+    return {
+        "room": db_room,
+        "messages": store.list_chat_messages(room_id),
+        "intake": store.get_session_intake(room_id),
+        "board_snapshot": store.get_board_snapshot(room_id),
+    }
+
+
+def _write_room_subtree(zf, room_id: str, prefix: str = "",
+                        db_room: Optional[dict] = None) -> dict:
+    """Write one room into an open zip using the shared layout. Returns its manifest entry.
+
+    Single entry point for all three export routes so the per-room zip and the per-user zip
+    cannot drift apart again.
+    """
+    return export_bundle.write_room(
+        zf, LOG_DIR, room_id, prefix=prefix,
+        db_payload=_room_db_payload(room_id, db_room),
+    )
+
+
 @app.route('/api/export-logs/<room_id>', methods=['GET'])
 def export_logs(room_id):
     """Export this session's logs as a zip (disk jsonl + SQLite transcript when available)."""
@@ -1341,56 +1486,37 @@ def export_logs(room_id):
     if not room_id:
         return jsonify({"error": "Invalid room id"}), 400
 
-    chat_path = os.path.join(LOG_DIR, f"{room_id}.jsonl")
+    # The old check was `if auth and auth[...] != owner and not is_admin` -- with no
+    # Authorization header `auth` is None and the whole branch was skipped, so anyone who
+    # could guess a room id could download it. _authorize_room_read enforces owner-or-admin
+    # for rooms that have an owner while still allowing anonymous log-only rooms through.
+    _, err = _authorize_room_read(room_id)
+    if err:
+        return err
+
     db_room = None
     if HAVE_USER_STORE:
         try:
             db_room = get_user_store().get_chat_room(room_id)
         except Exception:
             db_room = None
-    if room_id not in chat_sessions and not os.path.exists(chat_path) and not db_room:
-        return jsonify({"error": "Session not found"}), 404
-
-    # Ownership check when DB room exists
-    if db_room and HAVE_USER_STORE:
-        auth = get_user_store().resolve_token(_bearer_token())
-        if auth and auth["user_id"] != db_room["user_id"] and not auth.get("is_admin"):
-            return jsonify({"error": "Forbidden"}), 403
 
     buf = io.BytesIO()
-    wrote = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name, filename in [
-            (f"{room_id}.jsonl", f"{room_id}.jsonl"),
-            (f"{room_id}_thinkinglog.jsonl", f"{room_id}_thinkinglog.jsonl"),
-            (f"{room_id}_moderator.jsonl", f"{room_id}_moderator.jsonl"),
-            (f"{room_id}_params.jsonl", f"{room_id}_params.jsonl"),
-        ]:
-            path = os.path.join(LOG_DIR, filename)
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    zf.writestr(name, f.read())
-                wrote += 1
-        if HAVE_USER_STORE and db_room:
-            store = get_user_store()
-            payload = {
-                "room": db_room,
-                "messages": store.list_chat_messages(room_id),
-                "intake": store.get_session_intake(room_id),
-                "board_snapshot": store.get_board_snapshot(room_id),
-            }
-            zf.writestr(f"{room_id}_db.json", json.dumps(payload, ensure_ascii=False, indent=2))
-            wrote += 1
-
-    if wrote == 0:
-        return jsonify({"error": "No log files for this session"}), 404
+        entry = _write_room_subtree(zf, room_id, db_room=db_room)
+        if not entry["files"]:
+            return jsonify({"error": "No log files for this session"}), 404
+        manifest = export_bundle.build_manifest([entry], scope=f"room:{room_id}",
+                                                generated_at=now_local_iso())
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr("README.txt", export_bundle.README)
 
     buf.seek(0)
     return send_file(
         buf,
         mimetype="application/zip",
         as_attachment=True,
-        download_name=f"agora_logs_{room_id}.zip",
+        download_name=f"agora_logs_{room_id}_{_stamp()}.zip",
     )
 
 
@@ -2237,7 +2363,11 @@ def admin_room_detail(room_id):
     if err:
         return err
     store = get_user_store()
-    rid = _safe_room_id(room_id) or (room_id or "").strip()
+    # Was `_safe_room_id(room_id) or (room_id or "").strip()` -- the fallback handed an
+    # unvalidated id straight to os.remove() below. Reject instead of falling through.
+    rid = _safe_room_id(room_id)
+    if not rid:
+        return jsonify({"error": "Invalid room id"}), 400
     if request.method == "DELETE":
         ok, msg, meta = store.delete_chat_room(rid)
         if not ok:
@@ -2245,20 +2375,18 @@ def admin_room_detail(room_id):
         # Drop live session + close file handles
         sess = chat_sessions.pop(rid, None)
         if isinstance(sess, dict):
-            for fp_key in ("chat_fp", "think_fp", "moderator_fp", "rationale_fp", "memory_fp"):
+            for fp_key in SESSION_LOG_HANDLES:
                 fp = sess.get(fp_key)
                 try:
                     if fp and not fp.closed:
                         fp.close()
                 except Exception:
                     pass
-        # Remove jsonl logs for this room
-        for suffix in ("", "_thinkinglog", "_thinking", "_moderator", "_params"):
-            path = os.path.join(LOG_DIR, f"{rid}{suffix}.jsonl")
+        # Remove every artifact of this room, not just the five the old list knew about.
+        for _arcname, path, _size in _room_artifact_paths(rid):
             try:
-                if os.path.isfile(path):
-                    os.remove(path)
-            except Exception:
+                os.remove(path)
+            except OSError:
                 pass
         # Strip matching line from memory/{user}__{scenario}.jsonl if present
         try:
@@ -2341,29 +2469,86 @@ def admin_export_bundle():
     scenario_type = (request.args.get("scenario_type") or "").strip() or None
     store = get_user_store()
     buf = io.BytesIO()
+    rooms_manifest: List[dict] = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for uid in uids:
             bundle = store.export_user_bundle(uid, scenario_type=scenario_type)
-            prefix = uid if len(uids) > 1 else ""
-            json_name = f"{uid}/{uid}_export.json" if prefix else f"{uid}_export.json"
-            zf.writestr(json_name, json.dumps(bundle, ensure_ascii=False, indent=2))
+            # Layout is unconditional now. It used to switch shape between one user and
+            # many (`prefix = uid if len(uids) > 1 else ""`), so a single-user zip had no
+            # top-level directory and downstream scripts had to handle both.
+            zf.writestr(f"{uid}/profile.json",
+                        json.dumps(bundle.get("profile") or {}, ensure_ascii=False, indent=2))
+            zf.writestr(f"{uid}/session_memory.jsonl",
+                        "\n".join(json.dumps(r, ensure_ascii=False)
+                                  for r in (bundle.get("session_memory") or [])))
+            # Cross-session memory as written on disk by the CLI path. The SQLite copy
+            # above and this file are written by different code paths and can disagree.
+            for mem_name, mem_path in _user_memory_files(uid):
+                try:
+                    with open(mem_path, "r", encoding="utf-8") as f:
+                        zf.writestr(f"{uid}/memory_raw/{mem_name}", f.read())
+                except OSError:
+                    pass
+            # This is the part that was missing entirely: the admin export never shipped a
+            # single byte from LOG_DIR, only DB rows and a flat transcript.
             for item in bundle.get("rooms") or []:
                 room = item.get("room") or {}
-                rid = room.get("room_id") or "room"
-                lines = [f"{m.get('character')}: {m.get('txt')}" for m in (item.get("messages") or [])]
-                t_name = f"{uid}/transcripts/{rid}.txt" if prefix else f"transcripts/{rid}.txt"
-                zf.writestr(t_name, "\n".join(lines))
+                rid = room.get("room_id")
+                if not rid or not _safe_room_id(rid):
+                    continue
+                rooms_manifest.append(
+                    _write_room_subtree(zf, rid, prefix=f"{uid}/rooms/", db_room=room)
+                )
+        manifest = export_bundle.build_manifest(
+            rooms_manifest, scope="users:" + ",".join(uids), generated_at=now_local_iso()
+        )
+        manifest["user_ids"] = uids
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr("README.txt", export_bundle.README)
     buf.seek(0)
     if len(uids) == 1:
-        download_name = f"agora_export_{uids[0]}.zip"
+        download_name = f"agora_export_{uids[0]}_{_stamp()}.zip"
     else:
-        stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
-        download_name = f"agora_export_{len(uids)}users_{stamp}.zip"
+        download_name = f"agora_export_{len(uids)}users_{_stamp()}.zip"
     return send_file(
         buf,
         mimetype="application/zip",
         as_attachment=True,
         download_name=download_name,
+    )
+
+
+@app.route('/api/admin/rooms/<room_id>/export', methods=['GET'])
+def admin_export_room(room_id):
+    """Per-room zip for admins. Same subtree shape as the per-user export."""
+    _, err = _require_admin()
+    if err:
+        return err
+    rid = _safe_room_id(room_id)
+    if not rid:
+        return jsonify({"error": "Invalid room id"}), 400
+    db_room = None
+    if HAVE_USER_STORE:
+        try:
+            db_room = get_user_store().get_chat_room(rid)
+        except Exception:
+            db_room = None
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        entry = _write_room_subtree(zf, rid, db_room=db_room)
+        if not entry["files"]:
+            return jsonify({"error": "No log files for this session"}), 404
+        manifest = export_bundle.build_manifest([entry], scope=f"room:{rid}",
+                                                generated_at=now_local_iso())
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr("README.txt", export_bundle.README)
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"agora_room_{rid}_{_stamp()}.zip",
     )
 
 

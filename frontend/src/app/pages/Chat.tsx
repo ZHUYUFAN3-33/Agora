@@ -2248,12 +2248,14 @@ export default function Chat() {
     c.scrollTo({ top: c.scrollHeight, behavior });
   }, []);
   const getPopoverSafeRect = useCallback(() => messagesContainerRef.current?.getBoundingClientRect() ?? null, []);
+  // No mode gate: customization in limited/single mode used to be discarded on both ends,
+  // which is why not a single _params.jsonl exists on disk. mode is sent as a field now.
+  // authFetch, not fetch: the endpoint validates the room id and authorizes the caller.
   const postParamChanges = useCallback((changes: Array<Record<string, unknown>>) => {
     const mode = currentConv?.settings?.mode ?? experimentMode;
-    if (mode !== "full" || !currentConv?.roomId || changes.length === 0) return;
-    fetch(`${API_BASE}/log-param-change`, {
+    if (!currentConv?.roomId || changes.length === 0) return;
+    authFetch(`/log-param-change`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }),
     }).catch(() => {});
   }, [currentConv?.roomId, currentConv?.settings?.mode, experimentMode]);
@@ -3399,7 +3401,9 @@ export default function Chat() {
   const handleExportLog = async () => {
     if (!currentConv?.roomId) return;
     try {
-      const res = await fetch(`${API_BASE}/export-logs/${currentConv.roomId}`);
+      // authFetch, not fetch: the endpoint enforces owner-or-admin now. It used to skip
+      // its own ownership check whenever the caller sent no token at all.
+      const res = await authFetch(`/export-logs/${currentConv.roomId}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         alert((err as { error?: string }).error || t(uiLang, "err.export"));
@@ -3409,7 +3413,9 @@ export default function Chat() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `agora_logs_${currentConv.roomId}.zip`;
+      // Server decides the name (it carries a timestamp); this is only the fallback.
+      const cd = res.headers.get("Content-Disposition") || "";
+      a.download = /filename="?([^"]+)"?/i.exec(cd)?.[1] || `agora_logs_${currentConv.roomId}.zip`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -3830,7 +3836,9 @@ export default function Chat() {
               const roster = mode === "single"
                 ? (["A"] as AgentKey[])
                 : (activeAgentKeysRef.current.length ? activeAgentKeysRef.current : activeAgentKeys);
-              if (mode === "full" && currentConv?.roomId) {
+              // Was a second, independent POST to /log-param-change with its own
+              // mode === "full" gate, duplicating postParamChanges. One writer now.
+              if (currentConv?.roomId) {
                 const changes: Array<{ type: string; agent: string; before: string | null; after: string | null }> = [];
                 roster.forEach((k) => {
                   const agent = backendLabelForKey(k);
@@ -3840,9 +3848,7 @@ export default function Chat() {
                   if (settings[k]?.decisionBlock !== agentSettings[k]?.decisionBlock) changes.push({ type: "decision", agent, before: agentSettings[k]?.decisionBlock ?? null, after: settings[k]?.decisionBlock ?? null });
                   if ((settings[k]?.stance ?? null) !== (agentSettings[k]?.stance ?? null)) changes.push({ type: "stance", agent, before: agentSettings[k]?.stance ?? null, after: settings[k]?.stance ?? null });
                 });
-              if (changes.length > 0) {
-                  fetch(`${API_BASE}/log-param-change`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }) }).catch(() => {});
-                }
+                postParamChanges(changes);
               }
               setAgentNames(names);
               setAgentSettings(settings);

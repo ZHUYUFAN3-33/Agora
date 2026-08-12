@@ -17,6 +17,13 @@ from data_paths import DEFAULT_DB_PATH
 USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 SESSION_DAYS = 30
 
+# Study compliance vocabulary. Defined here because this is where the rows are
+# validated on the way in; study_tracker.py imports these so there is exactly one
+# spelling of each in the codebase.
+SURVEY_POINTS: Tuple[str, ...] = ("pre", "post_first", "mid", "post_final")
+SURVEY_STATUSES: Tuple[str, ...] = ("completed", "waived")
+ENROLLMENT_STATUSES: Tuple[str, ...] = ("active", "completed", "withdrawn", "excluded")
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -128,6 +135,41 @@ class UserStore:
                     artifact_json TEXT NOT NULL DEFAULT '{}',
                     updated_at TEXT NOT NULL
                 );
+                -- Study compliance tracking (see study_tracker.py). The roster of
+                -- who is *in* the study, seeded from seed_users.json, so admins and
+                -- stray test accounts never show up in the cohort view.
+                CREATE TABLE IF NOT EXISTS study_enrollment (
+                    user_id TEXT PRIMARY KEY,
+                    cohort TEXT NOT NULL DEFAULT '',
+                    -- active | completed | withdrawn | excluded
+                    status TEXT NOT NULL DEFAULT 'active',
+                    -- 'YYYY-MM-DD' in the study timezone, '' = unset. Only needed for
+                    -- participants with zero sessions: without it, someone handed
+                    -- credentials two weeks ago who never logged in is
+                    -- indistinguishable from someone enrolled today.
+                    start_on TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    enrolled_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                );
+                CREATE TABLE IF NOT EXISTS study_survey_response (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    -- pre | post_first | mid | post_final
+                    point TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'completed',  -- completed | waived
+                    -- completed_on is the PROTOCOL date ('YYYY-MM-DD', study tz) and is
+                    -- what every ordering check reads. completed_at is merely when the
+                    -- admin typed it in -- batch-recording six codes on a Friday would
+                    -- otherwise make all six look like they were filled that Friday.
+                    completed_on TEXT NOT NULL DEFAULT '',
+                    completed_at TEXT NOT NULL,
+                    recorded_by TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(user_id, point)
+                );
                 """
             )
 
@@ -217,6 +259,287 @@ class UserStore:
                 created += 1
             conn.commit()
         return created, skipped, reset_count
+
+    def ensure_enrollment_from_seed(self, path: str) -> int:
+        """Enrol every seeded study account in the compliance tracker.
+
+        The seed file is what *defines* the cohort, so it is also the roster:
+        no ``P\\d{2}`` regex, no "everyone who isn't an admin" heuristic. Add
+        P33 to the seed file and it appears in the tracker on the next boot;
+        admins and stray test accounts never appear at all.
+
+        INSERT OR IGNORE, so an admin's later edits to status/start_on/cohort
+        survive every redeploy. Returns the number of rows created.
+        """
+        if not path or not os.path.isfile(path):
+            return 0
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except Exception as exc:
+            print(f"⚠ Study enrollment: cannot read {path}: {exc}")
+            return 0
+        entries = payload.get("users") if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            return 0
+
+        now = _iso(_now())
+        created = 0
+        with self._connect() as conn:
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("is_admin"):
+                    continue
+                uid = validate_user_id(entry.get("user_id") or "")
+                if not uid:
+                    continue
+                # The FK would be dangling if seeding itself failed for this row.
+                if not conn.execute("SELECT 1 FROM users WHERE user_id = ?", (uid,)).fetchone():
+                    continue
+                cur = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO study_enrollment
+                        (user_id, cohort, status, start_on, note, enrolled_at, updated_at)
+                    VALUES (?, '', 'active', '', '', ?, ?)
+                    """,
+                    (uid, now, now),
+                )
+                created += cur.rowcount or 0
+            conn.commit()
+        return created
+
+    # ------------------------------------------------------------------
+    # Study compliance tracking
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _enrollment_row(row: sqlite3.Row) -> dict:
+        return {
+            "user_id": row["user_id"],
+            "cohort": row["cohort"],
+            "status": row["status"],
+            "start_on": row["start_on"],
+            "note": row["note"],
+            "enrolled_at": row["enrolled_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def list_enrollments(self) -> List[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM study_enrollment ORDER BY user_id ASC"
+            ).fetchall()
+        return [self._enrollment_row(r) for r in rows]
+
+    def get_enrollment(self, user_id: str) -> Optional[dict]:
+        uid = validate_user_id(user_id)
+        if not uid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM study_enrollment WHERE user_id = ?", (uid,)
+            ).fetchone()
+        return self._enrollment_row(row) if row else None
+
+    def upsert_enrollment(
+        self,
+        user_id: str,
+        *,
+        cohort: Optional[str] = None,
+        status: Optional[str] = None,
+        start_on: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Tuple[Optional[dict], Optional[str]]:
+        """Create or partially update an enrollment. ``None`` means "leave alone"."""
+        uid = validate_user_id(user_id)
+        if not uid:
+            return None, "Invalid user ID"
+        if status is not None and status not in ENROLLMENT_STATUSES:
+            return None, f"Status must be one of: {', '.join(ENROLLMENT_STATUSES)}"
+        if start_on:
+            try:
+                datetime.strptime(start_on, "%Y-%m-%d")
+            except ValueError:
+                return None, "Start date must be YYYY-MM-DD"
+        now = _iso(_now())
+        with self._connect() as conn:
+            if not conn.execute("SELECT 1 FROM users WHERE user_id = ?", (uid,)).fetchone():
+                return None, "User not found"
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO study_enrollment
+                    (user_id, cohort, status, start_on, note, enrolled_at, updated_at)
+                VALUES (?, '', 'active', '', '', ?, ?)
+                """,
+                (uid, now, now),
+            )
+            sets, params = [], []
+            for col, val in (
+                ("cohort", cohort),
+                ("status", status),
+                ("start_on", start_on),
+                ("note", note),
+            ):
+                if val is not None:
+                    sets.append(f"{col} = ?")
+                    params.append(val)
+            if sets:
+                sets.append("updated_at = ?")
+                params.extend([now, uid])
+                conn.execute(
+                    f"UPDATE study_enrollment SET {', '.join(sets)} WHERE user_id = ?",
+                    params,
+                )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM study_enrollment WHERE user_id = ?", (uid,)
+            ).fetchone()
+        return self._enrollment_row(row), None
+
+    @staticmethod
+    def _survey_row(row: sqlite3.Row) -> dict:
+        return {
+            "user_id": row["user_id"],
+            "point": row["point"],
+            "status": row["status"],
+            "completed_on": row["completed_on"],
+            "completed_at": row["completed_at"],
+            "recorded_by": row["recorded_by"],
+            "note": row["note"],
+            "updated_at": row["updated_at"],
+        }
+
+    def list_survey_responses(self, user_id: Optional[str] = None) -> List[dict]:
+        """All survey records, or one participant's. Whole-cohort by default."""
+        with self._connect() as conn:
+            if user_id:
+                rows = conn.execute(
+                    "SELECT * FROM study_survey_response WHERE user_id = ? ORDER BY point ASC",
+                    (user_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM study_survey_response ORDER BY user_id ASC, point ASC"
+                ).fetchall()
+        return [self._survey_row(r) for r in rows]
+
+    def upsert_survey_response(
+        self,
+        user_id: str,
+        point: str,
+        *,
+        status: str = "completed",
+        completed_on: str = "",
+        recorded_by: str = "",
+        note: str = "",
+    ) -> Tuple[Optional[dict], Optional[str]]:
+        """Record one survey point. Last write wins; ``recorded_by`` keeps the trail.
+
+        Completion is the admin's assertion — the survey itself lives on an
+        external platform, and that platform's own response export is the real
+        evidence of who answered. ``note`` is where to put the pointer to it.
+        """
+        uid = validate_user_id(user_id)
+        if not uid:
+            return None, "Invalid user ID"
+        if point not in SURVEY_POINTS:
+            return None, f"Unknown survey point '{point}'"
+        if status not in SURVEY_STATUSES:
+            return None, f"Status must be one of: {', '.join(SURVEY_STATUSES)}"
+        if completed_on:
+            try:
+                datetime.strptime(completed_on, "%Y-%m-%d")
+            except ValueError:
+                return None, "Completion date must be YYYY-MM-DD"
+        now = _iso(_now())
+        with self._connect() as conn:
+            if not conn.execute("SELECT 1 FROM users WHERE user_id = ?", (uid,)).fetchone():
+                return None, "User not found"
+            conn.execute(
+                """
+                INSERT INTO study_survey_response
+                    (user_id, point, status, completed_on,
+                     completed_at, recorded_by, note, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, point) DO UPDATE SET
+                    status = excluded.status,
+                    completed_on = excluded.completed_on,
+                    completed_at = excluded.completed_at,
+                    recorded_by = excluded.recorded_by,
+                    note = excluded.note,
+                    updated_at = excluded.updated_at
+                """,
+                (uid, point, status, completed_on, now, recorded_by, note, now),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM study_survey_response WHERE user_id = ? AND point = ?",
+                (uid, point),
+            ).fetchone()
+        return self._survey_row(row), None
+
+    def list_study_messages(self, user_ids: List[str]) -> List[dict]:
+        """Raw material for study-session derivation: one row per chat message.
+
+        Returns ``created_at`` as stored, *unparsed* — it is Asia/Tokyo local
+        (``+09:00``) because ``_persist_chat_message_db`` copies the log line's
+        ``time``, while ``chat_rooms.created_at`` is UTC. Bucketing by day is the
+        caller's job (study_tracker.derive_sessions), which parses each value into
+        a real instant; string comparison across those two offsets mis-orders
+        anything either side of 15:00 UTC.
+        """
+        uids = [u for u in (validate_user_id(x) or "" for x in user_ids) if u]
+        if not uids:
+            return []
+        out: List[dict] = []
+        with self._connect() as conn:
+            for i in range(0, len(uids), 400):  # stay under SQLite's variable cap
+                chunk = uids[i:i + 400]
+                placeholders = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    f"""
+                    SELECT r.user_id AS user_id, m.room_id AS room_id,
+                           m.character AS character, m.created_at AS created_at,
+                           r.scenario_type AS scenario_type
+                    FROM chat_messages m
+                    JOIN chat_rooms r ON r.room_id = m.room_id
+                    WHERE r.user_id IN ({placeholders})
+                    """,
+                    chunk,
+                ).fetchall()
+                out.extend(dict(r) for r in rows)
+        return out
+
+    def count_orphan_messages(self) -> int:
+        """Messages whose room has no chat_rooms row (legacy CLI / anonymous runs).
+
+        They cannot be attributed to a user, so session derivation drops them. The
+        count is surfaced in the admin panel so the exclusion is visible rather
+        than silent.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM chat_messages m
+                LEFT JOIN chat_rooms r ON r.room_id = m.room_id
+                WHERE r.room_id IS NULL
+                """
+            ).fetchone()
+        return int(row["c"] or 0)
+
+    def delete_survey_response(self, user_id: str, point: str) -> Tuple[bool, Optional[str]]:
+        """Undo a recorded survey. Idempotent: deleting nothing is still success."""
+        uid = validate_user_id(user_id)
+        if not uid:
+            return False, "Invalid user ID"
+        if point not in SURVEY_POINTS:
+            return False, f"Unknown survey point '{point}'"
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM study_survey_response WHERE user_id = ? AND point = ?",
+                (uid, point),
+            )
+            conn.commit()
+        return True, None
 
     def register(self, user_id: str, password: str) -> Tuple[Optional[dict], Optional[str]]:
         uid = validate_user_id(user_id)
@@ -510,6 +833,10 @@ class UserStore:
             conn.execute("DELETE FROM session_intake WHERE user_id = ?", (uid,))
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
             conn.execute("DELETE FROM profiles WHERE user_id = ?", (uid,))
+            # Without these two the deleted account keeps a row in the study
+            # roster and haunts the cohort view forever.
+            conn.execute("DELETE FROM study_survey_response WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM study_enrollment WHERE user_id = ?", (uid,))
             conn.execute("DELETE FROM users WHERE user_id = ?", (uid,))
             conn.commit()
         return True, None
@@ -1051,4 +1378,7 @@ def get_user_store() -> UserStore:
                 f"✓ Study accounts seeded: {created} created, {skipped} already present"
                 + (f", {reset_count} password-reset" if reset_count else "")
             )
+        enrolled = _store.ensure_enrollment_from_seed(seed_path)
+        if enrolled:
+            print(f"✓ Study tracker: {enrolled} participant(s) enrolled")
     return _store

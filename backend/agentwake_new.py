@@ -1293,6 +1293,40 @@ _TRAILING_RATIONALE_RE = re.compile(
 # Nothing in the deliberation loop reads it.
 AGENT_MOVES = ("challenge", "extend", "new_point", "concede", "clarify")
 
+# Novelty defer exit. The retry prompt has always offered "say you have nothing
+# new and name whose point you defer to" — but the defer sentence itself was
+# scored, and naming the other agent's point necessarily reuses their words, so
+# the exit was pinched shut by the very door it was meant to open (measured on
+# 5.6: both dropped retries scored 0.0/0.08, i.e. they were short deferrals).
+# A structural marker replaces the score: [MOVE] concede @Target plus a short
+# message is published as an explicit hand-off instead of a silent vanish.
+# Chars, not tokens: an English sentence runs ~90-120 chars, a Chinese one
+# ~30-60, and CJK-bigram token counts are unstable across languages, while a
+# runaway analysis is thousands of chars in either.
+NOVELTY_DEFER_MAX_CHARS = 120
+# One deferral in a row per agent: the second consecutive attempt to use the
+# exit is dropped like before, so "always concede" cannot become the universal
+# escape hatch. Any normally-published turn resets the streak.
+NOVELTY_DEFER_MAX_STREAK = 1
+
+
+def is_defer_turn(parsed: dict, mention_patterns: Dict[str, str],
+                  self_key: str) -> Optional[str]:
+    """Target key if this parsed turn is an explicit short deferral, else None.
+
+    Three structural requirements, all cheap: the self-reported move is
+    "concede", a non-self @target resolves, and the message is one short
+    sentence. Content is deliberately NOT scored — a deferral quotes the point
+    it yields to, which is exactly what the novelty metric punishes.
+    """
+    if (parsed.get("move") or "") != "concede":
+        return None
+    msg = (parsed.get("message") or "").strip()
+    if not msg or len(msg) > NOVELTY_DEFER_MAX_CHARS:
+        return None
+    return resolve_reply_target(parsed.get("move_detail") or "", msg,
+                                mention_patterns, self_key)
+
 
 def normalize_move(body: str) -> str:
     """First recognised move keyword in a [MOVE] block body, or "".
@@ -2304,6 +2338,8 @@ def run_user_turn(
                           quote_target, quote_excluded)
         scope = _failing(ratio, self_ratio)
         if scope is None:
+            # A normally-published turn re-arms the defer exit (see below).
+            session.setdefault("novelty_defer_streak", {})[agent.key] = 0
             log_novelty({**_base, "retried": False,
                          "kept": True, "dropped": False, "reason": "pass"})
             return parsed
@@ -2338,9 +2374,13 @@ def run_user_turn(
                     "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
                     "— only if the concrete options are not yet on the table — a new evaluation "
                     "dimension.\n"
-                    "If you genuinely have nothing new, reply with one short sentence saying so and naming "
-                    "whose point you are deferring to. Either way, do not ask a question this time. "
-                    "Keep the required [MESSAGE]/[RATIONALE] output format."
+                    "If you genuinely have nothing new, reply with ONE short sentence saying so and "
+                    "naming whose point you are deferring to, and tag it [MOVE] concede @TheirName. "
+                    "Either way, do not ask a question this time. "
+                    # The full format, [MOVE] included: retried turns used to come back
+                    # without a move self-report, which left their map edges unlabelled
+                    # AND made the deferral exit above structurally unreachable.
+                    "Keep the FULL required output format: [MOVE], then [RATIONALE], then [MESSAGE]."
                 ),
             },
         ]
@@ -2359,6 +2399,7 @@ def run_user_turn(
         retry_scope = _failing_drop(retry_ratio, retry_self)
         _retry_empty = not (retry_parsed.get("message") or "").strip()
         if retry_scope is None:
+            session.setdefault("novelty_defer_streak", {})[agent.key] = 0
             log_thinking(
                 "novelty_retry",
                 f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f} (kept)",
@@ -2376,6 +2417,27 @@ def run_user_turn(
             )
             log_novelty({**_retry_base, "retried": True, "kept": True,
                          "dropped": False, "reason": f"kept_named_by_user:{retry_scope}",
+                         "first_group_ratio": round(ratio, 4),
+                         "first_self_ratio": round(self_ratio, 4)})
+            return retry_parsed
+        # Explicit short deferral: [MOVE] concede @Target within the length cap.
+        # Scored a deferral would always fail — it quotes the point it yields
+        # to — so the check is structural, after named_by_user (full answers
+        # beat hand-offs) and before the drop. The streak cap stops "always
+        # concede" from becoming the universal escape hatch: a second
+        # consecutive deferral by the same agent drops like before.
+        defer_target = is_defer_turn(retry_parsed, mention_patterns, agent.key)
+        _streaks = session.setdefault("novelty_defer_streak", {})
+        if defer_target and _streaks.get(agent.key, 0) < NOVELTY_DEFER_MAX_STREAK:
+            _streaks[agent.key] = _streaks.get(agent.key, 0) + 1
+            log_thinking(
+                "novelty_retry",
+                f"{agent.key}: retry still failing {retry_scope}, but it is an explicit "
+                f"deferral to {defer_target} — published as a hand-off",
+            )
+            log_novelty({**_retry_base, "retried": True, "kept": True,
+                         "dropped": False, "reason": f"kept_defer:{retry_scope}",
+                         "defer_target": defer_target,
                          "first_group_ratio": round(ratio, 4),
                          "first_self_ratio": round(self_ratio, 4)})
             return retry_parsed
@@ -3732,6 +3794,10 @@ def main():
             maybe_run_moderator()
             return True
 
+        # Per-agent defer streak (CLI has no session dict; HTTP keeps its own
+        # in session["novelty_defer_streak"]).
+        novelty_defer_streak: Dict[str, int] = {}
+
         def enforce_novelty(agent: ChatAgent, messages: List[dict], parsed: dict,
                              temp: float) -> dict:
             """
@@ -3824,6 +3890,7 @@ def main():
             ratio, self_ratio, _g_raw, _s_raw, _q_target, _q_excluded = _scores(txt, parsed)
             scope = _failing(ratio, self_ratio)
             if scope is None:
+                novelty_defer_streak[agent.key] = 0
                 return parsed
 
             log_thinking("novelty_retry",
@@ -3853,9 +3920,10 @@ def main():
                     "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
                     "— only if the concrete options are not yet on the table — a new evaluation "
                     "dimension.\n"
-                    "If you genuinely have nothing new, reply with one short sentence saying so and naming "
-                    "whose point you are deferring to. Either way, do not ask a question this time. "
-                    "Keep the required [MESSAGE]/[RATIONALE] output format."
+                    "If you genuinely have nothing new, reply with ONE short sentence saying so and "
+                    "naming whose point you are deferring to, and tag it [MOVE] concede @TheirName. "
+                    "Either way, do not ask a question this time. "
+                    "Keep the FULL required output format: [MOVE], then [RATIONALE], then [MESSAGE]."
                 )},
             ]
             meta: dict = {}
@@ -3879,9 +3947,20 @@ def main():
             # because engaging a specific claim reuses that claim's words.
             retry_scope = _failing_drop(retry_ratio, retry_self)
             if retry_scope is None:
+                novelty_defer_streak[agent.key] = 0
                 log_thinking("novelty_retry",
                              f"{agent.key}: retry novelty group={retry_ratio:.2f} "
                              f"self={retry_self:.2f} (kept)")
+                return retry_parsed
+            # Same structural defer exit as the HTTP twin: a short explicit
+            # [MOVE] concede @Target hand-off publishes instead of vanishing,
+            # at most once in a row per agent.
+            defer_target = is_defer_turn(retry_parsed, mention_patterns, agent.key)
+            if defer_target and novelty_defer_streak.get(agent.key, 0) < NOVELTY_DEFER_MAX_STREAK:
+                novelty_defer_streak[agent.key] = novelty_defer_streak.get(agent.key, 0) + 1
+                log_thinking("novelty_retry",
+                             f"{agent.key}: retry still failing {retry_scope}, but it is an "
+                             f"explicit deferral to {defer_target} — kept as a hand-off")
                 return retry_parsed
             log_thinking("novelty_retry",
                          f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "

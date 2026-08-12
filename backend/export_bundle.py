@@ -293,7 +293,15 @@ novelty.jsonl
                  group_ratio == group_ratio_raw.
     quote_excluded  number of content tokens excluded.
     reason       pass, trigger:<scope>, retry_cleared_drop_bar,
-                 kept_named_by_user:<scope>, dropped:<scope>, dropped:empty_retry.
+                 kept_named_by_user:<scope>, kept_defer:<scope>,
+                 dropped:<scope>, dropped:empty_retry.
+    kept_defer   the retry was an explicit short hand-off ([MOVE] concede
+                 @target, within the length cap) published instead of dropped;
+                 defer_target names the yielded-to agent. These rows also
+                 produce a move=concede event in rationale.jsonl and hence a
+                 concede edge in the map's reply graph — when counting concede
+                 frequency as a discussion behaviour, strip guard-induced ones
+                 by joining novelty rows on (agent, second-resolution time).
   Thresholds are recorded per row rather than assumed: the HTTP and CLI defaults
   disagree with each other and with the documented value, so a stored ratio is
   uninterpretable without the bar it was actually judged against.

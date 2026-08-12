@@ -1,0 +1,68 @@
+{
+  "args": {
+    "base": "https://agora-loadtest.fly.dev",
+    "scenario": "chat",
+    "users": 1,
+    "duration": 900,
+    "think": 3.0,
+    "ramp": 0.0,
+    "messages": 3,
+    "single_mode": false,
+    "max_agent_turns": 0,
+    "timeout": 300,
+    "login_every": 3,
+    "prefix": "B",
+    "password": "loadtest1234",
+    "lang": "en",
+    "out": "/private/tmp/claude-501/-Users-ZHUYUFAN-Desktop-Agora--claude-worktrees-flyio-concurrency-testing-f251d9/9259d43c-878d-4ce5-b84f-e6d902da4854/scratchpad/results/phaseB.json"
+  },
+  "summary": {
+    "scenario": "chat",
+    "users": 1,
+    "total_requests": 5,
+    "auth": {
+      "count": 1,
+      "ok": 1,
+      "error_rate": 0.0,
+      "kinds": {
+        "ok": 1
+      },
+      "p50": 0.42,
+      "p90": 0.42,
+      "p95": 0.42,
+      "max": 0.42,
+      "mean": 0.42
+    },
+    "start": {
+      "count": 1,
+      "ok": 1,
+      "error_rate": 0.0,
+      "kinds": {
+        "ok": 1
+      },
+      "p50": 0.24,
+      "p90": 0.24,
+      "p95": 0.24,
+      "max": 0.24,
+      "mean": 0.24
+    },
+    "message": {
+      "count": 3,
+      "ok": 3,
+      "error_rate": 0.0,
+      "kinds": {
+        "ok": 3
+      },
+      "p50": 37.46,
+      "p90": 43.86,
+      "p95": 43.86,
+      "max": 43.86,
+      "mean": 39.06
+    },
+    "throughput_msg_per_min": 2.03,
+    "mean_agent_replies": 5.0
+  },
+  "_dropped": {
+    "rows": 5
+  }
+}

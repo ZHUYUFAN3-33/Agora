@@ -1,0 +1,20 @@
+{
+  "args": {
+    "app": "agora-loadtest",
+    "base": "",
+    "duration": 260,
+    "health_interval": 5.0,
+    "vm_interval": 20.0,
+    "no_vm": false,
+    "out": "/private/tmp/claude-501/-Users-ZHUYUFAN-Desktop-Agora--claude-worktrees-flyio-concurrency-testing-f251d9/9259d43c-878d-4ce5-b84f-e6d902da4854/scratchpad/results/monitor_phaseA.json"
+  },
+  "peak": {
+    "health_latency": 30.318,
+    "sessions": 0,
+    "worker_rss_kb": 75820,
+    "worker_fds": 125
+  },
+  "_dropped": {
+    "samples": 27
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "args": {
+    "base": "https://agora-loadtest.fly.dev",
+    "scenario": "cheap",
+    "users": 24,
+    "duration": 45,
+    "think": 0.3,
+    "ramp": 0.0,
+    "messages": 0,
+    "single_mode": false,
+    "max_agent_turns": 0,
+    "timeout": 300,
+    "login_every": 1,
+    "prefix": "C32_",
+    "password": "loadtest1234",
+    "lang": "en",
+    "out": "/private/tmp/claude-501/-Users-ZHUYUFAN-Desktop-Agora--claude-worktrees-flyio-concurrency-testing-f251d9/9259d43c-878d-4ce5-b84f-e6d902da4854/scratchpad/results/thread_proof.json"
+  },
+  "summary": {
+    "scenario": "cheap",
+    "users": 24,
+    "total_requests": 230,
+    "login": {
+      "count": 230,
+      "ok": 230,
+      "error_rate": 0.0,
+      "kinds": {
+        "ok": 230
+      },
+      "p50": 4.39,
+      "p90": 5.33,
+      "p95": 5.77,
+      "max": 7.36,
+      "mean": 4.56
+    }
+  },
+  "_dropped": {
+    "rows": 230
+  }
+}

@@ -37,6 +37,9 @@ Thumbs.db
 
 # Agora-2 runtime profiles (keep demo_* committed)
 backend/profiles/web_*.json
+# Local test-account profiles. Named accounts rather than web_* ids, so they need
+# their own line; add new ones here rather than committing them.
+backend/profiles/MapTester.json
 
 # Cross-session memory (user_id__scenario_type.jsonl)
 backend/memory/

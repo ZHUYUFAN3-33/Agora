@@ -94,7 +94,14 @@ fly deploy
 
 **Collect / export data**
 
-- In-app: `/admin` export, or per-room log zip from Chat.
+- In-app: `/admin` export (per user, or per session from the session list), or the
+  per-room log zip from Chat. All require login; admins can export any user's data.
+- Every zip contains a `README.txt` describing each log field by field, and a
+  `manifest.json` with per-file line counts. Read the manifest first: it flags
+  sessions that were started but never used, and sessions where the on-disk log and
+  the database disagree.
+- Layout is one directory per session:
+  `{user}/rooms/{room_id}/chat.jsonl`, `…/thinking.jsonl`, `…/derived/…`
 - From the volume:
 
 ```bash
@@ -186,7 +193,8 @@ Agora/
 | POST | `/api/start` | Create room; Agora-2 body may include `lang`, `profile`, `intake`, `hint`, `session_update` |
 | POST | `/api/message` | User message → agent replies (+ dynamic stance knowledge) |
 | GET | `/api/history/<room_id>` | History |
-| GET | `/api/export-logs/<room_id>` | Export zip |
+| GET | `/api/export-logs/<room_id>` | Export zip — requires auth (owner or admin) |
+| POST | `/api/telemetry/<room_id>` | Client behavior events → `{room}_ux.jsonl` |
 | POST/GET | `/api/summary/<room_id>` | Decision summary; also appends cross-session memory |
 | POST | `/api/emotion/analyze` | Emotion helper |
 

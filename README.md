@@ -64,6 +64,60 @@ signs those accounts out, but leaves their rooms, logs, and profiles intact.
 Unset it afterwards (`fly secrets unset AGORA_SEED_USERS_RESET`), or every
 restart will kick participants out of a live session.
 
+### Study tracker (`/admin` → Study)
+
+Tracks each participant against the study protocol and highlights who needs
+chasing today. **It only observes** — nothing here ever blocks, gates, or slows
+a participant down, and the chat flow is untouched.
+
+The protocol, all three thresholds editable in the panel's Settings:
+
+| rule | default |
+|---|---|
+| sessions required | at least 5, no upper limit |
+| minimum gap between consecutive sessions | 2 days |
+| window from the first session to the last | 14 days |
+
+A **session is a calendar day** (Asia/Tokyo), not a room: every room a
+participant used on one day collapses into a single session, which is also what
+absorbs the case where a backend restart splits one sitting across two room ids.
+A day only counts if they actually sent a message. Sessions are derived live from
+`chat_messages`, so there is no snapshot to keep in sync — and no participant
+data is duplicated.
+
+The roster comes from `seed_users.json` via `ensure_enrollment_from_seed`, so
+admins and stray test accounts never appear in the cohort. Add P33 to the seed
+file and it shows up on the next boot.
+
+**Surveys** stay external (Qualtrics, Google Forms, …). Per point the tracker
+stores the link and, once you mark it done, the date plus who recorded it and an
+optional note. Set the links in Settings; they live in
+`backend/study_config.json` (gitignored, deployment-specific). Defaults are in
+`study_tracker.py`, so a missing file is never a problem.
+
+There is deliberately **no completion code**. A single code shared by all 32
+participants proves nothing — anyone could pass it on — and since the admin is
+the one typing it in, checking it against a value the admin already knows adds a
+step without adding evidence. The real record of who answered what, and when, is
+the survey platform's own response export; put a `?pid=P01`-style parameter on
+each participant's link and reconcile against that. The tracker's job is the
+schedule, not the attestation — use the note field to point at the export.
+
+Two details that matter when reading the data:
+
+- **`completed on` is the protocol date, not when you typed it in.** Batch-record
+  six codes on a Friday and every "was the pre-survey done before session 1?"
+  check would otherwise fail for all six. The field is editable for exactly this.
+- **A late pre-survey stays flagged.** Recording it after the first session
+  leaves a permanent deviation, because a pre-exposure baseline cannot be
+  collected retroactively. Back-dating `completed on` clears it — that is the
+  legitimate case where the participant filled it on time and you recorded late.
+
+Participants with no sessions need a **start date** before the tracker can say
+anything about them; without one it asks for a date rather than inventing an
+anchor. Setting someone to `withdrawn` or `excluded` drops them out of every
+count and off the attention badge.
+
 ### 2. Backend (terminal 1)
 
 ```bash

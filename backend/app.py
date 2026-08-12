@@ -71,6 +71,14 @@ except Exception as _user_store_err:
     HAVE_USER_STORE = False
     print(f"⚠ User store not loaded: {_user_store_err}")
 
+try:
+    import study_tracker
+    HAVE_STUDY_TRACKER = True
+except Exception as _study_tracker_err:
+    study_tracker = None  # type: ignore
+    HAVE_STUDY_TRACKER = False
+    print(f"⚠ Study tracker not loaded: {_study_tracker_err}")
+
 now_local_iso = agent_module.now_local_iso
 read_text = agent_module.read_text
 ensure_dir = agent_module.ensure_dir
@@ -2692,6 +2700,133 @@ def admin_set_admin_flag(user_id):
         fields = (agora2_http.load_shared_profile_template().get("profile_fields") or [])
         detail["profile_complete"] = user_profile_complete(detail.get("profile") or {}, fields)
     return jsonify({"ok": True, "user": detail})
+
+
+# ----------------------------------------------------------------------
+# Study compliance tracker (admin only). Read-only derivation over data the
+# app already stores plus the two study_* tables; it never gates a participant.
+# ----------------------------------------------------------------------
+
+def _require_study_admin():
+    """_require_admin(), plus a clear error when the tracker module is missing."""
+    admin, err = _require_admin()
+    if err:
+        return None, err
+    if not HAVE_STUDY_TRACKER:
+        return None, (jsonify({"error": "Study tracker not available"}), 503)
+    return admin, None
+
+
+@app.route('/api/admin/study/overview', methods=['GET'])
+def admin_study_overview():
+    _, err = _require_study_admin()
+    if err:
+        return err
+    return jsonify(study_tracker.cohort_overview(get_user_store()))
+
+
+@app.route('/api/admin/study/participants/<user_id>', methods=['GET'])
+def admin_study_participant(user_id):
+    _, err = _require_study_admin()
+    if err:
+        return err
+    detail = study_tracker.participant_detail(get_user_store(), user_id)
+    if not detail:
+        return jsonify({"error": "Not enrolled in the study"}), 404
+    return jsonify(detail)
+
+
+def _study_participant_summary(store, user_id, cfg=None):
+    """The recomputed row, so a mutation response can patch one table row."""
+    detail = study_tracker.participant_detail(store, user_id, cfg)
+    if not detail:
+        return None
+    return {k: v for k, v in detail.items()
+            if k not in ("sessions", "survey_records", "enrollment", "config")}
+
+
+@app.route('/api/admin/study/participants/<user_id>/enrollment', methods=['POST'])
+def admin_study_enrollment(user_id):
+    _, err = _require_study_admin()
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    store = get_user_store()
+    # Absent keys mean "leave alone"; present-but-empty means "clear it".
+    enrollment, msg = store.upsert_enrollment(
+        user_id,
+        cohort=body.get("cohort") if "cohort" in body else None,
+        status=body.get("status") if "status" in body else None,
+        start_on=(body.get("start_on") or "") if "start_on" in body else None,
+        note=body.get("note") if "note" in body else None,
+    )
+    if msg or not enrollment:
+        return jsonify({"error": msg or "Failed"}), 400
+    return jsonify({
+        "ok": True,
+        "enrollment": enrollment,
+        "participant": _study_participant_summary(store, user_id),
+    })
+
+
+@app.route('/api/admin/study/participants/<user_id>/surveys/<point>',
+           methods=['POST', 'DELETE'])
+def admin_study_survey(user_id, point):
+    admin, err = _require_study_admin()
+    if err:
+        return err
+    store = get_user_store()
+    if not store.get_enrollment(user_id):
+        return jsonify({"error": "Not enrolled in the study"}), 404
+
+    if request.method == "DELETE":
+        ok, msg = store.delete_survey_response(user_id, point)
+        if not ok:
+            return jsonify({"error": msg or "Failed"}), 400
+        return jsonify({
+            "ok": True,
+            "participant": _study_participant_summary(store, user_id),
+        })
+
+    body = request.get_json(silent=True) or {}
+    cfg = study_tracker.load_config()
+
+    # completed_on is the PROTOCOL date, defaulted to today but editable: it is
+    # what every ordering check reads, so batch-recording last week's surveys
+    # today must not make them all look like they were filled today.
+    completed_on = str(body.get("completed_on") or "").strip()
+    if not completed_on:
+        completed_on = study_tracker.today_in_study_tz(cfg).isoformat()
+
+    record, msg = store.upsert_survey_response(
+        user_id, point,
+        status=str(body.get("status") or "completed"),
+        completed_on=completed_on,
+        recorded_by=admin["user_id"],
+        note=str(body.get("note") or ""),
+    )
+    if msg or not record:
+        return jsonify({"error": msg or "Failed"}), 400
+    return jsonify({
+        "ok": True,
+        "record": record,
+        "participant": _study_participant_summary(store, user_id, cfg),
+    })
+
+
+@app.route('/api/admin/study/config', methods=['GET', 'POST'])
+def admin_study_config():
+    admin, err = _require_study_admin()
+    if err:
+        return err
+    if request.method == "GET":
+        return jsonify({"config": study_tracker.load_config()})
+    body = request.get_json(silent=True) or {}
+    cfg, errors = study_tracker.save_config(body, actor=admin["user_id"])
+    if errors:
+        return jsonify({"error": "; ".join(errors), "errors": errors,
+                        "config": cfg}), 400
+    return jsonify({"ok": True, "config": cfg, "errors": []})
 
 
 @app.route('/api/agora2/profile/<user_id>', methods=['GET', 'POST'])

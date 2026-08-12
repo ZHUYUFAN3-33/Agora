@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { authFetch, getAuth, logoutRequest } from "../auth";
 import { monoFont } from "./chatConstants";
+import StudyTracker, { type StudyOverview } from "./StudyTracker";
 
 type AdminUser = {
   user_id: string;
@@ -47,6 +48,23 @@ export default function Admin() {
   const [memory, setMemory] = useState<MemoryRec[]>([]);
   const [roomDetail, setRoomDetail] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [tab, setTab] = useState<"users" | "study">("users");
+  const [study, setStudy] = useState<StudyOverview | null>(null);
+  const [studyError, setStudyError] = useState<string | null>(null);
+
+  // Loaded on mount regardless of the active tab: the attention badge sits on
+  // the tab button, so the Users view needs this number too.
+  const reloadStudy = useCallback(async () => {
+    setStudyError(null);
+    try {
+      const res = await authFetch("/admin/study/overview");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to load the study tracker");
+      setStudy(data as StudyOverview);
+    } catch (e) {
+      setStudyError(e instanceof Error ? e.message : "Failed");
+    }
+  }, []);
 
   const reloadUsers = useCallback(async () => {
     setLoading(true);
@@ -78,7 +96,8 @@ export default function Admin() {
       return;
     }
     void reloadUsers();
-  }, [auth?.token, auth?.is_admin, navigate, reloadUsers]);
+    void reloadStudy();
+  }, [auth?.token, auth?.is_admin, navigate, reloadUsers, reloadStudy]);
 
   const resetPassword = async () => {
     if (!selected) return;
@@ -361,6 +380,8 @@ export default function Admin() {
     }
   };
 
+  const attentionCount = study?.counts?.action ?? 0;
+
   return (
     <div className="min-h-screen bg-white text-black">
       <header className="h-[56px] border-b border-black/8 flex items-center justify-between px-4">
@@ -373,6 +394,31 @@ export default function Admin() {
           >
             ← Chat
           </button>
+          <div className="flex items-stretch border border-black/10 rounded-[8px] overflow-hidden">
+            {(["users", "study"] as const).map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className={`h-[28px] px-3 text-[11px] flex items-center gap-1.5 ${
+                  tab === key ? "bg-black text-white" : "text-black/60 hover:bg-black/[0.05]"
+                }`}
+                style={monoFont}
+              >
+                {key === "users" ? "Users" : "Study"}
+                {key === "study" && attentionCount > 0 && (
+                  <span
+                    className={`px-1.5 rounded-full text-[9px] leading-[14px] ${
+                      tab === key ? "bg-white text-red-600" : "bg-red-600 text-white"
+                    }`}
+                    title={`${attentionCount} participant(s) need attention`}
+                  >
+                    {attentionCount}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5" title={auth?.user_id || "admin"}>
@@ -392,7 +438,15 @@ export default function Admin() {
         </div>
       </header>
 
-      <div className="max-w-[1100px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4">
+      {tab === "study" && (
+        <StudyTracker overview={study} error={studyError} reload={reloadStudy} />
+      )}
+
+      <div
+        className={`max-w-[1100px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 ${
+          tab === "users" ? "" : "hidden"
+        }`}
+      >
         <section className="border border-black/10 rounded-[12px] overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-black/8 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">

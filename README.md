@@ -37,6 +37,33 @@ AGORA_ADMIN_PASSWORD=change-me
 
 On Flask start, that User ID is created/promoted as admin. Open `/admin` after login. Forgot password → users contact admin (no self-reset). Accounts + profiles live in `backend/data/agora.db` (gitignored).
 
+### Study accounts (P01…P32)
+
+32 participant accounts ship with the app, so nobody has to register: on every
+boot, [`backend/seed_users.json`](backend/seed_users.json) is seeded into SQLite
+(`user_store.seed_users_from_file`). Accounts that already exist are skipped, so
+a redeploy never disturbs a participant mid-study. Profiles are created **empty**
+on purpose — intake is the participant's to fill on first use.
+
+The seed file holds password *hashes* only. The plaintext sheet you hand out is
+`test_accounts_<stamp>.csv` at the repo root, written by the generator and
+gitignored. **Keep that file** — a lost password cannot be recovered from a hash;
+the fallback is `/admin` → set password, or regenerating the sheet.
+
+```bash
+python backend/scripts/make_test_users.py              # regenerate all 32 (new passwords)
+python backend/scripts/make_test_users.py --append --start 33 --count 8   # add P33…P40
+```
+
+Then commit `backend/seed_users.json` and `fly deploy`. IDs are zero-padded
+(`P01`, not `P1`) because a User ID must be at least 3 characters.
+
+To force everyone back onto a freshly generated sheet, deploy with
+`fly secrets set AGORA_SEED_USERS_RESET=1` — that resets seeded passwords and
+signs those accounts out, but leaves their rooms, logs, and profiles intact.
+Unset it afterwards (`fly secrets unset AGORA_SEED_USERS_RESET`), or every
+restart will kick participants out of a live session.
+
 ### 2. Backend (terminal 1)
 
 ```bash
@@ -91,6 +118,9 @@ fly deploy
 ```
 
 4. Open `https://your-unique-name.fly.dev` — health: `/api/health`. Admin UI: `/admin` after login.
+5. The 32 study accounts (`P01`…`P32`) are seeded automatically on first boot —
+   see [Study accounts](#study-accounts-p01p32). Confirm in `/admin` → Users, then
+   hand out the rows of `test_accounts_<stamp>.csv`.
 
 **Collect / export data**
 
@@ -174,6 +204,8 @@ Agora/
 | `PORT` | No | Local: `5001` for Vite proxy. Fly: `8080` |
 | `VITE_API_BASE` | No | Defaults to `/api` (same-origin). Override only if you point the UI at another API host. |
 | `AGORA_ADMIN_USER_ID` / `AGORA_ADMIN_PASSWORD` | Prod recommended | Bootstrap admin on first boot |
+| `AGORA_SEED_USERS_FILE` | No | Study-account seed. Default: `backend/seed_users.json` |
+| `AGORA_SEED_USERS_RESET` | No | `1` = reset seeded passwords to the seed file on boot. Leave unset during a study |
 | `AGORA_DATA_DIR` | Prod | Fly: `/data` (volume). Local: unset → `backend/` |
 | `AGORA_DB_PATH` | No | Fly: `/data/agora.db`. Local default: `backend/data/agora.db` |
 | `AGORA_STATIC_DIR` | Prod | Path to built `frontend/dist` inside the container |

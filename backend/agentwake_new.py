@@ -554,6 +554,45 @@ def novelty_ratio(text: str, prior_texts: List[str],
     return len(new - seen) / len(new)
 
 
+# Low-content user turns: response effort should track the information in the
+# user's message. Measured on gpt-5.6: a bare "你好" drew ~950 words per agent
+# — the agents hold a mountain of intake context and an instruction to be
+# helpful, so with nothing to react to they front-load the whole analysis.
+# Analysis produced before the user has said anything substantive is generic,
+# anchors the discussion prematurely, and (per the blind review) is skimmed,
+# i.e. received as nothing. Detection is deterministic and cheap: fewer than
+# LOW_CONTENT_TOKEN_MAX content tokens, with two escape hatches — a question
+# mark or an @mention makes any message substantive regardless of length
+# ("选A还是B?" is four tokens and a real request). Lives here rather than in
+# app.py so tests need no Flask and the CLI can adopt it later.
+LOW_CONTENT_TOKEN_MAX = 5
+
+
+def is_low_content_message(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if "?" in t or "？" in t or "@" in t:
+        return False
+    return len(_content_tokens(t)) < LOW_CONTENT_TOKEN_MAX
+
+
+# Injected per turn via the `extra` container when the user's message is low
+# content. A contract, not a token cap: max_output_tokens stays 520 because a
+# hard cap truncates the [MESSAGE] tail mid-sentence (the block order exists
+# for exactly that reason). Length falls out of the role change instead.
+LOW_CONTENT_TURN_DIRECTIVE = (
+    "\n\n(This turn) The user's last message carries no new information (a "
+    "greeting or acknowledgement). Do NOT analyze the decision this turn: "
+    "nothing new to analyze has been said, and a wall of unprompted analysis "
+    "reads as noise. Reply with at most two short sentences: one that states "
+    "your standpoint or reacts in character, plus at most ONE question — the "
+    "single thing you most need from the user. No lists, no headings, no "
+    "[OPTIONS] block this turn. If this is your FIRST message, the required "
+    "\"Hi, I'm ...\" introduction sentence counts as your standpoint sentence."
+)
+
+
 # Cheap bilingual signal for "is anyone actually pushing back".
 #
 # Deliberately STRICT, and again this was calibrated rather than guessed. The
@@ -1590,6 +1629,12 @@ def run_user_turn(
     self_novelty_threshold: Optional[float] = None,
     self_novelty_window: int = 6,
     novelty_drop_threshold: Optional[float] = None,
+    # Per-turn instruction appended to every agent's user prompt this turn
+    # (the low-content contract rides in here). Empty string = no directive =
+    # exactly the old prompt, so production-shaped calls that omit it are
+    # untouched. Deliberately NOT injected into stall bursts: those already
+    # replace the whole user prompt with a stronger directive of their own.
+    turn_directive: str = "",
     persist_chat: Optional[Callable[[dict], None]] = None,
     create_response_with_client: Optional[CreateFn] = None,
 ) -> Dict[str, Any]:
@@ -2546,6 +2591,10 @@ def run_user_turn(
         # Board goes in front of the intro note so "options on the table" reads
         # as context, not as part of the formatting instruction.
         extra = board_prompt_note() + extra
+        # The turn directive comes LAST — closest to generation, after all
+        # context blocks — and rides in both the mention and regular branches.
+        if turn_directive:
+            extra += turn_directive
         effective_temp = temperature
         if stall_triggered:
             effective_temp = min(temperature + 0.25, 1.4)
@@ -2748,6 +2797,11 @@ def run_user_turn(
     session["turns_since_moderator"] = int(session.get("turns_since_moderator") or 0) + 1
     session["user_turns_since_moderator"] = int(session.get("user_turns_since_moderator") or 0) + 1
     session["user_spoke_since_moderator"] = True
+
+    if turn_directive:
+        # One row per affected user turn: the study-side filter for "was the
+        # low-content contract active here". Old rooms have no such row.
+        log_thinking("turn_directive", "low_content contract active for this turn")
 
     if moderator_state.get("state") == CONCLUDED_STATE:
         moderator_state["state"] = "Convergence"

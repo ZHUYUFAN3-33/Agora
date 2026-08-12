@@ -1,13 +1,13 @@
 {
   "profile": {
-    "age": 38,
+    "age": 29,
     "education": "Master's, Mechanical Engineering",
     "industry_experience": "Structural engineering, 5 years",
     "career_stage": "job_change",
     "family_situation": "",
     "long_term_goal": "Become a technical lead on major projects by age 35",
     "risk_tolerance": "medium",
-    "last_updated": "2026-07-22T09:10:11+00:00",
+    "last_updated": "2026-07-01T09:00:00+00:00",
     "child_age": 8,
     "child_count": 1,
     "parenting_style_baseline": "democratic",
@@ -64,6 +64,27 @@
         "external_input": "老师觉得孩子逻辑思维不错，可以尝试"
       },
       "date": "2026-08-12T08:19:44+00:00"
+    },
+    {
+      "session_id": "078343",
+      "scenario_type": "employment",
+      "intake": {
+        "decision_field": "structural engineering",
+        "options": [
+          "Company A (design institute, local)",
+          "Company B (general contractor, relocation)"
+        ],
+        "deadline": "within 2 weeks",
+        "current_status": "employed",
+        "priority_ranking": [
+          "stability",
+          "salary",
+          "growth"
+        ],
+        "comparison_anchor": "slightly leaning toward Company A because of the shorter commute",
+        "external_pressure": "Company B's offer expires in 10 days"
+      },
+      "date": "2026-08-12T09:47:50+00:00"
     }
   ]
 }

@@ -125,6 +125,12 @@ NOVELTY_THRESHOLD = float(os.getenv("AGORA_NOVELTY_THRESHOLD") or "0.4")
 # stronger evidence than asking for one.
 NOVELTY_DROP_THRESHOLD = float(os.getenv("AGORA_NOVELTY_DROP_THRESHOLD") or "0.25")
 
+# Low-content turns: 0 (default) leaves the number of speaking agents alone —
+# the contract only shortens each reply. >0 additionally caps how many agents
+# speak on such turns. A knob rather than a behavior because changing reply
+# COUNT alters the study stimuli more than changing reply LENGTH does.
+LOW_CONTENT_MAX_AGENTS = int(os.getenv("AGORA_LOW_CONTENT_MAX_AGENTS") or "0")
+
 # Passed to run_user_turn explicitly rather than left to its default, so the value written
 # into {room}_config.jsonl is the value that actually ran and cannot drift from it.
 MODEL = os.getenv("AGORA_MODEL") or "gpt-4o"
@@ -1072,6 +1078,13 @@ def send_message():
     max_user_gap = int(data.get("max_user_gap") or 12)
     single_mode = data.get("single_mode") is True
 
+    # Low-content turn (greeting / bare acknowledgement): the agents get a
+    # per-turn contract — one standpoint sentence plus at most one question —
+    # instead of front-loading a full analysis nobody asked for yet.
+    low_content = agent_module.is_low_content_message(user_message)
+    if low_content and LOW_CONTENT_MAX_AGENTS > 0:
+        max_agent_turns_before_user = min(max_agent_turns_before_user, LOW_CONTENT_MAX_AGENTS)
+
     if session.get("pipeline") == "agora2":
         base_scene = (session.get("agora2") or {}).get("scene_text") or ""
     else:
@@ -1190,6 +1203,7 @@ def send_message():
             model=MODEL,
             novelty_threshold=NOVELTY_THRESHOLD,
             novelty_drop_threshold=NOVELTY_DROP_THRESHOLD,
+            turn_directive=(agent_module.LOW_CONTENT_TURN_DIRECTIVE if low_content else ""),
             persist_chat=lambda msg: _persist_chat_message_db(room_id, msg, session),
             create_response_with_client=create_response_with_client,
         )

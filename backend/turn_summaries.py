@@ -39,8 +39,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from lang_utils import normalize_lang
 
-SUMMARY_MODEL = "gpt-4o"
-MAX_BATCH_TURNS = 40          # per LLM call; long rooms take several calls
+SUMMARY_MODEL = os.getenv("AGORA_SUMMARY_MODEL") or "gpt-4o"
+MAX_BATCH_TURNS = 20          # per LLM call; long rooms take several calls
+BATCH_MAX_OUTPUT_TOKENS = 3600  # headroom for 20 turns of JSON at ~120 tok/turn
 SUMMARY_MAX_WORDS = 24        # hard trim on our side, prompt asks for ≤18
 QUOTE_MAX_WORDS = 20
 MAX_STANCES_PER_TURN = 4
@@ -233,8 +234,15 @@ def ensure_turn_summaries(
     if not need or create_response is None:
         return cached
 
-    for start in range(0, len(need), MAX_BATCH_TURNS):
-        chunk = need[start : start + MAX_BATCH_TURNS]
+    # Work queue rather than a fixed stride: a batch whose JSON overran the output
+    # budget comes back truncated mid-object and parses to ZERO items, and the old
+    # loop swallowed that -- the room's whole River/Ledger surface silently degraded
+    # to empty with nothing in the logs. Measured on a 32-turn room: gpt-4o needed
+    # ~75 output tokens per turn, a gpt-5.x summariser ~120, so a batch size safe for
+    # one model truncates on the other. Halve and retry instead of guessing right.
+    queue: List[List[dict]] = [need[i : i + MAX_BATCH_TURNS] for i in range(0, len(need), MAX_BATCH_TURNS)]
+    while queue:
+        chunk = queue.pop(0)
         need_indexes = [t["index"] for t in chunk]
         by_index = {t["index"]: t for t in chunk}
         try:
@@ -242,12 +250,22 @@ def ensure_turn_summaries(
                 model,
                 _batch_prompt(turns, need_indexes, options or [], lang),
                 0.2,
-                2400,
+                BATCH_MAX_OUTPUT_TOKENS,
             )
         except Exception:
             break  # keep whatever we have; map falls back to raw text
+        items = _parse_batch(raw)
+        if not items:
+            if len(chunk) > 1:
+                mid = len(chunk) // 2
+                queue[:0] = [chunk[:mid], chunk[mid:]]
+                continue
+            # A single turn that still won't parse is a prompt/model problem, not a
+            # budget one. Say so: silence here reads downstream as "nothing to show".
+            print(f"⚠ turn summary unparseable for turn {need_indexes} in room {room_id}")
+            continue
         rows_out: List[dict] = []
-        for item in _parse_batch(raw):
+        for item in items:
             if not isinstance(item, dict):
                 continue
             try:

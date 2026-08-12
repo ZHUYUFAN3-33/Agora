@@ -201,6 +201,37 @@ def _collect_meta_sdk(resp, meta: dict) -> None:
         pass
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """True for the GPT-5 line and the o-series, which reject `temperature`.
+
+    Measured, not assumed: gpt-5.6-terra answers a plain Responses call fine but
+    returns 400 "Unsupported parameter: 'temperature' is not supported with this
+    model" the moment the knob is present, and gpt-4o returns the mirror-image 400
+    for 'reasoning.effort'. So the sampling params have to be built per model
+    instead of passed blindly.
+
+    Prefix match rather than a list of exact ids on purpose: dated snapshots
+    (gpt-5.6-terra-2026-..) and future tiers must inherit the behaviour instead of
+    silently 400ing the whole app the first time someone pins one.
+    """
+    return (model or "").lower().startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _sampling_params(model: str, temperature: float) -> dict:
+    """Sampling knobs this model actually accepts, as **kwargs for a Responses call."""
+    if not _is_reasoning_model(model):
+        return {"temperature": temperature}
+    # NOTE: temperature is dropped here, and the callers that bump it to escape a
+    # stall / repetition / refusal (enforce_novelty, the stall path, the refusal
+    # retry) therefore become no-ops on these models -- the retry goes out with
+    # exactly the parameters that just failed. Diversity has to come from the
+    # prompt instead. See AGORA_REASONING_EFFORT below for the one knob left.
+    effort = os.getenv("AGORA_REASONING_EFFORT", "").strip().lower()
+    # Agora turns are short in-character utterances, not analysis: paying reasoning
+    # latency and tokens per turn buys nothing, so default to no thinking budget.
+    return {"reasoning": {"effort": effort or "none"}}
+
+
 def create_response(model: str, messages: List[dict], temperature: float, max_output_tokens: int,
                     meta: Optional[dict] = None) -> str:
     """
@@ -216,7 +247,8 @@ def create_response(model: str, messages: List[dict], temperature: float, max_ou
         _t0 = time.perf_counter()
         resp = client.responses.create(
             model=model, input=messages,
-            temperature=temperature, max_output_tokens=max_output_tokens,
+            max_output_tokens=max_output_tokens,
+            **_sampling_params(model, temperature),
         )
         meta["latency_ms"] = int((time.perf_counter() - _t0) * 1000)
         _collect_meta_sdk(resp, meta)
@@ -236,7 +268,8 @@ def create_response(model: str, messages: List[dict], temperature: float, max_ou
             pass
         return str(resp).strip()
 
-    payload = {"model": model, "input": messages, "temperature": temperature, "max_output_tokens": max_output_tokens}
+    payload = {"model": model, "input": messages, "max_output_tokens": max_output_tokens,
+               **_sampling_params(model, temperature)}
     _t0 = time.perf_counter()
     resp = _responses_create_http(payload)
     meta["latency_ms"] = int((time.perf_counter() - _t0) * 1000)
@@ -492,13 +525,25 @@ def _content_tokens(text: str) -> set:
     return tokens
 
 
-def novelty_ratio(text: str, prior_texts: List[str]) -> float:
+def novelty_ratio(text: str, prior_texts: List[str],
+                  exclude_tokens: Optional[set] = None) -> float:
     """
     Fraction of this message's content tokens that never appeared in prior_texts.
     1.0 when there is nothing to compare against; near 0.0 means the message is
     a restatement of what the group already has on the table.
+
+    exclude_tokens: tokens of the message this one REPLIES TO. Answering a claim
+    necessarily reuses that claim's words, and before this parameter existed the
+    metric punished exactly what the retry prompt demands — measured on the old
+    calibration data, 11 of 28 novelty retries scored LOWER than the first
+    attempt because engaging a specific point re-quotes it. Excluded tokens
+    count neither as new nor toward the denominator, so the score becomes "how
+    novel is the part that is not quotation". A message that is NOTHING but
+    quotation scores 0.0 — same semantics as an empty message: no contribution.
     """
     new = _content_tokens(text)
+    if exclude_tokens:
+        new -= exclude_tokens
     if not new:
         return 0.0
     seen: set = set()
@@ -507,6 +552,45 @@ def novelty_ratio(text: str, prior_texts: List[str]) -> float:
     if not seen:
         return 1.0
     return len(new - seen) / len(new)
+
+
+# Low-content user turns: response effort should track the information in the
+# user's message. Measured on gpt-5.6: a bare "你好" drew ~950 words per agent
+# — the agents hold a mountain of intake context and an instruction to be
+# helpful, so with nothing to react to they front-load the whole analysis.
+# Analysis produced before the user has said anything substantive is generic,
+# anchors the discussion prematurely, and (per the blind review) is skimmed,
+# i.e. received as nothing. Detection is deterministic and cheap: fewer than
+# LOW_CONTENT_TOKEN_MAX content tokens, with two escape hatches — a question
+# mark or an @mention makes any message substantive regardless of length
+# ("选A还是B?" is four tokens and a real request). Lives here rather than in
+# app.py so tests need no Flask and the CLI can adopt it later.
+LOW_CONTENT_TOKEN_MAX = 5
+
+
+def is_low_content_message(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if "?" in t or "？" in t or "@" in t:
+        return False
+    return len(_content_tokens(t)) < LOW_CONTENT_TOKEN_MAX
+
+
+# Injected per turn via the `extra` container when the user's message is low
+# content. A contract, not a token cap: max_output_tokens stays 520 because a
+# hard cap truncates the [MESSAGE] tail mid-sentence (the block order exists
+# for exactly that reason). Length falls out of the role change instead.
+LOW_CONTENT_TURN_DIRECTIVE = (
+    "\n\n(This turn) The user's last message carries no new information (a "
+    "greeting or acknowledgement). Do NOT analyze the decision this turn: "
+    "nothing new to analyze has been said, and a wall of unprompted analysis "
+    "reads as noise. Reply with at most two short sentences: one that states "
+    "your standpoint or reacts in character, plus at most ONE question — the "
+    "single thing you most need from the user. No lists, no headings, no "
+    "[OPTIONS] block this turn. If this is your FIRST message, the required "
+    "\"Hi, I'm ...\" introduction sentence counts as your standpoint sentence."
+)
 
 
 # Cheap bilingual signal for "is anyone actually pushing back".
@@ -705,7 +789,13 @@ class ChatAgent:
             "supply facts).\n"
             "[/MOVE]\n"
             "[RATIONALE]\n"
-            "one short sentence: why you said this, given your persona and the current phase goal\n"
+            "one short sentence: why you said this, given your persona and the current phase goal. "
+            # The map shows this to the person being discussed, so an internal note that
+            # calls them "the user" reads as being talked about rather than to. Measured
+            # before this line existed: 5 of 26 rationales in one room said "the user",
+            # none ever said "you".
+            "Write it in your own voice and address the person you are advising as \"you\" — "
+            "never refer to them in the third person (\"the user\", \"they\", \"用户\").\n"
             "[/RATIONALE]\n"
             "[MESSAGE]\n"
             "your chat message here\n"
@@ -716,7 +806,12 @@ class ChatAgent:
             "Tag names are literal markers: write MESSAGE / OPTIONS / MOVE / RATIONALE in English "
             "exactly as shown. Do NOT translate them "
             "(never [消息]/[选项]/[選択肢]/[オプション]/[メッセージ]/[动作]/[理由]/[根拠]). "
-            "Only MESSAGE and OPTIONS are shown to the others; MOVE and RATIONALE are private. "
+            # This used to say MOVE and RATIONALE are "private", which is simply false:
+            # both surface in the decision map, and the model wrote them as internal
+            # notes because the prompt told it nobody would read them.
+            "MESSAGE and OPTIONS are what the others in the room see. MOVE and RATIONALE are "
+            "not spoken aloud, but the person you are advising sees them in the decision map "
+            "when they open your turn — write them to be read by that person. "
             "Report the move honestly — an agreeable message labelled \"challenge\" defeats its "
             "purpose.\n"
             "Labels INSIDE OPTIONS must use the same language as the chat message "
@@ -727,7 +822,11 @@ class ChatAgent:
             # Restated here on purpose. The directive at the top is separated from
             # the actual generation by everything above — most of it English — and
             # agents were observed replying wholly in English in zh sessions.
-            f"LANGUAGE, again: {lang_line} This applies to MESSAGE text and OPTIONS labels.\n"
+            # RATIONALE used to be outside this scope, and it showed: in one zh room
+            # 19 of 21 rationales came back in English, so the map's Chinese panel
+            # rendered English tooltips.
+            f"LANGUAGE, again: {lang_line} This applies to MESSAGE text, OPTIONS labels "
+            "and the RATIONALE sentence (the MOVE keyword stays English).\n"
         )
         return prompt
 
@@ -1233,6 +1332,40 @@ _TRAILING_RATIONALE_RE = re.compile(
 # Nothing in the deliberation loop reads it.
 AGENT_MOVES = ("challenge", "extend", "new_point", "concede", "clarify")
 
+# Novelty defer exit. The retry prompt has always offered "say you have nothing
+# new and name whose point you defer to" — but the defer sentence itself was
+# scored, and naming the other agent's point necessarily reuses their words, so
+# the exit was pinched shut by the very door it was meant to open (measured on
+# 5.6: both dropped retries scored 0.0/0.08, i.e. they were short deferrals).
+# A structural marker replaces the score: [MOVE] concede @Target plus a short
+# message is published as an explicit hand-off instead of a silent vanish.
+# Chars, not tokens: an English sentence runs ~90-120 chars, a Chinese one
+# ~30-60, and CJK-bigram token counts are unstable across languages, while a
+# runaway analysis is thousands of chars in either.
+NOVELTY_DEFER_MAX_CHARS = 120
+# One deferral in a row per agent: the second consecutive attempt to use the
+# exit is dropped like before, so "always concede" cannot become the universal
+# escape hatch. Any normally-published turn resets the streak.
+NOVELTY_DEFER_MAX_STREAK = 1
+
+
+def is_defer_turn(parsed: dict, mention_patterns: Dict[str, str],
+                  self_key: str) -> Optional[str]:
+    """Target key if this parsed turn is an explicit short deferral, else None.
+
+    Three structural requirements, all cheap: the self-reported move is
+    "concede", a non-self @target resolves, and the message is one short
+    sentence. Content is deliberately NOT scored — a deferral quotes the point
+    it yields to, which is exactly what the novelty metric punishes.
+    """
+    if (parsed.get("move") or "") != "concede":
+        return None
+    msg = (parsed.get("message") or "").strip()
+    if not msg or len(msg) > NOVELTY_DEFER_MAX_CHARS:
+        return None
+    return resolve_reply_target(parsed.get("move_detail") or "", msg,
+                                mention_patterns, self_key)
+
 
 def normalize_move(body: str) -> str:
     """First recognised move keyword in a [MOVE] block body, or "".
@@ -1417,6 +1550,36 @@ def parse_mentions(text: str, mention_patterns: Dict[str, str],
                 break
     return found
 
+
+def resolve_reply_target(move_detail: str, message: str,
+                         mention_patterns: Dict[str, str],
+                         self_key: str) -> Optional[str]:
+    """Which agent this turn replies to, for quote-exclusion in novelty scoring.
+
+    The [MOVE] self-report ("challenge @ChatbotB") is the primary signal — it is
+    parsed before scoring runs, so it is free. Fall back to @-mentions in the
+    message body. First non-self hit wins; @U and unknown names resolve to
+    nothing (parse_mentions ignores them), and None means "no target": the
+    caller falls back to the un-excluded score, i.e. exactly the old behavior.
+
+    Module-level rather than inside either enforce_novelty closure because the
+    HTTP and CLI twins must share it, and the recalibration script replays it.
+    """
+    for source in (move_detail, message):
+        for key in parse_mentions(source or "", mention_patterns):
+            if key != self_key:
+                return key
+    return None
+
+
+def last_message_of(name: str, transcript_lines: List[str]) -> str:
+    """Most recent utterance of `name` in prefixed transcript lines, unprefixed."""
+    prefix = f"{name}: "
+    for line in reversed(transcript_lines or []):
+        if line.startswith(prefix):
+            return line[len(prefix):]
+    return ""
+
 # -------------------------------
 # Memory snippet distillation
 # -------------------------------
@@ -1466,6 +1629,12 @@ def run_user_turn(
     self_novelty_threshold: Optional[float] = None,
     self_novelty_window: int = 6,
     novelty_drop_threshold: Optional[float] = None,
+    # Per-turn instruction appended to every agent's user prompt this turn
+    # (the low-content contract rides in here). Empty string = no directive =
+    # exactly the old prompt, so production-shaped calls that omit it are
+    # untouched. Deliberately NOT injected into stall bursts: those already
+    # replace the whole user prompt with a stronger directive of their own.
+    turn_directive: str = "",
     persist_chat: Optional[Callable[[dict], None]] = None,
     create_response_with_client: Optional[CreateFn] = None,
 ) -> Dict[str, Any]:
@@ -2135,15 +2304,35 @@ def run_user_turn(
 
         own_prefix = f"{agent.name}: "
 
-        def _scores(message: str) -> tuple:
-            """(group_ratio, self_ratio). self_ratio is 1.0 until this agent
-            has spoken at least once (nothing of its own to repeat yet)."""
+        def _scores(message: str, src_parsed: Optional[dict] = None) -> tuple:
+            """(group, own, group_raw, own_raw, quote_target, quote_excluded).
+
+            group/own exclude the reply-target's last message (the [MOVE]
+            @target, falling back to body @mentions) so that engaging a claim
+            is not scored as repeating it; *_raw keep the pre-exclusion
+            semantics for cross-room comparability. self_ratio is 1.0 until
+            this agent has spoken at least once."""
             if not message:
-                return 0.0, 0.0
-            group = novelty_ratio(message, transcript_lines[-novelty_window:])
-            own = [ln[len(own_prefix):] for ln in transcript_lines
-                   if ln.startswith(own_prefix)][-self_novelty_window:]
-            return group, (novelty_ratio(message, own) if own else 1.0)
+                return 0.0, 0.0, 0.0, 0.0, None, 0
+            window = transcript_lines[-novelty_window:]
+            own_lines = [ln[len(own_prefix):] for ln in transcript_lines
+                         if ln.startswith(own_prefix)][-self_novelty_window:]
+            group_raw = novelty_ratio(message, window)
+            own_raw = novelty_ratio(message, own_lines) if own_lines else 1.0
+            exclude: set = set()
+            target = resolve_reply_target(
+                (src_parsed or {}).get("move_detail") or "", message,
+                mention_patterns, agent.key)
+            if target:
+                t_text = last_message_of(name_map.get(target, target), transcript_lines)
+                if t_text:
+                    exclude = _content_tokens(t_text)
+            if not exclude:
+                return group_raw, own_raw, group_raw, own_raw, None, 0
+            group = novelty_ratio(message, window, exclude_tokens=exclude)
+            own = (novelty_ratio(message, own_lines, exclude_tokens=exclude)
+                   if own_lines else 1.0)
+            return group, own, group_raw, own_raw, target, len(exclude)
 
         def _failing(group: float, own: float):
             """Which scope (if any) this message fails, as a short label."""
@@ -2161,17 +2350,23 @@ def run_user_turn(
                 return "self"
             return None
 
-        def _nov_base(group: float, own: float) -> dict:
+        def _nov_base(group: float, own: float, group_raw: float, own_raw: float,
+                      quote_target, quote_excluded: int) -> dict:
             """Per-scope booleans and the RESOLVED thresholds, not a single label and not
             module constants. _failing tests group first, so a message failing BOTH scopes
             reports only "group"; and the HTTP and CLI defaults for these thresholds
             disagree, so a stored ratio is uninterpretable without the bar it was judged
-            against."""
+            against. *_raw are the pre-quote-exclusion scores: group_ratio changed meaning
+            when exclusion landed, so cross-period comparisons must use the raw fields."""
             return {
                 "agent": agent.key,
                 "agent_name": agent.name,
                 "group_ratio": round(group, 4),
                 "self_ratio": round(own, 4),
+                "group_ratio_raw": round(group_raw, 4),
+                "self_ratio_raw": round(own_raw, 4),
+                "quote_target": quote_target,
+                "quote_excluded": quote_excluded,
                 "group_threshold": nov_th,
                 "self_threshold": self_nov_th,
                 "drop_threshold": drop_th,
@@ -2182,10 +2377,15 @@ def run_user_turn(
                 "named_by_user": bool(named_by_user),
             }
 
-        ratio, self_ratio = _scores(txt)
+        ratio, self_ratio, ratio_raw, self_ratio_raw, quote_target, quote_excluded = \
+            _scores(txt, parsed)
+        _base = _nov_base(ratio, self_ratio, ratio_raw, self_ratio_raw,
+                          quote_target, quote_excluded)
         scope = _failing(ratio, self_ratio)
         if scope is None:
-            log_novelty({**_nov_base(ratio, self_ratio), "retried": False,
+            # A normally-published turn re-arms the defer exit (see below).
+            session.setdefault("novelty_defer_streak", {})[agent.key] = 0
+            log_novelty({**_base, "retried": False,
                          "kept": True, "dropped": False, "reason": "pass"})
             return parsed
 
@@ -2194,7 +2394,7 @@ def run_user_turn(
             f"{agent.key}: novelty group={ratio:.2f}/{nov_th:.2f} "
             f"self={self_ratio:.2f}/{self_nov_th:.2f} — failed on {scope}, retrying once",
         )
-        log_novelty({**_nov_base(ratio, self_ratio), "retried": True, "kept": None,
+        log_novelty({**_base, "retried": True, "kept": None,
                      "dropped": False, "reason": f"trigger:{scope}"})
 
         # Name the actual failure, so the retry fixes the right problem: the
@@ -2219,16 +2419,24 @@ def run_user_turn(
                     "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
                     "— only if the concrete options are not yet on the table — a new evaluation "
                     "dimension.\n"
-                    "If you genuinely have nothing new, reply with one short sentence saying so and naming "
-                    "whose point you are deferring to. Either way, do not ask a question this time. "
-                    "Keep the required [MESSAGE]/[RATIONALE] output format."
+                    "If you genuinely have nothing new, reply with ONE short sentence saying so and "
+                    "naming whose point you are deferring to, and tag it [MOVE] concede @TheirName. "
+                    "Either way, do not ask a question this time. "
+                    # The full format, [MOVE] included: retried turns used to come back
+                    # without a move self-report, which left their map edges unlabelled
+                    # AND made the deferral exit above structurally unreachable.
+                    "Keep the FULL required output format: [MOVE], then [RATIONALE], then [MESSAGE]."
                 ),
             },
         ]
         retry_raw = create(client_chat, retry_messages, min(temp + 0.15, 1.4), max_output_tokens,
                            call_kind="novelty_retry", agent_key=agent.key, retry_index=1)
         retry_parsed = parse_agent_turn(retry_raw)
-        retry_ratio, retry_self = _scores(retry_parsed.get("message") or "")
+        (retry_ratio, retry_self, retry_ratio_raw, retry_self_raw,
+         retry_quote_target, retry_quote_excluded) = \
+            _scores(retry_parsed.get("message") or "", retry_parsed)
+        _retry_base = _nov_base(retry_ratio, retry_self, retry_ratio_raw, retry_self_raw,
+                                retry_quote_target, retry_quote_excluded)
 
         # The retry is judged against the DROP bar, not the trigger that asked
         # for it. Measured: with the two equal, 21 of 28 retries were discarded
@@ -2236,11 +2444,12 @@ def run_user_turn(
         retry_scope = _failing_drop(retry_ratio, retry_self)
         _retry_empty = not (retry_parsed.get("message") or "").strip()
         if retry_scope is None:
+            session.setdefault("novelty_defer_streak", {})[agent.key] = 0
             log_thinking(
                 "novelty_retry",
                 f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f} (kept)",
             )
-            log_novelty({**_nov_base(retry_ratio, retry_self), "retried": True, "kept": True,
+            log_novelty({**_retry_base, "retried": True, "kept": True,
                          "dropped": False, "reason": "retry_cleared_drop_bar",
                          "first_group_ratio": round(ratio, 4),
                          "first_self_ratio": round(self_ratio, 4)})
@@ -2251,8 +2460,29 @@ def run_user_turn(
                 f"{agent.key}: retry still failing {retry_scope}, but the user named this "
                 f"agent — kept anyway (answering beats silence)",
             )
-            log_novelty({**_nov_base(retry_ratio, retry_self), "retried": True, "kept": True,
+            log_novelty({**_retry_base, "retried": True, "kept": True,
                          "dropped": False, "reason": f"kept_named_by_user:{retry_scope}",
+                         "first_group_ratio": round(ratio, 4),
+                         "first_self_ratio": round(self_ratio, 4)})
+            return retry_parsed
+        # Explicit short deferral: [MOVE] concede @Target within the length cap.
+        # Scored a deferral would always fail — it quotes the point it yields
+        # to — so the check is structural, after named_by_user (full answers
+        # beat hand-offs) and before the drop. The streak cap stops "always
+        # concede" from becoming the universal escape hatch: a second
+        # consecutive deferral by the same agent drops like before.
+        defer_target = is_defer_turn(retry_parsed, mention_patterns, agent.key)
+        _streaks = session.setdefault("novelty_defer_streak", {})
+        if defer_target and _streaks.get(agent.key, 0) < NOVELTY_DEFER_MAX_STREAK:
+            _streaks[agent.key] = _streaks.get(agent.key, 0) + 1
+            log_thinking(
+                "novelty_retry",
+                f"{agent.key}: retry still failing {retry_scope}, but it is an explicit "
+                f"deferral to {defer_target} — published as a hand-off",
+            )
+            log_novelty({**_retry_base, "retried": True, "kept": True,
+                         "dropped": False, "reason": f"kept_defer:{retry_scope}",
+                         "defer_target": defer_target,
                          "first_group_ratio": round(ratio, 4),
                          "first_self_ratio": round(self_ratio, 4)})
             return retry_parsed
@@ -2264,7 +2494,7 @@ def run_user_turn(
         # An empty or unparseable retry scores (0.0, 0.0) via the _scores short-circuit and
         # would otherwise be filed as repetition. It is a generation failure; say so.
         _reason = "dropped:empty_retry" if _retry_empty else f"dropped:{retry_scope}"
-        log_novelty({**_nov_base(retry_ratio, retry_self), "retried": True, "kept": False,
+        log_novelty({**_retry_base, "retried": True, "kept": False,
                      "dropped": True, "reason": _reason,
                      "first_group_ratio": round(ratio, 4),
                      "first_self_ratio": round(self_ratio, 4)})
@@ -2367,6 +2597,10 @@ def run_user_turn(
         # Board goes in front of the intro note so "options on the table" reads
         # as context, not as part of the formatting instruction.
         extra = board_prompt_note() + extra
+        # The turn directive comes LAST — closest to generation, after all
+        # context blocks — and rides in both the mention and regular branches.
+        if turn_directive:
+            extra += turn_directive
         effective_temp = temperature
         if stall_triggered:
             effective_temp = min(temperature + 0.25, 1.4)
@@ -2579,6 +2813,11 @@ def run_user_turn(
     session["turns_since_moderator"] = int(session.get("turns_since_moderator") or 0) + 1
     session["user_turns_since_moderator"] = int(session.get("user_turns_since_moderator") or 0) + 1
     session["user_spoke_since_moderator"] = True
+
+    if turn_directive:
+        # One row per affected user turn: the study-side filter for "was the
+        # low-content contract active here". Old rooms have no such row.
+        log_thinking("turn_directive", "low_content contract active for this turn")
 
     if moderator_state.get("state") == CONCLUDED_STATE:
         moderator_state["state"] = "Convergence"
@@ -3625,6 +3864,10 @@ def main():
             maybe_run_moderator()
             return True
 
+        # Per-agent defer streak (CLI has no session dict; HTTP keeps its own
+        # in session["novelty_defer_streak"]).
+        novelty_defer_streak: Dict[str, int] = {}
+
         def enforce_novelty(agent: ChatAgent, messages: List[dict], parsed: dict,
                              temp: float) -> dict:
             """
@@ -3670,15 +3913,32 @@ def main():
 
             own_prefix = f"{agent.name}: "
 
-            def _scores(message: str) -> tuple:
-                """(group_ratio, self_ratio). self_ratio is 1.0 until this agent
-                has spoken at least once (nothing of its own to repeat yet)."""
+            def _scores(message: str, src_parsed: Optional[dict] = None) -> tuple:
+                """(group, own, group_raw, own_raw, quote_target, quote_excluded).
+                Same quote-exclusion semantics as the HTTP twin: the reply-target's
+                last message does not count against novelty; *_raw keep the old
+                meaning. self_ratio is 1.0 until this agent has spoken."""
                 if not message:
-                    return 0.0, 0.0
-                group = novelty_ratio(message, transcript_lines[-args.novelty_window:])
-                own = [ln[len(own_prefix):] for ln in transcript_lines
-                       if ln.startswith(own_prefix)][-args.self_novelty_window:]
-                return group, (novelty_ratio(message, own) if own else 1.0)
+                    return 0.0, 0.0, 0.0, 0.0, None, 0
+                window = transcript_lines[-args.novelty_window:]
+                own_lines = [ln[len(own_prefix):] for ln in transcript_lines
+                             if ln.startswith(own_prefix)][-args.self_novelty_window:]
+                group_raw = novelty_ratio(message, window)
+                own_raw = novelty_ratio(message, own_lines) if own_lines else 1.0
+                exclude: set = set()
+                target = resolve_reply_target(
+                    (src_parsed or {}).get("move_detail") or "", message,
+                    mention_patterns, agent.key)
+                if target:
+                    t_text = last_message_of(name_map.get(target, target), transcript_lines)
+                    if t_text:
+                        exclude = _content_tokens(t_text)
+                if not exclude:
+                    return group_raw, own_raw, group_raw, own_raw, None, 0
+                group = novelty_ratio(message, window, exclude_tokens=exclude)
+                own = (novelty_ratio(message, own_lines, exclude_tokens=exclude)
+                       if own_lines else 1.0)
+                return group, own, group_raw, own_raw, target, len(exclude)
 
             def _failing(group: float, own: float):
                 """Which scope (if any) this message fails, as a short label."""
@@ -3697,15 +3957,18 @@ def main():
                     return "self"
                 return None
 
-            ratio, self_ratio = _scores(txt)
+            ratio, self_ratio, _g_raw, _s_raw, _q_target, _q_excluded = _scores(txt, parsed)
             scope = _failing(ratio, self_ratio)
             if scope is None:
+                novelty_defer_streak[agent.key] = 0
                 return parsed
 
             log_thinking("novelty_retry",
                          f"{agent.key}: novelty group={ratio:.2f}/{args.novelty_threshold:.2f} "
                          f"self={self_ratio:.2f}/{args.self_novelty_threshold:.2f} — "
-                         f"failed on {scope}, retrying once")
+                         f"failed on {scope}, retrying once"
+                         # Appended, never inserted: test_self_novelty matches prefix substrings.
+                         f" (raw group={_g_raw:.2f} quote_target={_q_target} excluded={_q_excluded})")
 
             # Name the actual failure, so the retry fixes the right problem: the
             # generic "the group already has this" reads as wrong (and gets
@@ -3727,9 +3990,10 @@ def main():
                     "someone made, a specific fact from KNOWN USER CONTEXT that nobody has cited yet, or "
                     "— only if the concrete options are not yet on the table — a new evaluation "
                     "dimension.\n"
-                    "If you genuinely have nothing new, reply with one short sentence saying so and naming "
-                    "whose point you are deferring to. Either way, do not ask a question this time. "
-                    "Keep the required [MESSAGE]/[RATIONALE] output format."
+                    "If you genuinely have nothing new, reply with ONE short sentence saying so and "
+                    "naming whose point you are deferring to, and tag it [MOVE] concede @TheirName. "
+                    "Either way, do not ask a question this time. "
+                    "Keep the FULL required output format: [MOVE], then [RATIONALE], then [MESSAGE]."
                 )},
             ]
             meta: dict = {}
@@ -3737,7 +4001,8 @@ def main():
                                         min(temp + 0.15, 1.4), args.max_output_tokens, meta=meta)
             log_generation_meta(agent.key, meta, note="novelty retry")
             retry_parsed = parse_agent_turn(retry_raw)
-            retry_ratio, retry_self = _scores(retry_parsed["message"])
+            retry_ratio, retry_self, _rg_raw, _rs_raw, _rq_target, _rq_excluded = \
+                _scores(retry_parsed["message"], retry_parsed)
 
             # The retry is the last chance: it must clear BOTH scopes on its own,
             # or the agent says nothing at all. The old rule kept a retry whenever
@@ -3752,9 +4017,20 @@ def main():
             # because engaging a specific claim reuses that claim's words.
             retry_scope = _failing_drop(retry_ratio, retry_self)
             if retry_scope is None:
+                novelty_defer_streak[agent.key] = 0
                 log_thinking("novelty_retry",
                              f"{agent.key}: retry novelty group={retry_ratio:.2f} "
                              f"self={retry_self:.2f} (kept)")
+                return retry_parsed
+            # Same structural defer exit as the HTTP twin: a short explicit
+            # [MOVE] concede @Target hand-off publishes instead of vanishing,
+            # at most once in a row per agent.
+            defer_target = is_defer_turn(retry_parsed, mention_patterns, agent.key)
+            if defer_target and novelty_defer_streak.get(agent.key, 0) < NOVELTY_DEFER_MAX_STREAK:
+                novelty_defer_streak[agent.key] = novelty_defer_streak.get(agent.key, 0) + 1
+                log_thinking("novelty_retry",
+                             f"{agent.key}: retry still failing {retry_scope}, but it is an "
+                             f"explicit deferral to {defer_target} — kept as a hand-off")
                 return retry_parsed
             log_thinking("novelty_retry",
                          f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "
@@ -3986,7 +4262,8 @@ def create_response_with_client(client, model: str, messages: List[dict], temper
     _t0 = time.perf_counter()
     resp = client.responses.create(
         model=model, input=messages,
-        temperature=temperature, max_output_tokens=max_output_tokens,
+        max_output_tokens=max_output_tokens,
+        **_sampling_params(model, temperature),
     )
     meta["latency_ms"] = int((time.perf_counter() - _t0) * 1000)
     _collect_meta_sdk(resp, meta)

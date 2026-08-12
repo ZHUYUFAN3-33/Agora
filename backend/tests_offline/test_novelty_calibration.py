@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """Novelty guard calibration: a retry is kept unless it is near-verbatim.
 
+NOTE Checker.check is (name, cond, detail) — name FIRST. Every assertion in
+this file originally had the two swapped, which made the string argument the
+condition: always truthy, every check vacuously green. Found when a new test
+copied the pattern and visibly passed with a failing condition.
+
 Measured over 7 real rooms before this change: the drop bar equalled the retry
 trigger (0.5), so 21 of 28 retries were discarded and the agent said nothing at
 all on three quarters of the turns it was asked to redo. 11 of those 28 retries
@@ -79,26 +84,26 @@ def run(retry_body):
 print("== scores are what we think they are ==")
 g_dup = aw.novelty_ratio(NEAR_DUP, [f"user: {SEED}"])
 g_imp = aw.novelty_ratio(IMPROVED, [f"user: {SEED}"])
-check(g_dup < 0.25, f"near-duplicate scores below the drop bar ({g_dup:.2f})")
-check(0.25 <= g_imp < 0.5, f"improved retry lands in the contested band ({g_imp:.2f})")
+check(f"near-duplicate scores below the drop bar ({g_dup:.2f})", g_dup < 0.25)
+check(f"improved retry lands in the contested band ({g_imp:.2f})", 0.25 <= g_imp < 0.5)
 
 print("== the retry survives unless it is near-verbatim ==")
 spoke, calls = run(IMPROVED)
-check(calls == 2, "the guard did ask for one retry")
-check(len(spoke) == 1, "a retry that adds real terms is PUBLISHED (was dropped at the old bar)")
-check(spoke and IMPROVED in (spoke[0].get("txt") or ""), "the published text is the retry, not the original")
+check("the guard did ask for one retry", calls == 2)
+check("a retry that adds real terms is PUBLISHED (was dropped at the old bar)", len(spoke) == 1)
+check("the published text is the retry, not the original", bool(spoke and IMPROVED in (spoke[0].get("txt") or "")))
 
 spoke_dup, calls_dup = run(NEAR_DUP)
-check(calls_dup == 2, "the guard asked for a retry here too")
-check(len(spoke_dup) == 0, "a near-verbatim retry is still dropped — silence needs strong evidence")
+check("the guard asked for a retry here too", calls_dup == 2)
+check("a near-verbatim retry is still dropped — silence needs strong evidence", len(spoke_dup) == 0)
 
 print("== defaults are the calibrated ones, in both entry points ==")
 import inspect
 sig = inspect.signature(aw.run_user_turn)
-check(sig.parameters["max_output_tokens"].default >= 520,
-      "token budget fits four blocks",
+check("token budget fits four blocks",
+      sig.parameters["max_output_tokens"].default >= 520,
       str(sig.parameters["max_output_tokens"].default))
-check("novelty_drop_threshold" in sig.parameters, "run_user_turn exposes the drop bar")
+check("run_user_turn exposes the drop bar", "novelty_drop_threshold" in sig.parameters)
 
 src = inspect.getsource(aw.build_parser) if hasattr(aw, "build_parser") else ""
 _ck.finish("ALL CHECKS PASSED")

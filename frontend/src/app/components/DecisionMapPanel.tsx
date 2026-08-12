@@ -565,6 +565,15 @@ export function DecisionMapPanel({
                             label={t(lang, "map.param.move")}
                             value={selectedTurn.move_detail || selectedTurn.move_kind || t(lang, "map.param.none")}
                           />
+                          {/* Summary before rationale: read top-down this goes
+                              concrete -> abstract. The other order made a reader
+                              meet the agent's motive before knowing what was said. */}
+                          <ParamRow
+                            lang={lang}
+                            label={t(lang, "map.param.summary")}
+                            value={selectedTurn.summary || selectedTurn.fallback_text}
+                            multiline
+                          />
                           {selectedTurn.rationale && (
                             <ParamRow
                               lang={lang}
@@ -584,12 +593,6 @@ export function DecisionMapPanel({
                               multiline
                             />
                           )}
-                          <ParamRow
-                            lang={lang}
-                            label={t(lang, "map.param.summary")}
-                            value={selectedTurn.summary || selectedTurn.fallback_text}
-                            multiline
-                          />
                           {selectedTurn.badges?.choice && (
                             <ParamRow
                               lang={lang}

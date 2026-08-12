@@ -1132,19 +1132,19 @@ export function DecisionRiver({
                 {hoveredTo.turn.is_user ? userLabel(lang, userName) : hoveredTo.turn.speaker}
               </span>
             </p>
-            {/* A turn only carries a rationale when the model emitted one; when
-                it did not, show what was replied TO rather than leaving the
-                hover as a bare "A replied B", which reads as a broken tooltip. */}
-            {hoveredFrom.turn.rationale ? (
-              <p className="text-[10px] text-black/70 mt-1 leading-snug">
-                “{hoveredFrom.turn.rationale}”
-              </p>
-            ) : (
-              <p className="text-[10px] text-black/60 mt-1 leading-snug">
-                <span className="text-black/40">{t(lang, "map.tooltip.repliedTo")} </span>
-                {hoveredTo.turn.summary || hoveredTo.turn.fallback_text}
-              </p>
-            )}
+            {/* Both ends, not the rationale. The header above gives two NAMES; an
+                arc is about the PAIR, so the thing the reader cannot get from it
+                is what each end actually said — and at low zoom the endpoint cards
+                are collapsed or off-screen. The agent's private motive answers a
+                second-order question and lives on click (DecisionMapPanel), where
+                there is room for it under the summary. */}
+            <p className="text-[10px] text-black/70 mt-1 leading-snug">
+              {hoveredFrom.turn.summary || hoveredFrom.turn.fallback_text}
+            </p>
+            <p className="text-[10px] text-black/60 mt-1 leading-snug">
+              <span className="text-black/40">{t(lang, "map.tooltip.repliedTo")} </span>
+              {hoveredTo.turn.summary || hoveredTo.turn.fallback_text}
+            </p>
           </div>
         )}
 

@@ -22,6 +22,11 @@ from profile_store import (
     most_recent_intake,
 )
 from scenario_background import load_background_template, get_scenario_background
+
+# Archival session summary — extraction, not in-character generation, so it rides the
+# same cheap tier as the other summarisers rather than the discussion model.
+MEMORY_MODEL = os.getenv("AGORA_SUMMARY_MODEL") or "gpt-4o"
+
 from agent_assembly import build_all_agent_specs, build_agent_spec
 from stance import stance_enabled, assign_stance, get_stance_text
 
@@ -303,7 +308,7 @@ def persist_session_memory(
     transcript_text: str,
     lang: str,
     create_response,
-    model: str = "gpt-4o",
+    model: str = MEMORY_MODEL,
 ) -> Optional[dict]:
     """End-of-session archival summary → memory jsonl."""
     if not HAVE_SESSION_MEMORY or not user_id or not scenario_type:

@@ -30,7 +30,7 @@ from lang_utils import normalize_lang, pick
 
 # 想换模型或调稳一点，改这两个常量即可，不做成命令行参数——用户不该为了看一份
 # 总结先去选模型。温度比群聊的 0.8 低很多：这是归纳，不需要人格和发挥。
-MODEL = "gpt-4o"
+MODEL = os.getenv("AGORA_SUMMARY_MODEL") or "gpt-4o"
 TEMPERATURE = 0.3
 MAX_OUTPUT_TOKENS = 900
 
@@ -142,6 +142,14 @@ PHASE_PROMPT = {
 }
 
 # 整场级是这个脚本的重点：结论走向 + 它有多可靠。
+#
+# why 条目只标注说话人，不让模型断言"是否引用了你提供的信息"。原先的措辞要求
+# 每条标注来源，实测（2026-08-12，7 个房间 × 2 次重跑）52 条 why 里 18 条带
+# 出处章，其中 16 条正面断言"引用了你提供的信息"，11 条盖在顾问自己的推论上
+# ——纯属编造，且 luna 和 4o 两个摘要器都犯，是提示词本身的问题。
+# "谁说的"是模型对着带名字的逐行记录做的抄读任务，基本不错；"是不是用户
+# 提供的"要区分 intake 事实和顾问推论，属于证据链查表，生成器做不了。出处
+# 想恢复的话由确定性代码从 stance/quote 证据链渲染，追不到就不写。
 OVERALL_PROMPT = {
     "zh": (
         "下面是一场决策讨论按阶段整理出的记录。请判断这场讨论最终倒向哪一边，并写给用户本人看。\n"
@@ -149,12 +157,14 @@ OVERALL_PROMPT = {
         "只使用记录里的内容，不要引入新的事实，也不要给出记录里没人提过的建议。\n"
         "尤其注意诚实：如果倾向只来自其中一两位顾问、或者用户本人从没确认过，必须说明；"
         "如果讨论根本没有分出方向，direction 就写“没有形成明确走向”，不要硬凑一个结论。\n"
+        "理由只标注说话人。绝不要写“这是你提供的信息”“引用了你提供的信息”这类来源断言"
+        "——信息最初来自谁不由你判断。\n"
         "严格输出一个 JSON 对象，不要写解释文字或代码块标记：\n"
         '{\n'
         '  "direction": "讨论最终指向哪个选择，一句话直说",\n'
         '  "strength": "这个走向有多强，只能是这三个词之一：明确 / 倾向 / 未定",\n'
         '  "strength_reason": "为什么是这个强度，一句（谁支持、谁没表态、你有没有确认过）",\n'
-        '  "why": ["支撑这个走向的具体理由，每条注明来自谁，以及是否引用了你提供的信息"],\n'
+        '  "why": ["支撑这个走向的具体理由，每条注明是谁说的（你 / ChatbotA / ChatbotB / ChatbotC）"],\n'
         '  "against": ["反过来仍然成立、但在讨论里没有被正面回应的理由"],\n'
         '  "your_role": "你自己的发言对这个走向起了什么作用；如果你从没确认过它，明确指出",\n'
         '  "would_change": ["哪些信息补上或哪些条件变了，会把这个走向翻过来"],\n'
@@ -169,12 +179,15 @@ OVERALL_PROMPT = {
         "Be honest above all: if the leaning comes from only one or two advisors, or the user "
         "never confirmed it, say so. If the discussion never picked a direction, write "
         "\"no clear direction formed\" — do not manufacture a conclusion.\n"
+        "Attribute each reason only to its speaker. Never assert where a piece of information "
+        "originally came from — no \"based on information you provided\" or similar provenance "
+        "claims; that is not yours to judge.\n"
         "Output strictly one JSON object, no prose and no code fences:\n"
         '{\n'
         '  "direction": "which choice the discussion finally pointed to, one sentence",\n'
         '  "strength": "how strong that leaning is; exactly one of: clear / leaning / undecided",\n'
         '  "strength_reason": "why that strength, one sentence (who backed it, who stayed silent, whether you confirmed it)",\n'
-        '  "why": ["concrete reasons backing the leaning, each naming who gave it and whether it used information you provided"],\n'
+        '  "why": ["concrete reasons backing the leaning, each naming who said it (you / ChatbotA / ChatbotB / ChatbotC)"],\n'
         '  "against": ["reasons on the other side that still hold and were never answered in the discussion"],\n'
         '  "your_role": "what your own input did to this leaning; state plainly if you never confirmed it",\n'
         '  "would_change": ["what information or changed conditions would flip this"],\n'

@@ -156,10 +156,10 @@ is written live as the session runs.
 Read manifest.json first: it records the line count of every file, flags empty
 rooms, and flags rooms where the on-disk log and the SQLite copy disagree.
 
-NOT YET WRITTEN: generation.jsonl and novelty.jsonl are documented below and are
-collected by the export, but the code that writes them has not landed yet. Rooms
-recorded before it does will have these files empty or absent. Check
-manifest.json rather than assuming a file has content.
+Rooms are only as complete as the code that was running when they were recorded.
+config.jsonl, generation.jsonl, novelty.jsonl and ux.jsonl were added later than
+the rest, so older rooms have them empty or absent. Check manifest.json rather
+than assuming a file has content.
 
 
 WHAT EACH FILE RECORDS
@@ -256,22 +256,42 @@ params.jsonl
 
 generation.jsonl
   One line per LLM call, including calls that produced nothing visible.
-  Fields: model, call_kind, agent, retry_index, input_tokens, output_tokens,
-  status, incomplete_reason, refusal, latency_ms.
-  call_kind separates agent turns from admin1/admin2/admin3, memory distillation,
-  refusal retries, novelty retries and stall bursts. Expect roughly 5x more rows
-  here than there are messages in chat.jsonl.
-  Rows are emitted before a message id exists, so they cannot be joined to
-  chat.jsonl by id -- join on message_index, and expect dropped turns to have no
-  counterpart at all.
+  Fields: seq (monotonic per room), call_kind, agent, retry_index, user_turn,
+  message_index, model, input_tokens, output_tokens, total_tokens, cached_tokens,
+  reasoning_tokens, status, incomplete_reason, refusal, latency_ms, output_chars.
+    call_kind   agent_turn, admin1, admin2, admin3_moderator, memory_distill,
+                refusal_retry, novelty_retry, stall_burst.
+    model       what the API reported serving, which can be a dated snapshot
+                rather than the alias that was requested.
+  Expect several times more rows here than messages in chat.jsonl -- one user turn
+  costs an admin1 + admin2 pair per speaker plus the turns themselves.
+  admin2 runs with a 16-token cap, so status "incomplete" with
+  incomplete_reason "max_output_tokens" is its NORMAL outcome. Exclude
+  call_kind == "admin2" from any truncation analysis or it dominates the result.
+  Rows are emitted before a message id exists, and dropped turns never reach the
+  point where one is minted, so rows cannot be joined to chat.jsonl by id. Join on
+  message_index, and expect dropped turns to have no counterpart at all.
 
 novelty.jsonl
   The repetition guard, structured. One row per scored generation.
-  Fields: agent, seq, group_ratio, self_ratio, the RESOLVED thresholds that were
-  actually in force, group_failed, self_failed, retried, kept, dropped, reason.
-  Thresholds are recorded per row rather than assumed, because the HTTP and CLI
-  defaults disagree and the documented value does not match the code.
-  Stall-burst turns publish without novelty scoring, so they have no row here.
+  Fields: seq, agent, agent_name, group_ratio, self_ratio, group_threshold,
+  self_threshold, drop_threshold, group_window, self_window, group_failed,
+  self_failed, named_by_user, retried, kept, dropped, reason. Retry rows also
+  carry first_group_ratio / first_self_ratio from before the retry.
+    group_ratio  novelty against the recent transcript window.
+    self_ratio   novelty against this agent's own earlier messages.
+    reason       pass, trigger:<scope>, retry_cleared_drop_bar,
+                 kept_named_by_user:<scope>, dropped:<scope>, dropped:empty_retry.
+  Thresholds are recorded per row rather than assumed: the HTTP and CLI defaults
+  disagree with each other and with the documented value, so a stored ratio is
+  uninterpretable without the bar it was actually judged against.
+  Use group_failed / self_failed, not reason, to tell which scope failed -- a
+  message can fail both and reason names only the first.
+  dropped:empty_retry means the retry came back empty or unparseable, which scores
+  0.0 by short-circuit. That is a generation failure, not repetition; do not count
+  it as one.
+  Stall-burst turns publish without any novelty scoring, so they have no row here.
+  Coverage is therefore not "every turn".
 
 ux.jsonl
   Client-side behavior: what the user did, as opposed to what they typed.

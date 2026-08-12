@@ -169,6 +169,9 @@ def _collect_meta_sdk(resp, meta: dict) -> None:
     the next occurrence is diagnosable instead of a guess.
     """
     meta["status"] = getattr(resp, "status", None)
+    # The model that actually served the request, which can differ from the one asked for
+    # when an alias resolves to a dated snapshot.
+    meta["model"] = getattr(resp, "model", None)
     details = getattr(resp, "incomplete_details", None)
     if details is not None:
         meta["incomplete_reason"] = getattr(details, "reason", None) or (
@@ -182,7 +185,18 @@ def _collect_meta_sdk(resp, meta: dict) -> None:
                     meta["refusal"] = getattr(c, "refusal", "") or "(refusal content)"
         usage = getattr(resp, "usage", None)
         if usage is not None:
+            # getattr rather than attribute access throughout: the project pins
+            # openai>=1.40,<2 but the field set differs across versions, and a missing
+            # richer field must not take down a generation.
             meta["output_tokens"] = getattr(usage, "output_tokens", None)
+            meta["input_tokens"] = getattr(usage, "input_tokens", None)
+            meta["total_tokens"] = getattr(usage, "total_tokens", None)
+            in_details = getattr(usage, "input_tokens_details", None)
+            if in_details is not None:
+                meta["cached_tokens"] = getattr(in_details, "cached_tokens", None)
+            out_details = getattr(usage, "output_tokens_details", None)
+            if out_details is not None:
+                meta["reasoning_tokens"] = getattr(out_details, "reasoning_tokens", None)
     except Exception:
         pass
 
@@ -199,10 +213,12 @@ def create_response(model: str, messages: List[dict], temperature: float, max_ou
         meta = {}
     client = _load_openai_client()
     if client is not None:
+        _t0 = time.perf_counter()
         resp = client.responses.create(
             model=model, input=messages,
             temperature=temperature, max_output_tokens=max_output_tokens,
         )
+        meta["latency_ms"] = int((time.perf_counter() - _t0) * 1000)
         _collect_meta_sdk(resp, meta)
         if hasattr(resp, "output_text") and resp.output_text:
             return resp.output_text.strip()
@@ -221,12 +237,17 @@ def create_response(model: str, messages: List[dict], temperature: float, max_ou
         return str(resp).strip()
 
     payload = {"model": model, "input": messages, "temperature": temperature, "max_output_tokens": max_output_tokens}
+    _t0 = time.perf_counter()
     resp = _responses_create_http(payload)
+    meta["latency_ms"] = int((time.perf_counter() - _t0) * 1000)
     meta["status"] = resp.get("status")
+    meta["model"] = resp.get("model")
     if isinstance(resp.get("incomplete_details"), dict):
         meta["incomplete_reason"] = resp["incomplete_details"].get("reason")
     if isinstance(resp.get("usage"), dict):
         meta["output_tokens"] = resp["usage"].get("output_tokens")
+        meta["input_tokens"] = resp["usage"].get("input_tokens")
+        meta["total_tokens"] = resp["usage"].get("total_tokens")
     out_parts: List[str] = []
     for item in resp.get("output", []) or []:
         for c in item.get("content", []) or []:
@@ -1657,10 +1678,80 @@ def run_user_turn(
         fp.write(json.dumps(obj, ensure_ascii=False) + "\n")
         fp.flush()
 
-    def create(client, messages: List[dict], temp: float, max_tok: int, meta: Optional[dict] = None) -> str:
+    _gen_seq = {"n": 0}
+    _nov_seq = {"n": 0}
+    _meta_probe: Dict[str, bool] = {}
+
+    def _client_accepts_meta() -> bool:
+        if "v" not in _meta_probe:
+            try:
+                import inspect
+                _meta_probe["v"] = "meta" in inspect.signature(create_response_with_client).parameters
+            except (TypeError, ValueError):
+                _meta_probe["v"] = False
+        return _meta_probe["v"]
+
+    def create(client, messages: List[dict], temp: float, max_tok: int,
+               meta: Optional[dict] = None, *, call_kind: str = "unknown",
+               agent_key: str = "", retry_index: int = 0) -> str:
+        # Always allocate a meta dict, and pass it into BOTH branches. The branch taken in
+        # production is the first one; it previously discarded metadata entirely, so the
+        # caller's meta stayed empty no matter what it asked for.
+        m = meta if meta is not None else {}
         if create_response_with_client is not None and client is not None:
-            return create_response_with_client(client, model, messages, temp, max_tok) or ""
-        return create_response(model, messages, temp, max_tok, meta=meta) or ""
+            # Injected test doubles predate the meta parameter and take (client, model,
+            # messages, temp, max_tok) only. Probing the signature keeps them working and
+            # keeps a genuine TypeError from inside the call from being swallowed.
+            if _client_accepts_meta():
+                out = create_response_with_client(client, model, messages, temp, max_tok, meta=m) or ""
+            else:
+                out = create_response_with_client(client, model, messages, temp, max_tok) or ""
+        else:
+            out = create_response(model, messages, temp, max_tok, meta=m) or ""
+        log_generation(m, call_kind=call_kind, agent_key=agent_key,
+                       retry_index=retry_index, output_chars=len(out))
+        return out
+
+    def log_generation(meta: dict, *, call_kind: str, agent_key: str = "",
+                       retry_index: int = 0, output_chars: int = 0) -> None:
+        """One row per LLM call, including calls that produce nothing visible.
+
+        Emitted before append_agent mints a message id, and dropped turns never reach
+        append_agent at all, so a row cannot carry a message_id. message_index is the
+        prospective history position -- the same convention choices.jsonl uses.
+        """
+        _gen_seq["n"] += 1
+        _append_jsonl(session.get("generation_fp"), {
+            "chat_room_id": room_id,
+            "time": now_local_iso(),
+            "seq": _gen_seq["n"],
+            "call_kind": call_kind,
+            "agent": agent_key,
+            "retry_index": retry_index,
+            "user_turn": session.get("user_turn_count"),
+            "message_index": len(session.get("history") or []),
+            "model": meta.get("model") or model,
+            "input_tokens": meta.get("input_tokens"),
+            "output_tokens": meta.get("output_tokens"),
+            "total_tokens": meta.get("total_tokens"),
+            "cached_tokens": meta.get("cached_tokens"),
+            "reasoning_tokens": meta.get("reasoning_tokens"),
+            "status": meta.get("status"),
+            "incomplete_reason": meta.get("incomplete_reason"),
+            "refusal": meta.get("refusal"),
+            "latency_ms": meta.get("latency_ms"),
+            "output_chars": output_chars,
+        })
+
+    def log_novelty(record: dict) -> None:
+        """Structured repetition-guard record. Emitted IN ADDITION to the formatted
+        thinking-log strings, which two offline tests parse and must keep working."""
+        _nov_seq["n"] += 1
+        # seq, not turn_idx: no chat row is written for a dropped turn, so consecutive
+        # drops would otherwise share one index (and land on a user row).
+        _append_jsonl(session.get("novelty_fp"),
+                      {"chat_room_id": room_id, "time": now_local_iso(),
+                       "seq": _nov_seq["n"], **record})
 
     def log_thinking(character: str, txt: str) -> None:
         _append_jsonl(
@@ -1739,6 +1830,8 @@ def run_user_turn(
                 [{"role": "user", "content": "\n".join(prompt_lines)}],
                 0.3,
                 60,
+                call_kind="memory_distill",
+                agent_key=agent_key,
             ).strip()
         except Exception as e:
             log_thinking("memory_distill_error", f"{agent_key}: {e}")
@@ -1928,7 +2021,8 @@ def run_user_turn(
                 ),
             },
         ]
-        raw = create(client_admin, msgs, 0.0, 300)
+        raw = create(client_admin, msgs, 0.0, 300,
+                     call_kind="admin3_moderator", agent_key="admin3")
         log_moderator("admin3_moderator", raw or "")
         parsed = parse_moderator_plan(raw or "")
         if not parsed:
@@ -2067,9 +2161,32 @@ def run_user_turn(
                 return "self"
             return None
 
+        def _nov_base(group: float, own: float) -> dict:
+            """Per-scope booleans and the RESOLVED thresholds, not a single label and not
+            module constants. _failing tests group first, so a message failing BOTH scopes
+            reports only "group"; and the HTTP and CLI defaults for these thresholds
+            disagree, so a stored ratio is uninterpretable without the bar it was judged
+            against."""
+            return {
+                "agent": agent.key,
+                "agent_name": agent.name,
+                "group_ratio": round(group, 4),
+                "self_ratio": round(own, 4),
+                "group_threshold": nov_th,
+                "self_threshold": self_nov_th,
+                "drop_threshold": drop_th,
+                "group_window": novelty_window,
+                "self_window": self_novelty_window,
+                "group_failed": bool(nov_th > 0 and group < nov_th),
+                "self_failed": bool(self_nov_th > 0 and own < self_nov_th),
+                "named_by_user": bool(named_by_user),
+            }
+
         ratio, self_ratio = _scores(txt)
         scope = _failing(ratio, self_ratio)
         if scope is None:
+            log_novelty({**_nov_base(ratio, self_ratio), "retried": False,
+                         "kept": True, "dropped": False, "reason": "pass"})
             return parsed
 
         log_thinking(
@@ -2077,6 +2194,8 @@ def run_user_turn(
             f"{agent.key}: novelty group={ratio:.2f}/{nov_th:.2f} "
             f"self={self_ratio:.2f}/{self_nov_th:.2f} — failed on {scope}, retrying once",
         )
+        log_novelty({**_nov_base(ratio, self_ratio), "retried": True, "kept": None,
+                     "dropped": False, "reason": f"trigger:{scope}"})
 
         # Name the actual failure, so the retry fixes the right problem: the
         # generic "the group already has this" reads as wrong (and gets
@@ -2106,7 +2225,8 @@ def run_user_turn(
                 ),
             },
         ]
-        retry_raw = create(client_chat, retry_messages, min(temp + 0.15, 1.4), max_output_tokens)
+        retry_raw = create(client_chat, retry_messages, min(temp + 0.15, 1.4), max_output_tokens,
+                           call_kind="novelty_retry", agent_key=agent.key, retry_index=1)
         retry_parsed = parse_agent_turn(retry_raw)
         retry_ratio, retry_self = _scores(retry_parsed.get("message") or "")
 
@@ -2114,11 +2234,16 @@ def run_user_turn(
         # for it. Measured: with the two equal, 21 of 28 retries were discarded
         # and the agent simply vanished from those turns.
         retry_scope = _failing_drop(retry_ratio, retry_self)
+        _retry_empty = not (retry_parsed.get("message") or "").strip()
         if retry_scope is None:
             log_thinking(
                 "novelty_retry",
                 f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f} (kept)",
             )
+            log_novelty({**_nov_base(retry_ratio, retry_self), "retried": True, "kept": True,
+                         "dropped": False, "reason": "retry_cleared_drop_bar",
+                         "first_group_ratio": round(ratio, 4),
+                         "first_self_ratio": round(self_ratio, 4)})
             return retry_parsed
         if named_by_user:
             log_thinking(
@@ -2126,13 +2251,29 @@ def run_user_turn(
                 f"{agent.key}: retry still failing {retry_scope}, but the user named this "
                 f"agent — kept anyway (answering beats silence)",
             )
+            log_novelty({**_nov_base(retry_ratio, retry_self), "retried": True, "kept": True,
+                         "dropped": False, "reason": f"kept_named_by_user:{retry_scope}",
+                         "first_group_ratio": round(ratio, 4),
+                         "first_self_ratio": round(self_ratio, 4)})
             return retry_parsed
         log_thinking(
             "novelty_retry",
             f"{agent.key}: retry novelty group={retry_ratio:.2f} self={retry_self:.2f}, "
             f"still failing {retry_scope} — turn dropped",
         )
-        return {"message": "", "rationale": "", "dropped": True}
+        # An empty or unparseable retry scores (0.0, 0.0) via the _scores short-circuit and
+        # would otherwise be filed as repetition. It is a generation failure; say so.
+        _reason = "dropped:empty_retry" if _retry_empty else f"dropped:{retry_scope}"
+        log_novelty({**_nov_base(retry_ratio, retry_self), "retried": True, "kept": False,
+                     "dropped": True, "reason": _reason,
+                     "first_group_ratio": round(ratio, 4),
+                     "first_self_ratio": round(self_ratio, 4)})
+        # drop_reason discriminates this from the refusal guard, which returns an identical
+        # sentinel -- rationale.jsonl's turn_dropped rows could not tell them apart.
+        return {"message": "", "rationale": "", "dropped": True,
+                "drop_reason": _reason,
+                "drop_group_ratio": round(retry_ratio, 4),
+                "drop_self_ratio": round(retry_self, 4)}
 
     def stall_burst(trigger_key: Optional[str] = None) -> None:
         stall_temp = min(temperature + 0.25, 1.4)
@@ -2176,7 +2317,8 @@ def run_user_turn(
                 },
                 {"role": "user", "content": user_prompt},
             ]
-            raw = create(client_chat, messages, stall_temp, max_output_tokens)
+            raw = create(client_chat, messages, stall_temp, max_output_tokens,
+                         call_kind="stall_burst", agent_key=burst_agent.key)
             parsed = parse_agent_turn(raw)
             txt = parsed.get("message") or "…"
             if parsed.get("rationale"):
@@ -2277,14 +2419,17 @@ def run_user_turn(
             },
             {"role": "user", "content": user_prompt},
         ]
-        raw = create(client_chat, messages, effective_temp, max_output_tokens)
+        raw = create(client_chat, messages, effective_temp, max_output_tokens,
+                     call_kind="agent_turn", agent_key=agent.key)
         parsed = parse_agent_turn(raw)
         parsed = enforce_no_refusal(
             agent,
             messages,
             parsed,
             effective_temp,
-            create_fn=lambda msgs, t, mt: create(client_chat, msgs, t, mt),
+            create_fn=lambda msgs, t, mt: create(client_chat, msgs, t, mt,
+                                                 call_kind="refusal_retry",
+                                                 agent_key=agent.key, retry_index=1),
             model=model,
             max_output_tokens=max_output_tokens,
             log_event=log_agent_event,
@@ -2295,12 +2440,19 @@ def run_user_turn(
                 agent, messages, parsed, effective_temp, named_by_user=mention_trigger
             )
         if parsed.get("dropped"):
-            log_agent_event(
-                agent.key,
-                "turn_dropped",
-                "refusal or novelty guard rejected the turn; "
-                "agent stayed silent this turn",
-            )
+            # The refusal guard and the novelty guard return identical sentinels, so this
+            # row used to say "refusal or novelty" and leave the cause unrecoverable.
+            # drop_reason is set only by the novelty path; its absence means refusal.
+            _dr = parsed.get("drop_reason")
+            if _dr:
+                detail = (
+                    f"novelty guard rejected the turn ({_dr}, "
+                    f"group={parsed.get('drop_group_ratio')} self={parsed.get('drop_self_ratio')}); "
+                    "agent stayed silent this turn"
+                )
+            else:
+                detail = "refusal guard rejected the turn; agent stayed silent this turn"
+            log_agent_event(agent.key, "turn_dropped", detail)
             maybe_run_moderator()
             return
         txt = parsed.get("message") or "…"
@@ -2367,13 +2519,15 @@ def run_user_turn(
                 ),
             },
         ]
-        admin1_out = create(client_admin, admin1_messages, 0.2, 260)
+        admin1_out = create(client_admin, admin1_messages, 0.2, 260,
+                            call_kind="admin1", agent_key="admin1")
         log_thinking("admin1", admin1_out or "")
         admin2_messages = [
             {"role": "system", "content": admin2_system},
             {"role": "user", "content": admin1_out or ""},
         ]
-        admin2_out = (create(client_admin, admin2_messages, 0.0, MIN_OUTPUT_TOKENS) or "").strip().upper()
+        admin2_out = (create(client_admin, admin2_messages, 0.0, MIN_OUTPUT_TOKENS,
+                             call_kind="admin2", agent_key="admin2") or "").strip().upper()
         log_thinking("admin2", admin2_out)
 
         def eligible() -> List[str]:
@@ -3801,12 +3955,25 @@ def extract_text(resp) -> str:
     return "".join(parts).strip()
 
 
-def create_response_with_client(client, model: str, messages: List[dict], temperature: float, max_output_tokens: int) -> str:
+def create_response_with_client(client, model: str, messages: List[dict], temperature: float,
+                                max_output_tokens: int, meta: Optional[dict] = None) -> str:
+    """meta: filled in-place, same contract as create_response.
+
+    This is the branch the HTTP server actually takes in production -- app.py always
+    supplies create_response_with_client and get_openai_clients() always returns a live
+    client. Wiring metadata only into create_response would leave the product path silent
+    while still looking correct in tests that omit the client.
+    """
     max_output_tokens = max(int(max_output_tokens), MIN_OUTPUT_TOKENS)
+    if meta is None:
+        meta = {}
+    _t0 = time.perf_counter()
     resp = client.responses.create(
         model=model, input=messages,
         temperature=temperature, max_output_tokens=max_output_tokens,
     )
+    meta["latency_ms"] = int((time.perf_counter() - _t0) * 1000)
+    _collect_meta_sdk(resp, meta)
     return extract_text(resp)
 
 

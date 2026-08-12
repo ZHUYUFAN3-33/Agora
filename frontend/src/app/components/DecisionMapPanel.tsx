@@ -126,6 +126,7 @@ export function DecisionMapPanel({
   userName,
   docked = false,
   onUndock,
+  onEvent,
 }: {
   open: boolean;
   onClose: () => void;
@@ -146,6 +147,10 @@ export function DecisionMapPanel({
    * zoom and pan survive the round trip. */
   docked?: boolean;
   onUndock?: () => void;
+  /** Behavior telemetry sink. Whether anyone actually reads this map is not observable
+   * server-side: opening it only leaves a row when the extract cache misses, and nothing
+   * at all records which node was selected. */
+  onEvent?: (event: string, props?: Record<string, unknown>) => void;
 }) {
   const font = getUiFont(lang);
   const [zoom, setZoom] = useState(1);
@@ -185,6 +190,16 @@ export function DecisionMapPanel({
   const [viewPref, setViewPref] = useState<"ledger" | "river" | null>(null);
   const view: "ledger" | "river" = hasLedger ? viewPref ?? "ledger" : "river";
   const setView = setViewPref;
+
+  // One effect rather than wrapping all eight setSelectedNodeId call sites: this catches
+  // every path into a selection, including the ones driven by props.
+  useEffect(() => {
+    if (open && selectedNodeId) onEvent?.("map_node_selected", { node_id: selectedNodeId, view });
+  }, [selectedNodeId, open, view, onEvent]);
+
+  useEffect(() => {
+    if (open && viewPref) onEvent?.("map_view_changed", { view: viewPref });
+  }, [viewPref, open, onEvent]);
   const selectedTurn = useMemo<RiverTurn | null>(
     () => river?.turns.find((x) => x.id === selectedNodeId) || null,
     [river, selectedNodeId],

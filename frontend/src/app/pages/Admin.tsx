@@ -210,6 +210,25 @@ export default function Admin() {
     });
   };
 
+  // Prefers the server's Content-Disposition name so the filename (which now carries a
+  // timestamp) is decided in one place instead of being mirrored in the client.
+  const downloadZip = async (path: string, fallbackName: string): Promise<string | null> => {
+    const res = await authFetch(path);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return (data as { error?: string }).error || "Export failed";
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const cd = res.headers.get("Content-Disposition") || "";
+    a.download = /filename="?([^"]+)"?/i.exec(cd)?.[1] || fallbackName;
+    a.click();
+    URL.revokeObjectURL(url);
+    return null;
+  };
+
   const exportUsers = async (ids: string[]) => {
     if (ids.length === 0) {
       setActionMsg("Select at least one user to export");
@@ -219,28 +238,31 @@ export default function Admin() {
     setActionMsg(null);
     try {
       const qs = ids.map((id) => `user_id=${encodeURIComponent(id)}`).join("&");
-      const res = await authFetch(`/admin/export?${qs}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setActionMsg(data.error || "Export failed");
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const cd = res.headers.get("Content-Disposition") || "";
-      const m = /filename="?([^"]+)"?/i.exec(cd);
-      a.download = m?.[1] || (ids.length === 1 ? `agora_export_${ids[0]}.zip` : `agora_export_${ids.length}users.zip`);
-      a.click();
-      URL.revokeObjectURL(url);
-      setActionMsg(`Exported ${ids.length} user${ids.length === 1 ? "" : "s"}`);
+      const err = await downloadZip(
+        `/admin/export?${qs}`,
+        ids.length === 1 ? `agora_export_${ids[0]}.zip` : `agora_export_${ids.length}users.zip`,
+      );
+      setActionMsg(err ?? `Exported ${ids.length} user${ids.length === 1 ? "" : "s"}`);
     } finally {
       setBusy(false);
     }
   };
 
   const exportSelected = () => void exportUsers(Array.from(checkedIds));
+
+  const exportRoom = async (roomId: string) => {
+    setBusy(true);
+    setActionMsg(null);
+    try {
+      const err = await downloadZip(
+        `/admin/rooms/${encodeURIComponent(roomId)}/export`,
+        `agora_room_${roomId}.zip`,
+      );
+      setActionMsg(err ?? `Exported session ${roomId}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const openRoom = async (roomId: string) => {
     setBusy(true);
@@ -563,6 +585,16 @@ export default function Admin() {
                         <span className="text-[10px] text-[var(--app-muted-text)]" style={monoFont}>
                           {r.room_id} · {r.scenario_type || "—"} · {r.phase || "—"} · {r.updated_at || ""}
                         </span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void exportRoom(r.room_id)}
+                        className="flex-shrink-0 px-3 text-[10px] text-black/60 hover:bg-black/5 disabled:opacity-40"
+                        style={monoFont}
+                        title="Export this session's logs"
+                      >
+                        Export
                       </button>
                       <button
                         type="button"

@@ -35,6 +35,7 @@ import {
   toneOptions,
 } from "../i18n/ui";
 import { authFetch, getAuth, logoutRequest } from "../auth";
+import { emit, flush as flushTelemetry, setTelemetryRoom, DwellTracker } from "../telemetry";
 import { useAppearanceContext } from "../context/AppearanceContext";
 import {
   type AgentKey,
@@ -2134,6 +2135,17 @@ export default function Chat() {
   // Docked: map collapsed to a floating pill while the user reads evidence in
   // chat; the panel stays mounted so selection/zoom survive the round trip.
   const [decisionMapDocked, setDecisionMapDocked] = useState(false);
+  // Telemetry timing state. Refs, not state: none of this should trigger a render, and
+  // Chat.tsx re-renders often enough that state would both cost paints and lose precision.
+  const mapDwellRef = useRef(new DwellTracker());
+  const decisionMapTopicCountRef = useRef(0);
+  const lastBotMessageAtRef = useRef<number | null>(null);
+  const firstKeystrokeAtRef = useRef<number | null>(null);
+  const keystrokesRef = useRef(0);
+  const backspacesRef = useRef(0);
+  const lastInputLenRef = useRef(0);
+  // message id -> when its option chips first appeared, for chip dwell.
+  const optionShownAtRef = useRef<Map<string, number>>(new Map());
   const [decisionMap, setDecisionMap] = useState<DecisionMapData | null>(null);
   const [decisionMapLoading, setDecisionMapLoading] = useState(false);
   const [decisionMapError, setDecisionMapError] = useState<string | null>(null);
@@ -2248,12 +2260,14 @@ export default function Chat() {
     c.scrollTo({ top: c.scrollHeight, behavior });
   }, []);
   const getPopoverSafeRect = useCallback(() => messagesContainerRef.current?.getBoundingClientRect() ?? null, []);
+  // No mode gate: customization in limited/single mode used to be discarded on both ends,
+  // which is why not a single _params.jsonl exists on disk. mode is sent as a field now.
+  // authFetch, not fetch: the endpoint validates the room id and authorizes the caller.
   const postParamChanges = useCallback((changes: Array<Record<string, unknown>>) => {
     const mode = currentConv?.settings?.mode ?? experimentMode;
-    if (mode !== "full" || !currentConv?.roomId || changes.length === 0) return;
-    fetch(`${API_BASE}/log-param-change`, {
+    if (!currentConv?.roomId || changes.length === 0) return;
+    authFetch(`/log-param-change`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }),
     }).catch(() => {});
   }, [currentConv?.roomId, currentConv?.settings?.mode, experimentMode]);
@@ -2395,6 +2409,30 @@ export default function Chat() {
     setNaviActiveMessageId(null);
     setHighlightedMessageId(null);
     setHighlightedMessageIds([]);
+    // Close out the OUTGOING room's telemetry before repointing the buffer, otherwise a
+    // map left open on conversation switch never produces a close event and an abandoned
+    // draft is attributed to the wrong room.
+    const pendingDwell = mapDwellRef.current.close();
+    if (pendingDwell) emit("map_closed", { ...pendingDwell, reason: "room_switch" });
+    // lastInputLenRef, not inputValue: this effect is keyed on currentConvId, so reading
+    // the state here would close over whichever value that render happened to see.
+    if (lastInputLenRef.current > 0) {
+      emit("composer_draft_abandoned", {
+        chars: lastInputLenRef.current,
+        keystrokes: keystrokesRef.current,
+        backspaces: backspacesRef.current,
+        age_ms: firstKeystrokeAtRef.current ? Date.now() - firstKeystrokeAtRef.current : null,
+      });
+    }
+    void flushTelemetry();
+    setTelemetryRoom(currentConv?.roomId ?? null);
+    lastBotMessageAtRef.current = null;
+    firstKeystrokeAtRef.current = null;
+    keystrokesRef.current = 0;
+    backspacesRef.current = 0;
+    lastInputLenRef.current = 0;
+    optionShownAtRef.current.clear();
+
     setDecisionMapOpen(false);
     setDecisionMapDocked(false);
     setDecisionMap(null);
@@ -2516,6 +2554,10 @@ export default function Chat() {
   const handleOpenDecisionMap = useCallback(() => {
     setDecisionMapOpen(true);
     setDecisionMapDocked(false);
+    mapDwellRef.current.open();
+    // decision_map.jsonl only gets a row when the extract cache misses, so it undercounts
+    // opens. This event is the actual open count.
+    emit("map_opened", { topic_count: decisionMapTopicCountRef.current });
     // Open → smart extract only if transcript changed (backend skips when cache is fresh).
     void fetchDecisionMap({ extract: true });
   }, [fetchDecisionMap]);
@@ -2525,6 +2567,9 @@ export default function Chat() {
   const handleMapJumpIndexes = useCallback(
     (indexes: number[]) => {
       setDecisionMapDocked(true);
+      // Docked means mounted but not being read -- excluded from focused_ms.
+      mapDwellRef.current.dock();
+      emit("map_docked", { evidence_count: indexes.length });
       jumpToRange(indexes);
     },
     [jumpToRange],
@@ -2534,6 +2579,15 @@ export default function Chat() {
     const roomId = currentConv?.roomId;
     const convId = currentConvId;
     if (!roomId || !convId || message.chosenOptionId) return;
+    // Which chip was picked already reaches choices.jsonl. What it cannot record is how
+    // long the user sat with the choice before making it.
+    const shownAt = optionShownAtRef.current.get(message.id);
+    emit("option_clicked", {
+      message_id: message.id,
+      option_id: option.id,
+      option_count: message.options?.length ?? null,
+      dwell_ms: shownAt ? Date.now() - shownAt : null,
+    });
     const confirmText = t(uiLang, "chat.choseOption", { label: option.label });
     // Optimistic lock + confirmation bubble
     setConversations((prev) =>
@@ -2892,9 +2946,23 @@ export default function Chat() {
       const names = agentNamesRef.current;
       const previewLabel = isSystem ? "System" : names[next.agentKey as AgentKey];
       setConversations((prev) => prev.map((c) => c.id === next.convId ? { ...c, messages: [...c.messages, agentMsg], preview: `${previewLabel}: ${next.content.slice(0, 60)}…`, timestamp: "just now" } : c));
+      // Emitted from the drain, not from the chip render block: AgentMessage is React.memo
+      // and re-renders on unrelated prop changes, so rendering would fire this repeatedly.
+      // Here it runs exactly once, when the message first appears.
+      if (agentMsg.options) {
+        optionShownAtRef.current.set(agentMsg.id, Date.now());
+        emit("option_group_shown", {
+          message_id: agentMsg.id,
+          option_ids: agentMsg.options.map((o) => o.id),
+          option_count: agentMsg.options.length,
+        });
+      }
       setMsgQueue((q) => {
         const rest = q.slice(1);
         const n0 = rest[0];
+        // Last message of the turn: this is the moment the user can start replying, so
+        // it is the zero point for reply latency.
+        if (rest.length === 0) lastBotMessageAtRef.current = Date.now();
         setTypingKeys(rest.length > 0 && n0 && !n0.isSystem && n0.agentKey !== "system" ? [n0.agentKey as AgentKey] : []);
         return rest;
       });
@@ -3000,6 +3068,23 @@ export default function Chat() {
       return;
     }
     setSessionCreateError(null);
+    // Emitted before the refs are reset below. reply_latency_ms is the pause before the
+    // user started typing; compose_ms is how long they spent writing it.
+    emit("composer_send", {
+      reply_latency_ms:
+        lastBotMessageAtRef.current && firstKeystrokeAtRef.current
+          ? firstKeystrokeAtRef.current - lastBotMessageAtRef.current
+          : null,
+      compose_ms: firstKeystrokeAtRef.current ? Date.now() - firstKeystrokeAtRef.current : null,
+      keystrokes: keystrokesRef.current,
+      backspaces: backspacesRef.current,
+      chars: text.length,
+      is_new_conv: !currentConvId,
+    });
+    firstKeystrokeAtRef.current = null;
+    keystrokesRef.current = 0;
+    backspacesRef.current = 0;
+    lastInputLenRef.current = 0;
     setInputValue("");
     setIsLoading(true);
 
@@ -3399,7 +3484,9 @@ export default function Chat() {
   const handleExportLog = async () => {
     if (!currentConv?.roomId) return;
     try {
-      const res = await fetch(`${API_BASE}/export-logs/${currentConv.roomId}`);
+      // authFetch, not fetch: the endpoint enforces owner-or-admin now. It used to skip
+      // its own ownership check whenever the caller sent no token at all.
+      const res = await authFetch(`/export-logs/${currentConv.roomId}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         alert((err as { error?: string }).error || t(uiLang, "err.export"));
@@ -3409,7 +3496,9 @@ export default function Chat() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `agora_logs_${currentConv.roomId}.zip`;
+      // Server decides the name (it carries a timestamp); this is only the fallback.
+      const cd = res.headers.get("Content-Disposition") || "";
+      a.download = /filename="?([^"]+)"?/i.exec(cd)?.[1] || `agora_logs_${currentConv.roomId}.zip`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -3830,7 +3919,9 @@ export default function Chat() {
               const roster = mode === "single"
                 ? (["A"] as AgentKey[])
                 : (activeAgentKeysRef.current.length ? activeAgentKeysRef.current : activeAgentKeys);
-              if (mode === "full" && currentConv?.roomId) {
+              // Was a second, independent POST to /log-param-change with its own
+              // mode === "full" gate, duplicating postParamChanges. One writer now.
+              if (currentConv?.roomId) {
                 const changes: Array<{ type: string; agent: string; before: string | null; after: string | null }> = [];
                 roster.forEach((k) => {
                   const agent = backendLabelForKey(k);
@@ -3840,9 +3931,7 @@ export default function Chat() {
                   if (settings[k]?.decisionBlock !== agentSettings[k]?.decisionBlock) changes.push({ type: "decision", agent, before: agentSettings[k]?.decisionBlock ?? null, after: settings[k]?.decisionBlock ?? null });
                   if ((settings[k]?.stance ?? null) !== (agentSettings[k]?.stance ?? null)) changes.push({ type: "stance", agent, before: agentSettings[k]?.stance ?? null, after: settings[k]?.stance ?? null });
                 });
-              if (changes.length > 0) {
-                  fetch(`${API_BASE}/log-param-change`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room_id: currentConv.roomId, mode, changes }) }).catch(() => {});
-                }
+                postParamChanges(changes);
               }
               setAgentNames(names);
               setAgentSettings(settings);
@@ -4707,7 +4796,23 @@ export default function Chat() {
               </div>
               <div className="flex-1 min-h-[48px] bg-black rounded-[12px] flex items-center px-4 py-3">
                 <textarea ref={inputRef} value={inputValue}
-                  onChange={(e) => { setInputValue(e.target.value); syncMentionQuery(e.currentTarget); }}
+                  onChange={(e) => {
+                    // Counts only -- never the text, never per-key timestamps.
+                    const len = e.target.value.length;
+                    if (firstKeystrokeAtRef.current === null && len > 0) {
+                      firstKeystrokeAtRef.current = Date.now();
+                      emit("composer_first_keystroke", {
+                        reply_latency_ms: lastBotMessageAtRef.current
+                          ? Date.now() - lastBotMessageAtRef.current
+                          : null,
+                      });
+                    }
+                    keystrokesRef.current += 1;
+                    if (len < lastInputLenRef.current) backspacesRef.current += 1;
+                    lastInputLenRef.current = len;
+                    setInputValue(e.target.value);
+                    syncMentionQuery(e.currentTarget);
+                  }}
                   onClick={(e) => syncMentionQuery(e.currentTarget)}
                   onBlur={() => setMentionQuery(null)}
                   onKeyDown={handleKeyDown}
@@ -4816,11 +4921,18 @@ export default function Chat() {
     <DecisionMapPanel
       open={decisionMapOpen}
       onClose={() => {
+        const dwell = mapDwellRef.current.close();
+        if (dwell) emit("map_closed", dwell);
         setDecisionMapOpen(false);
         setDecisionMapDocked(false);
       }}
       docked={decisionMapDocked}
-      onUndock={() => setDecisionMapDocked(false)}
+      onUndock={() => {
+        mapDwellRef.current.undock();
+        emit("map_undocked", {});
+        setDecisionMapDocked(false);
+      }}
+      onEvent={emit}
       data={decisionMap}
       loading={decisionMapLoading}
       error={decisionMapError}

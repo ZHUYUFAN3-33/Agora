@@ -1,0 +1,62 @@
+# Second shard. Identical to fly.toml except for the app name and volume.
+#
+# Why two apps instead of two machines behind one hostname: `chat_sessions` is an
+# in-process dict (backend/app.py:133) and `/api/message` 400s when a room is missing
+# from *this* process. Behind a load balancer, requests round-robin and most turns would
+# land on the wrong machine. Two apps means two hostnames, and each participant's group
+# always returns to the same process — sticky routing by URL, with no code change.
+#
+# Split the roster in half and hand each group its own link:
+#   group A -> https://agora-chat.fly.dev
+#   group B -> https://agora-chat-2.fly.dev
+#
+# Sizing: 20 threads carries ~28 participants at a ~90 s turn, so 2 x 28 = 56. Splitting
+# also halves the synchronised-login CPU burst (~6 s per shard instead of ~12 s), which
+# is what keeps the health check from tripping.
+#
+# Setup:
+#   fly apps create agora-chat-2
+#   fly volumes create agora_data --size 3 --region nrt -a agora-chat-2
+#   fly secrets set OPENAI_API_KEY='sk-...' AGORA_ADMIN_USER_ID='...' AGORA_ADMIN_PASSWORD='...' -a agora-chat-2
+#   fly deploy -c fly.shard2.toml
+#
+# Note: seed_users.json seeds all 32 study accounts into BOTH shards, so a participant
+# who opens the wrong link gets a working login and a silently empty room. Hand out the
+# links carefully, and export from both shards at the end.
+
+app = "agora-chat-2"
+primary_region = "nrt"
+
+[build]
+
+[env]
+  AGORA_DATA_DIR = "/data"
+  AGORA_DB_PATH = "/data/agora.db"
+  AGORA_STATIC_DIR = "/app/frontend/dist"
+  PORT = "8080"
+  FLASK_DEBUG = "0"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  # See fly.toml for why this is 20s rather than 5s.
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "20s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/api/health"
+
+[[mounts]]
+  source = "agora_data"
+  destination = "/data"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

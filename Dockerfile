@@ -28,5 +28,9 @@ RUN mkdir -p /data/logs /data/profiles /data/memory
 
 EXPOSE 8080
 
-# Single worker: chat_sessions is in-process memory. Long LLM turns need a high timeout.
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "-w", "1", "--threads", "4", "--timeout", "180", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
+# Still a single worker: chat_sessions is in-process memory, so a second worker would
+# lose rooms. Threads are what scale here — one /api/message spends ~90 s blocked on
+# sequential OpenAI calls, releasing the GIL the whole time, so a thread costs almost no
+# CPU while it waits. 20 threads carries ~28 concurrent participants; measured headroom
+# on shared-cpu-1x was 73 MB RSS of 1 GB, so memory is not the limit.
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "-w", "1", "--threads", "20", "--timeout", "180", "--access-logfile", "-", "--error-logfile", "-", "app:app"]

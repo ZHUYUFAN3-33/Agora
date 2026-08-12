@@ -50,8 +50,17 @@ class UserStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        # WAL matters once gunicorn runs many threads: the default rollback journal makes
+        # a writer block every reader, so one chat message being persisted stalls unrelated
+        # requests. In WAL mode readers and the single writer proceed concurrently.
+        # journal_mode is a property of the database file, so this is a no-op after the
+        # first connection; it is set here so a freshly created DB gets it too.
+        # busy_timeout replaces the 5 s default with a window wide enough to outlast a
+        # slow commit on a Fly volume rather than surfacing "database is locked".
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _init_db(self) -> None:

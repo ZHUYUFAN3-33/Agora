@@ -28,10 +28,16 @@ primary_region = "nrt"
   min_machines_running = 1
   processes = ["app"]
 
+  # timeout is 20s, not the usual 5s, because /api/health queues behind the same threads
+  # as everything else. A synchronised login burst costs ~0.2s of CPU per participant
+  # (pbkdf2, and it cannot be parallelised on one core), so 28 people arriving together
+  # occupy the CPU for ~6s. Under a 5s timeout Fly reads that as an unhealthy instance,
+  # pulls it from the load balancer, and every user gets 503 until the backlog drains --
+  # measured at 53s of downtime. The app was serving fine throughout.
   [[http_service.checks]]
     interval = "30s"
-    timeout = "5s"
-    grace_period = "20s"
+    timeout = "20s"
+    grace_period = "30s"
     method = "GET"
     path = "/api/health"
 

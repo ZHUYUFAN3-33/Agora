@@ -1,0 +1,53 @@
+# Throwaway clone of agora-chat used only for load testing.
+#
+# Identical to fly.toml in every way that affects capacity — same VM size, same volume
+# layout, same gunicorn flags (those live in the Dockerfile) — so numbers measured here
+# transfer to production. Only the app name and volume differ.
+#
+# It exists as its own file rather than `fly deploy -a agora-loadtest` so there is no
+# path by which a load-test deploy can land on production.
+#
+# Setup:
+#   fly apps create agora-loadtest
+#   fly volumes create agora_data --size 3 --region nrt -a agora-loadtest
+#   fly secrets set OPENAI_API_KEY='sk-...' -a agora-loadtest
+#   fly deploy -c fly.loadtest.toml
+# Teardown:
+#   fly apps destroy agora-loadtest
+
+app = "agora-loadtest"
+primary_region = "nrt"
+
+[build]
+
+[env]
+  AGORA_DATA_DIR = "/data"
+  AGORA_DB_PATH = "/data/agora.db"
+  AGORA_STATIC_DIR = "/app/frontend/dist"
+  PORT = "8080"
+  FLASK_DEBUG = "0"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  # Kept in parity with fly.toml so the load test measures the shipped configuration.
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "20s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/api/health"
+
+[[mounts]]
+  source = "agora_data"
+  destination = "/data"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

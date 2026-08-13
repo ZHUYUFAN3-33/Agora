@@ -235,6 +235,10 @@ In Chat (`/chat`), outside an input: press **`x`** for in-conversation annotatio
 
 Also available experimentally: Full / Limited / Single modes, emotion & decision customization, welcome tutorial (**`T`**), log export.
 
+The participant-facing walkthrough of that flow, with screenshots, is
+[`docs/USER_GUIDE.en.md`](docs/USER_GUIDE.en.md) / [`docs/USER_GUIDE.zh.md`](docs/USER_GUIDE.zh.md) —
+hand that to people in the study, not this README.
+
 ---
 
 ## Project structure

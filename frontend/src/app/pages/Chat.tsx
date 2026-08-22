@@ -518,11 +518,14 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 // ─── Message components ───────────────────────────────────────────────────────
 
 function TypingDots({
-  agentKey,
-  agentNames,
+  label,
 }: {
-  agentKey: AgentKey;
-  agentNames: Record<AgentKey, string>;
+  // Display label, not an agent key: before the server answers, the client
+  // cannot know which agent the scheduler will pick, so the pre-response
+  // indicator shows a neutral "thinking" label instead of naming ChatbotA.
+  // (It used to hardcode ["A"], so P41 watched "ChatbotA is typing" for 40-50s
+  // while the backend was actually running B and C.)
+  label: string;
 }) {
   return (
     <motion.div
@@ -535,7 +538,7 @@ function TypingDots({
       <div className="flex items-center gap-2 mb-1">
         <div className="w-[7px] h-[7px] rounded-[1.5px] flex-shrink-0 bg-black" />
         <span className="text-[11px] tracking-widest text-black" style={monoFont}>
-          {agentNames[agentKey]}
+          {label}
         </span>
       </div>
       <div className="ml-4 inline-flex items-center gap-1 rounded-[16px] border border-black/10 bg-[#fffdfa] px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.08)]">
@@ -2077,7 +2080,9 @@ export default function Chat() {
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [typingKeys, setTypingKeys] = useState<AgentKey[]>([]);
+  // "pending" = a turn is in flight but the speaker is unknown (the scheduler
+  // picks server-side); real keys appear once responses arrive and drain.
+  const [typingKeys, setTypingKeys] = useState<(AgentKey | "pending")[]>([]);
   const [msgQueue, setMsgQueue] = useState<Array<{
     agentKey: AgentKey | "system";
     content: string;
@@ -2140,6 +2145,10 @@ export default function Chat() {
   const mapDwellRef = useRef(new DwellTracker());
   const decisionMapTopicCountRef = useRef(0);
   const lastBotMessageAtRef = useRef<number | null>(null);
+  // True from the moment a /message request goes out until it resolves. The
+  // queue processor reads it so an in-flight turn keeps its pending indicator
+  // even while the previous turn's queue finishes draining.
+  const requestInFlightRef = useRef(false);
   const firstKeystrokeAtRef = useRef<number | null>(null);
   const keystrokesRef = useRef(0);
   const backspacesRef = useRef(0);
@@ -2921,7 +2930,12 @@ export default function Chat() {
   // Queue processor: typing dot → message → next
   useEffect(() => {
     if (msgQueue.length === 0) {
-      setTypingKeys([]);
+      // A request can be in flight while the PREVIOUS turn's queue is still
+      // draining (the composer re-enables as soon as the fetch resolves, not
+      // when the queue empties). Clearing unconditionally here wiped the
+      // pending indicator for that in-flight turn, putting the user back on a
+      // silent screen — the exact state that made P41 re-send.
+      setTypingKeys(requestInFlightRef.current ? ["pending"] : []);
       return;
     }
     const next = msgQueue[0];
@@ -3265,7 +3279,9 @@ export default function Chat() {
     }
 
     const maxTurns = activeMode === "single" ? 1 : maxAgentTurns;
-    setTypingKeys(activeMode === "single" ? ["A"] : ["A"]);
+    // Speaker unknown until the server answers — show a neutral indicator.
+    requestInFlightRef.current = true;
+    setTypingKeys(["pending"]);
 
     const postMessage = async (rid: string) => {
       const res = await fetch(`${API_BASE}/message`, {
@@ -3357,7 +3373,27 @@ export default function Chat() {
         options?: ChatOptionChip[];
         knowledge?: KnowledgeReference;
       }> = data.responses || [];
-      if (responses.length === 0) { setTypingKeys([]); }
+      if (responses.length === 0) {
+        // Every scheduled turn was dropped server-side. Silently clearing the
+        // indicator here is what made rooms 675008/894275 look frozen: P41
+        // re-sent the same 271-char message byte-for-byte because nothing
+        // acknowledged the first one. Show the same visible feedback the
+        // catch-path uses so the user knows to re-send.
+        setTypingKeys([]);
+        const noRespMsg: Message = {
+          id: `msg-noresp-${Date.now()}`,
+          role: "agent",
+          content: t(uiLang, "err.noResponse"),
+          timestamp: Date.now(),
+        };
+        setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, messages: [...c.messages, noRespMsg] } : c));
+        // This notice is what the user actually replies to, so it is the zero
+        // point for reply latency — the same role the last queued bot message
+        // plays in the drain. Without it, the re-send this notice solicits is
+        // measured from the PREVIOUS successful turn and reply_latency_ms is
+        // inflated by the whole dead interval.
+        lastBotMessageAtRef.current = Date.now();
+      }
       else {
         const mapped = responses
           .filter((r) => !!(r.message || "").trim())
@@ -3387,11 +3423,16 @@ export default function Chat() {
         setMsgQueue(filtered);
       }
     } catch (err) {
+      requestInFlightRef.current = false;
       setTypingKeys([]);
       const detail = err instanceof Error && err.message ? err.message : t(uiLang, "err.generic");
       const errMsg: Message = { id: `msg-err-${Date.now()}`, role: "agent", content: backendOnline ? detail : t(uiLang, "err.backendDown"), timestamp: Date.now() };
       setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, messages: [...c.messages, errMsg] } : c));
+      // Same reasoning as the no-response notice: the error is what the user
+      // replies to, so it is the reply-latency zero point.
+      lastBotMessageAtRef.current = Date.now();
     } finally {
+      requestInFlightRef.current = false;
       setIsLoading(false);
       inputRef.current?.focus();
     }
@@ -4702,8 +4743,9 @@ export default function Chat() {
               {currentConv && typingKeys[0] && (
                 <TypingDots
                   key={`status-typing-${typingKeys[0]}-${msgQueue[0]?.content ?? "pending"}`}
-                  agentKey={typingKeys[0]}
-                  agentNames={agentNames}
+                  label={typingKeys[0] === "pending"
+                    ? t(uiLang, "chat.thinking")
+                    : agentNames[typingKeys[0]]}
                 />
               )}
             </AnimatePresence>

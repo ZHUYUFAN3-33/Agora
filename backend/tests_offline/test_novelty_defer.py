@@ -83,7 +83,12 @@ def run(retry_blocks, n_user_turns=1, session=None, novelty_path=None):
             return "[Moderator]\nmode: S\nstate: Exploration\nstall: false\ngoal: g\n[/Moderator]"
         state["agent_calls"] += 1
         if "Replace it entirely" in user_c:  # the retry pass
-            return state["retries"].pop(0)
+            # A dropped turn rolls back and the scheduler grants another attempt
+            # (bounded by MAX_PHANTOM_DROPS_PER_USER_TURN), so a turn that drops
+            # sees a second retry pass: keep answering with the same block.
+            if state["retries"]:
+                state["last_retry"] = state["retries"].pop(0)
+            return state.get("last_retry", "")
         return (
             f"[MOVE]\nnew_point\n[/MOVE]\n[RATIONALE]\nwhy\n[/RATIONALE]\n"
             f"[MESSAGE]\n{NEAR_DUP}\n[/MESSAGE]"
@@ -134,7 +139,9 @@ spoke5, rows5, s5, path5 = run(
     n_user_turns=2)
 kept5 = [r for r in rows5 if str(r.get("reason", "")).startswith("kept_defer:")]
 drop5 = [r for r in rows5 if str(r.get("reason", "")).startswith("dropped:")]
-check("first deferral kept, second dropped", len(kept5) == 1 and len(drop5) == 1)
+# The dropped second deferral rolls back and earns one more (also dropped)
+# attempt before the phantom-drop cap ends the turn, so >= 1 dropped rows.
+check("first deferral kept, second dropped", len(kept5) == 1 and len(drop5) >= 1)
 check("only the first defer sentence is in history", len(spoke5) == 1)
 
 print("== a normal published turn resets the streak ==")

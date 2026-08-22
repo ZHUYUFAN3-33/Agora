@@ -126,6 +126,15 @@ CONCLUDED_STATE = "Concluded"
 # of its own — without one, a large agent pool could monopolise the floor.
 MAX_STALL_BURST_TURNS = 3
 
+# A dropped (never published) agent turn rolls its scheduling state back, so it
+# no longer burns a Force-U slot — the user shouldn't lose the conversation to
+# turns they never saw. The rollback needs its own bound though: under a
+# systematic failure (every generation dropping), the burst loop would otherwise
+# run to its safety limit, spending safety × 2 generations per user message on
+# nothing. After this many drops in one user turn, the floor goes back to the
+# user instead.
+MAX_PHANTOM_DROPS_PER_USER_TURN = 2
+
 # -------------------------------
 # OpenAI client (SDK + fallback)
 # -------------------------------
@@ -578,9 +587,9 @@ def is_low_content_message(text: str) -> bool:
 
 
 # Injected per turn via the `extra` container when the user's message is low
-# content. A contract, not a token cap: max_output_tokens stays 520 because a
-# hard cap truncates the [MESSAGE] tail mid-sentence (the block order exists
-# for exactly that reason). Length falls out of the role change instead.
+# content. A contract, not a token cap: shortness comes from the role change,
+# not from squeezing max_output_tokens — a hard cap truncates the [MESSAGE]
+# tail mid-sentence (the block order exists for exactly that reason).
 LOW_CONTENT_TURN_DIRECTIVE = (
     "\n\n(This turn) The user's last message carries no new information (a "
     "greeting or acknowledgement). Do NOT analyze the decision this turn: "
@@ -853,6 +862,7 @@ PACING GOAL (important):
 - Strongly prefer {keys_slash} speaking over the user, as long as the conversation still feels coherent.
 - Promote natural FRIEND group dynamics with more bot-to-bot discussion.
 - Still keep the user included regularly, but less frequently than the bots.
+- Balance the floor using the SCHEDULED counts in STATS, not just the spoke counts: a scheduled turn may have failed to produce a visible message, so an agent with a high scheduled count has already had its chances — pick someone whose SCHEDULED count is low instead of re-picking the same agent.
 - Always obey the hard rule: after {max_consecutive} consecutive agent turns, the next speaker must be U.
 
 You MUST end your output with a single clear decision:
@@ -1303,22 +1313,90 @@ _OPT_NAMES = r"OPTIONS|OPTION|CHOICES|选项|選項|選択肢|オプション"
 # tuned against — this port took the tag, not the layer.
 _MOVE_NAMES = r"MOVE|动作|行动|アクション"
 
-_MESSAGE_TAG_RE = re.compile(rf"\[(?:{_MSG_NAMES})\](.*?)\[/(?:{_MSG_NAMES})\]",
+# Tag matchers tolerate whitespace inside the brackets ("[ RATIONALE ]"). Every
+# pattern used to be a bare \[NAME\]: a single stray space defeated ALL of them
+# at once, so the generation fell to the no-tags branch, whose strippers were
+# equally intolerant — and the whole raw text, private blocks included, was
+# published as the chat message.
+def _tag_open(names: str) -> str:
+    return rf"\[\s*(?:{names})\s*\]"
+
+
+def _tag_close(names: str) -> str:
+    return rf"\[\s*/\s*(?:{names})\s*\]"
+
+
+def _tag_either(names: str) -> str:
+    return rf"\[\s*/?\s*(?:{names})\s*\]"
+
+
+_MESSAGE_TAG_RE = re.compile(rf"{_tag_open(_MSG_NAMES)}(.*?){_tag_close(_MSG_NAMES)}",
                              re.DOTALL | re.IGNORECASE)
-_RATIONALE_TAG_RE = re.compile(rf"\[(?:{_RAT_NAMES})\](.*?)\[/(?:{_RAT_NAMES})\]",
+_RATIONALE_TAG_RE = re.compile(rf"{_tag_open(_RAT_NAMES)}(.*?){_tag_close(_RAT_NAMES)}",
                                re.DOTALL | re.IGNORECASE)
-_OPTIONS_TAG_RE = re.compile(rf"\[(?:{_OPT_NAMES})\](.*?)\[/(?:{_OPT_NAMES})\]",
+_OPTIONS_TAG_RE = re.compile(rf"{_tag_open(_OPT_NAMES)}(.*?){_tag_close(_OPT_NAMES)}",
                              re.DOTALL | re.IGNORECASE)
-_MOVE_TAG_RE = re.compile(rf"\[(?:{_MOVE_NAMES})\](.*?)\[/(?:{_MOVE_NAMES})\]",
+_MOVE_TAG_RE = re.compile(rf"{_tag_open(_MOVE_NAMES)}(.*?){_tag_close(_MOVE_NAMES)}",
                           re.DOTALL | re.IGNORECASE)
 _STRAY_TAG_RE = re.compile(
-    rf"\[/?(?:{_MSG_NAMES}|{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES})\]", re.IGNORECASE
+    _tag_either(f"{_MSG_NAMES}|{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES}"), re.IGNORECASE
 )
 # Last resort for the no-tags branch: a rationale/options/move block that opened
 # but never closed would otherwise stay in the chat message.
 _TRAILING_RATIONALE_RE = re.compile(
-    rf"\[(?:{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES})\].*$", re.DOTALL | re.IGNORECASE
+    rf"{_tag_open(f'{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES}')}.*$", re.DOTALL | re.IGNORECASE
 )
+# An opening [MESSAGE] with no closing tag: the signature of a generation cut
+# off by max_output_tokens. The block order puts [MESSAGE] after the metadata
+# blocks precisely so truncation lands here — the salvage branch below turns
+# that from a total loss into a publishable (if trimmed) message. Measured
+# before the salvage existed: 39 of 43 agent turns across three study rooms
+# (P34 953489, P41 675008/894275) were truncated this way, and the old
+# fallback — _TRAILING_RATIONALE_RE over the whole raw text — matched the
+# LEADING [MOVE] tag at index 0 and deleted the entire generation, so 90.7%
+# of turns were silently dropped.
+_MESSAGE_OPEN_RE = re.compile(_tag_open(_MSG_NAMES), re.IGNORECASE)
+# Any tag of a PRIVATE block (either polarity): where a salvaged message body
+# must stop, so a half-formed generation can never publish private content.
+_PRIVATE_TAG_RE = re.compile(
+    _tag_either(f"{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES}"), re.IGNORECASE
+)
+_PRIVATE_CLOSE_RE = re.compile(
+    _tag_close(f"{_RAT_NAMES}|{_OPT_NAMES}|{_MOVE_NAMES}"), re.IGNORECASE
+)
+# Sentence-final punctuation for trimming the ragged tail of a truncated
+# message. CJK terminators and !? are unambiguous. A latin/fullwidth period
+# only counts when followed by whitespace or end-of-text — which alone excludes
+# decimals ("3.5") and URLs ("linkedin.com"), since those have a non-space
+# after the dot — minus an explicit list of abbreviations that legitimately end
+# in a period. The abbreviation guard is a fixed list rather than "any single
+# letter": option labels A/B/C are core vocabulary here, so "I would grade it
+# an A. And..." must still trim at that period. Ellipses are excluded on
+# purpose: "……" mid-thought is a continuation, not an end.
+_SENTENCE_END_RE = re.compile(
+    r"[。！？!?]"
+    r"|(?<!\be\.g)(?<!\bi\.e)(?<!\bvs)(?<!\betc)(?<!\bcf)(?<!\bal)"
+    r"(?<!\bDr)(?<!\bMr)(?<!\bMs)(?<!\bMrs)(?<!\bNo)(?<!\bInc)(?<!\bLtd)(?<!\bSt)"
+    r"[.．](?=\s|$)",
+    re.IGNORECASE,
+)
+
+
+def _trim_truncated_tail(text: str) -> str:
+    """Cut a cap-truncated message back to its last complete sentence.
+
+    Applied ONLY when the caller reports the generation actually hit
+    max_output_tokens — a generation that merely forgot its closing tag is
+    complete prose whose last sentence (often an unpunctuated question handing
+    the floor back to the user) must survive intact. If no sentence terminator
+    exists at all, the text is returned unchanged: a ragged fragment beats an
+    empty message, and the truncation retry upstream usually replaces it with
+    a complete generation anyway.
+    """
+    ends = [m.end() for m in _SENTENCE_END_RE.finditer(text)]
+    if not ends:
+        return text.strip()
+    return text[: ends[-1]].strip()
 
 # Structured self-report of what a turn DOES, emitted by the agent itself in a
 # [MOVE] block (see system_prompt's OUTPUT FORMAT).
@@ -1424,7 +1502,27 @@ def _parse_options_block(raw_body: str) -> list:
     return out if len(out) >= 2 else []
 
 
-def parse_agent_turn(raw: str) -> dict:
+def _prefer_complete_turn(original: dict, retry: dict) -> dict:
+    """Pick between a cap-truncated first attempt and its higher-cap retry.
+
+    The retry wins only when it is genuinely better: non-empty AND complete
+    (not itself salvaged), and only when the original was empty or salvaged.
+    A truncation can cut nothing but the trailing [OPTIONS] block, leaving a
+    complete, publishable [MESSAGE] — accepting any non-empty retry there let
+    a refusal ("I'm sorry, I can't assist with that.") overwrite a good turn.
+    """
+    orig_msg = (original.get("message") or "").strip()
+    retry_msg = (retry.get("message") or "").strip()
+    if not retry_msg:
+        return original
+    if retry.get("salvaged") and orig_msg:
+        return original
+    if orig_msg and not original.get("salvaged"):
+        return original
+    return retry
+
+
+def parse_agent_turn(raw: str, truncated: bool = False) -> dict:
     """
     Splits one LLM generation into the chat-visible message, optional OPTIONS
     chips payload, and the private rationale. Both MESSAGE/RATIONALE come from
@@ -1432,6 +1530,12 @@ def parse_agent_turn(raw: str) -> dict:
     Tolerant by design: a malformed output must never crash a turn — if the
     tags are missing, the whole raw text becomes the message (stray tag tokens
     stripped so they can't leak into the chat log) and rationale stays empty.
+
+    truncated: the caller observed incomplete_reason == "max_output_tokens" for
+    this generation. Only then is a salvaged body trimmed back to its last
+    complete sentence; a generation that merely forgot its closing tag is whole
+    prose, and trimming it would silently delete its final sentence (typically
+    the unpunctuated question that hands the floor back to the user).
     """
     raw = (raw or "").strip()
     msg_match = _MESSAGE_TAG_RE.search(raw)
@@ -1439,13 +1543,46 @@ def parse_agent_turn(raw: str) -> dict:
     opt_match = _OPTIONS_TAG_RE.search(raw)
     move_match = _MOVE_TAG_RE.search(raw)
 
+    salvaged = False
     if msg_match:
         message = msg_match.group(1).strip()
     else:
-        # No usable MESSAGE block. Drop anything from an opening RATIONALE/OPTIONS
-        # tag onward first — otherwise a half-formed generation publishes private
-        # blocks — then clear any stray tag tokens from what is left.
-        message = _STRAY_TAG_RE.sub("", _TRAILING_RATIONALE_RE.sub("", raw)).strip()
+        # Search for the opening tag in text with COMPLETE private blocks
+        # removed. Searching `raw` let a literal "[MESSAGE]" written INSIDE a
+        # rationale/options body anchor the salvage, publishing the agent's
+        # private strategy text to the room — the system prompt names the tags,
+        # so a model quoting them there is entirely natural.
+        cleaned_raw = _MOVE_TAG_RE.sub("", _RATIONALE_TAG_RE.sub("", _OPTIONS_TAG_RE.sub("", raw)))
+        open_msg = _MESSAGE_OPEN_RE.search(cleaned_raw)
+        # An UNCLOSED private block still open at the [MESSAGE] position means
+        # the tag we found is inside private content that was cut off; refuse
+        # to salvage rather than leak it.
+        inside_private = False
+        if open_msg:
+            prefix = cleaned_raw[: open_msg.start()]
+            last_private = None
+            for m in _PRIVATE_TAG_RE.finditer(prefix):
+                last_private = m.group(0)
+            inside_private = bool(last_private) and not _PRIVATE_CLOSE_RE.fullmatch(last_private)
+        if open_msg and not inside_private:
+            # [MESSAGE] opened but never closed — typically a generation cut off
+            # by max_output_tokens mid-body. Salvage everything after the opening
+            # tag (stopping at the next private-block tag, if one follows)
+            # instead of discarding the whole turn.
+            tail = cleaned_raw[open_msg.end():]
+            nxt = _PRIVATE_TAG_RE.search(tail)
+            if nxt:
+                tail = tail[: nxt.start()]
+            tail = _STRAY_TAG_RE.sub("", tail)
+            message = _trim_truncated_tail(tail) if truncated else tail.strip()
+            salvaged = True
+        else:
+            # No usable MESSAGE tag. COMPLETE private blocks are already gone
+            # from cleaned_raw — with the metadata-first block order, a leading
+            # closed [MOVE]…[/MOVE] would otherwise trip _TRAILING_RATIONALE_RE
+            # at index 0 and delete the entire generation — so now drop anything
+            # from a still-unclosed private tag onward, then clear stray tokens.
+            message = _STRAY_TAG_RE.sub("", _TRAILING_RATIONALE_RE.sub("", cleaned_raw)).strip()
 
     rationale = rat_match.group(1).strip() if rat_match else ""
     words = rationale.split()
@@ -1453,10 +1590,14 @@ def parse_agent_turn(raw: str) -> dict:
         rationale = " ".join(words[:RATIONALE_MAX_WORDS]) + "..."
 
     options = _parse_options_block(opt_match.group(1)) if opt_match else []
-    # Strip a leaked OPTIONS block from the visible message if tags were mangled.
-    if options and _OPTIONS_TAG_RE.search(message):
+    # Strip leaked private blocks from the visible message. Unconditional for
+    # all three: a nested [RATIONALE]…[/RATIONALE] inside a closed [MESSAGE]
+    # span used to publish verbatim, because the OPTIONS strip was gated on
+    # options having parsed and RATIONALE was not stripped here at all.
+    if _OPTIONS_TAG_RE.search(message):
         message = _OPTIONS_TAG_RE.sub("", message).strip()
-    # Same for a leaked MOVE block — it is private and must never reach the chat.
+    if _RATIONALE_TAG_RE.search(message):
+        message = _RATIONALE_TAG_RE.sub("", message).strip()
     if _MOVE_TAG_RE.search(message):
         message = _MOVE_TAG_RE.sub("", message).strip()
 
@@ -1469,6 +1610,10 @@ def parse_agent_turn(raw: str) -> dict:
         "options": options,
         "move": normalize_move(move_body),
         "move_detail": " ".join(move_body.split())[:80],
+        # True when the message came from the unclosed-[MESSAGE] salvage branch,
+        # i.e. the generation was truncated. Callers use it to decide whether a
+        # retry at a higher cap is worth the cost.
+        "salvaged": salvaged,
     }
 
 
@@ -1619,7 +1764,12 @@ def run_user_turn(
     lang: str = "en",
     model: str = "gpt-4o",
     temperature: float = 0.8,
-    max_output_tokens: int = 520,
+    # 520 -> 900 after rooms 675008/894275/953489: with the moderator goal
+    # injected, 39 of 43 generations hit 520 exactly (the four that finished
+    # used 373-461, i.e. 87-89% of the cap on later turns). 900 gives the
+    # measured full-length turn (~750 tokens of blocks + prose) real headroom;
+    # the truncation retry and the parser's salvage branch remain as backstops.
+    max_output_tokens: int = 900,
     max_history_chars: int = 12000,
     max_user_gap: int = 12,
     max_agent_turns_before_user: Optional[int] = None,
@@ -2505,6 +2655,11 @@ def run_user_turn(
                 "drop_group_ratio": round(retry_ratio, 4),
                 "drop_self_ratio": round(retry_self, 4)}
 
+    # Dropped-turn tally for THIS user turn; incremented by rollback_phantom_turn
+    # and by stall_burst's drop path, read by both to stop scheduling once
+    # MAX_PHANTOM_DROPS_PER_USER_TURN is reached.
+    phantom_drops = {"n": 0}
+
     def stall_burst(trigger_key: Optional[str] = None) -> None:
         stall_temp = min(temperature + 0.25, 1.4)
         burst_agents = [a for a in agent_list if a.key != trigger_key][:MAX_STALL_BURST_TURNS]
@@ -2517,6 +2672,8 @@ def run_user_turn(
             session["bots_since_user"] = int(session.get("bots_since_user") or 0) + 1
             session["turns_in_current_state"] = int(session.get("turns_in_current_state") or 0) + 1
             session["turns_since_moderator"] = int(session.get("turns_since_moderator") or 0) + 1
+            _sched = session.setdefault("sched_counts", {})
+            _sched[burst_agent.key] = int(_sched.get(burst_agent.key) or 0) + 1
             history = clamp_history(transcript_lines, max_history_chars)
             phase_context = get_phase_context(burst_agent.key)
             user_prompt = (
@@ -2547,15 +2704,45 @@ def run_user_turn(
                 },
                 {"role": "user", "content": user_prompt},
             ]
+            burst_meta: dict = {}
             raw = create(client_chat, messages, stall_temp, max_output_tokens,
-                         call_kind="stall_burst", agent_key=burst_agent.key)
-            parsed = parse_agent_turn(raw)
+                         burst_meta, call_kind="stall_burst", agent_key=burst_agent.key)
+            burst_truncated = burst_meta.get("incomplete_reason") == "max_output_tokens"
+            parsed = parse_agent_turn(raw, truncated=burst_truncated)
+            if burst_truncated:
+                # Same cap, same format, same truncation exposure as agent_turn:
+                # one retry at double the cap before settling for the salvage.
+                burst_retry_meta: dict = {}
+                retry_raw = create(client_chat, messages, stall_temp,
+                                   max_output_tokens * 2, burst_retry_meta,
+                                   call_kind="truncation_retry",
+                                   agent_key=burst_agent.key, retry_index=1)
+                retry_parsed = parse_agent_turn(
+                    retry_raw,
+                    truncated=burst_retry_meta.get("incomplete_reason") == "max_output_tokens",
+                )
+                parsed = _prefer_complete_turn(parsed, retry_parsed)
             txt = (parsed.get("message") or "").strip()
             if not txt:
                 # Same silent-turn rule as agent_turn: no [MESSAGE] block means nothing to
-                # say, and a "…" bubble reads as broken. Skip to the next burst agent.
+                # say, and a "…" bubble reads as broken. Skip to the next burst agent —
+                # and give back the control state this phantom turn consumed.
                 log_agent_event(burst_agent.key, "turn_dropped",
                                 "generation carried no MESSAGE block; agent stayed silent this turn")
+                session["bots_since_user"] = int(session.get("bots_since_user") or 0) - 1
+                session["turns_in_current_state"] = int(session.get("turns_in_current_state") or 0) - 1
+                session["turns_since_moderator"] = int(session.get("turns_since_moderator") or 0) - 1
+                # Burst drops count toward the same per-user-turn budget as
+                # admin-picked drops, so a systematically failing model cannot
+                # spend the whole burst on invisible turns.
+                phantom_drops["n"] += 1
+                if phantom_drops["n"] >= MAX_PHANTOM_DROPS_PER_USER_TURN:
+                    log_thinking(
+                        "admin_rule",
+                        f"Stall burst aborted: {phantom_drops['n']} dropped turns this "
+                        f"user turn (phantom-drop cap)",
+                    )
+                    break
                 continue
             if parsed.get("rationale"):
                 session["latest_rationale"][burst_agent.key] = parsed["rationale"]
@@ -2585,10 +2772,41 @@ def run_user_turn(
     def agent_turn(
         agent: "ChatAgent", force_intro: bool = False, mention_trigger: bool = False
     ) -> None:
+        # Snapshot BEFORE the optimistic increments below, so a dropped turn can
+        # restore them. Without the rollback, a turn that produced nothing
+        # visible still consumed a Force-U slot, still counted toward the stall
+        # detector, and left last_speaker_key pointing at an agent that never
+        # spoke — measured in rooms 675008/894275/953489, phantom turns caused
+        # 8 Force-U handbacks with zero visible output and 9 of 12 moderator
+        # calls. sched_counts is deliberately OUTSIDE the snapshot: it counts
+        # attempts, and is what admin_choose_next shows Admin-1 so a repeatedly
+        # failing agent stops looking like "the one who hasn't had a turn yet".
+        _pre_turn_state = (
+            session.get("last_speaker_key"),
+            int(session.get("bots_since_user") or 0),
+            int(session.get("turns_in_current_state") or 0),
+            int(session.get("turns_since_moderator") or 0),
+        )
+
+        def rollback_phantom_turn() -> None:
+            (
+                session["last_speaker_key"],
+                session["bots_since_user"],
+                session["turns_in_current_state"],
+                session["turns_since_moderator"],
+            ) = _pre_turn_state
+            # NOT rolled back (deliberately): sched_counts (the anti-starvation
+            # signal for Admin-1) and this drop tally, which bounds how many
+            # phantom turns one user message may absorb before the floor
+            # returns to the user.
+            phantom_drops["n"] += 1
+
         session["last_speaker_key"] = agent.key
         session["bots_since_user"] = int(session.get("bots_since_user") or 0) + 1
         session["turns_in_current_state"] = int(session.get("turns_in_current_state") or 0) + 1
         session["turns_since_moderator"] = int(session.get("turns_since_moderator") or 0) + 1
+        sched = session.setdefault("sched_counts", {})
+        sched[agent.key] = int(sched.get(agent.key) or 0) + 1
         stall_triggered = bool(moderator_state.get("stall"))
         history = clamp_history(transcript_lines, max_history_chars)
         extra = ""
@@ -2659,9 +2877,28 @@ def run_user_turn(
             },
             {"role": "user", "content": user_prompt},
         ]
+        gen_meta: dict = {}
         raw = create(client_chat, messages, effective_temp, max_output_tokens,
-                     call_kind="agent_turn", agent_key=agent.key)
-        parsed = parse_agent_turn(raw)
+                     gen_meta, call_kind="agent_turn", agent_key=agent.key)
+        was_truncated = gen_meta.get("incomplete_reason") == "max_output_tokens"
+        parsed = parse_agent_turn(raw, truncated=was_truncated)
+        if was_truncated:
+            # The generation hit the output cap mid-[MESSAGE]. The parser's
+            # salvage branch already recovered what it could, but a salvaged
+            # message is trimmed mid-thought and has lost its [OPTIONS] block,
+            # so spend ONE retry at double the cap for a complete turn. If the
+            # retry comes back unusable, the salvaged first attempt still
+            # publishes — the retry can only improve the turn, never drop it.
+            retry_meta: dict = {}
+            retry_raw = create(client_chat, messages, effective_temp,
+                               max_output_tokens * 2, retry_meta,
+                               call_kind="truncation_retry", agent_key=agent.key,
+                               retry_index=1)
+            retry_parsed = parse_agent_turn(
+                retry_raw,
+                truncated=retry_meta.get("incomplete_reason") == "max_output_tokens",
+            )
+            parsed = _prefer_complete_turn(parsed, retry_parsed)
         parsed = enforce_no_refusal(
             agent,
             messages,
@@ -2693,17 +2930,23 @@ def run_user_turn(
             else:
                 detail = "refusal guard rejected the turn; agent stayed silent this turn"
             log_agent_event(agent.key, "turn_dropped", detail)
+            # A dropped turn must not consume conversation-control state: the
+            # user never saw it, so it must not burn a Force-U slot, feed the
+            # stall detector, or claim last-speaker status.
+            rollback_phantom_turn()
             maybe_run_moderator()
             return
         txt = (parsed.get("message") or "").strip()
         if not txt:
-            # The call succeeded but carried no [MESSAGE] block — the model wrote only its
-            # private RATIONALE and never spoke. parse_agent_turn strips private blocks, so
-            # nothing visible survives. This used to publish a "…" placeholder, which read
-            # to participants as a broken turn (2 of 72 logged agent messages, ~2.8%).
-            # Staying silent matches how the refusal and novelty guards already drop a turn.
+            # The call succeeded but carried no publishable message even after the
+            # salvage branch and the truncation retry — the model wrote only its
+            # private blocks and never spoke. This used to publish a "…" placeholder,
+            # which read to participants as a broken turn (2 of 72 logged agent
+            # messages, ~2.8%). Staying silent matches how the refusal and novelty
+            # guards already drop a turn.
             log_agent_event(agent.key, "turn_dropped",
                             "generation carried no MESSAGE block; agent stayed silent this turn")
+            rollback_phantom_turn()
             maybe_run_moderator()
             return
         if parsed.get("rationale"):
@@ -2750,8 +2993,17 @@ def run_user_turn(
         roles_summary = build_roles_summary(agent_list)
         last_speaker_key = session.get("last_speaker_key")
         spoke_counts = ", ".join(f"{k}={key_to_agent[k].spoke}" for k in agent_keys)
+        # Scheduled counts include turns whose generation was dropped and never
+        # reached the transcript. Feeding Admin-1 only the published counts
+        # locked its fairness heuristic onto whichever agent kept failing:
+        # in rooms 675008/894275 Admin-1 picked A on 33 of 34 decisions with
+        # the explicit reasoning "让未发言的 A 接话" — while A had already been
+        # scheduled (and truncated) up to 20 times.
+        sched = session.get("sched_counts") or {}
+        sched_counts = ", ".join(f"{k}={int(sched.get(k) or 0)}" for k in agent_keys)
         stats = (
             f"Spoke counts: {spoke_counts}. "
+            f"Scheduled counts (incl. turns that produced no visible message): {sched_counts}. "
             f"Consecutive agent turns={consecutive}. "
             f"User gap(lines)={gap}. "
             f"Moderator state={moderator_state['state']}."
@@ -2844,6 +3096,26 @@ def run_user_turn(
 
     # Burst: mention hard-route (bypasses consecutive valve, CLI-faithful),
     # then Admin picks until U / Concluded / safety bound.
+    def _discard_mention_queue(why: str) -> None:
+        """Drop mentions this user turn never got to answer.
+
+        The queue lives in the room session, so anything left behind is
+        hard-routed at the START of the NEXT user message: agents would open by
+        answering the previous question, before the new one is read. Mentions
+        are scoped to the message that made them, so an aborted burst discards
+        them rather than deferring them.
+        """
+        leftover = session.get("mention_queue") or []
+        if not leftover:
+            return
+        session["mention_queue"] = []
+        log_agent_event(
+            "user",
+            "mention_discarded",
+            f"dropped queued mentions {leftover} ({why}); they belong to this "
+            f"user message and must not hard-route the next one",
+        )
+
     safety = max_consecutive + MAX_MENTIONS_PER_MESSAGE + MAX_STALL_BURST_TURNS + 4
     for _ in range(safety):
         mq = session.get("mention_queue") or []
@@ -2860,6 +3132,14 @@ def run_user_turn(
             )
             force_intro = not bool((session.get("has_spoken") or {}).get(key))
             agent_turn(key_to_agent[key], force_intro=force_intro, mention_trigger=True)
+            if phantom_drops["n"] >= MAX_PHANTOM_DROPS_PER_USER_TURN:
+                log_thinking(
+                    "admin_rule",
+                    f"Force U: {phantom_drops['n']} dropped turns this user turn "
+                    f"(phantom-drop cap)",
+                )
+                _discard_mention_queue("phantom-drop cap")
+                break
             # CLI-faithful: queued mentions are honored even if the moderator
             # latched to Concluded mid-burst — the loop re-checks the queue
             # first, and only an EMPTY queue lets Concluded stop the burst.
@@ -2875,6 +3155,14 @@ def run_user_turn(
             break
         force_intro = not bool((session.get("has_spoken") or {}).get(nxt))
         agent_turn(key_to_agent[nxt], force_intro=force_intro)
+        if phantom_drops["n"] >= MAX_PHANTOM_DROPS_PER_USER_TURN:
+            log_thinking(
+                "admin_rule",
+                f"Force U: {phantom_drops['n']} dropped turns this user turn "
+                f"(phantom-drop cap)",
+            )
+            _discard_mention_queue("phantom-drop cap")
+            break
         if moderator_state.get("state") == CONCLUDED_STATE:
             break
 
@@ -2909,14 +3197,15 @@ def main():
     ap.add_argument("--start_order", default="ABCU", help="Chars from the agent key set plus U, default ABCU")
     ap.add_argument("--model", default="gpt-4o")
     ap.add_argument("--temperature", type=float, default=0.8)
-    ap.add_argument("--max_output_tokens", type=int, default=520,
+    ap.add_argument("--max_output_tokens", type=int, default=900,
                     help="One generation carries four blocks: MOVE, RATIONALE, MESSAGE, OPTIONS. "
                          "Raised 220 -> 320 in logs/316347, then 320 -> 520 after room 001999, "
                          "where messages alone measured 174-317 tokens and every turn past ~250 "
                          "lost its trailing block (4 of 6). MOVE and RATIONALE now lead the format "
                          "so a squeeze truncates prose rather than metadata, but the budget also "
-                         "has to fit the prose. Watch for TRUNCATED in the rationale log if you "
-                         "lower it. Default 520")
+                         "has to fit the prose: at 520, rooms 675008/894275/953489 truncated 39 of "
+                         "43 turns once the moderator goal inflated outputs, so 520 -> 900. "
+                         "Watch for TRUNCATED in the rationale log if you lower it. Default 900")
     ap.add_argument("--max_history_chars", type=int, default=12000)
     ap.add_argument("--log_dir", default="logs", help="Directory to write jsonl logs")
     ap.add_argument("--prefer_agents", type=float, default=0.85,
@@ -3169,6 +3458,11 @@ def main():
 
     transcript_lines: List[str] = []
     consecutive_agent_turns = 0
+    # Times each agent has been HANDED the floor, including turns whose
+    # generation was dropped. Mirrors session["sched_counts"] on the HTTP path;
+    # both feed Admin-1's STATS so its fairness heuristic cannot lock onto an
+    # agent whose turns keep failing (it never appears in the spoke counts).
+    sched_counts_cli: Dict[str, int] = {k: 0 for k in agent_keys}
     # Key of the agent that most recently held the floor (published OR dropped);
     # reset to None when the user speaks. admin_choose_next() excludes it so the
     # same agent is never handed the floor twice in a row — otherwise a random
@@ -3758,6 +4052,7 @@ def main():
             turns_in_current_state += 1
             turns_since_moderator += 1
             agent.spoke += 1
+            sched_counts_cli[agent.key] = sched_counts_cli.get(agent.key, 0) + 1
 
             stall_triggered = moderator_state["stall"]
 
@@ -4052,8 +4347,10 @@ def main():
             history = clamp_history(transcript_lines, args.max_history_chars)
             roles_summary = build_roles_summary(agents)
             spoke_counts = ", ".join(f"{k}={key_to_agent[k].spoke}" for k in agent_keys)
+            sched_counts = ", ".join(f"{k}={sched_counts_cli.get(k, 0)}" for k in agent_keys)
             stats = (
                 f"Spoke counts: {spoke_counts}. "
+                f"Scheduled counts (incl. turns that produced no visible message): {sched_counts}. "
                 f"Consecutive agent turns={consecutive_agent_turns}. "
                 f"User gap(lines)={gap}. "
                 f"Moderator state={moderator_state['state']}."

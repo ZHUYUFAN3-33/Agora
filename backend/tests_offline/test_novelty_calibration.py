@@ -94,7 +94,11 @@ check("a retry that adds real terms is PUBLISHED (was dropped at the old bar)", 
 check("the published text is the retry, not the original", bool(spoke and IMPROVED in (spoke[0].get("txt") or "")))
 
 spoke_dup, calls_dup = run(NEAR_DUP)
-check("the guard asked for a retry here too", calls_dup == 2)
+# Dropped turns roll back their scheduling state, so the burst loop grants one
+# more attempt (original + guard retry each) before the phantom-drop cap ends
+# the user turn.
+check("the guard asked for a retry on every attempt",
+      calls_dup == 2 * aw.MAX_PHANTOM_DROPS_PER_USER_TURN)
 check("a near-verbatim retry is still dropped — silence needs strong evidence", len(spoke_dup) == 0)
 
 print("== defaults are the calibrated ones, in both entry points ==")

@@ -136,7 +136,11 @@ check(f"without a target the old semantics hold and the guard retries (calls={ca
 
 print("== pure quotation with a target is still caught ==")
 spoke3, calls3 = run("challenge @ChatbotB", B_LINE)
-check(f"all-quote message scores 0.0 and triggers the retry (calls={calls3})",
-      calls3 == 2)
+# A dropped turn no longer consumes the user-turn slot (phantom rollback), so
+# the scheduler grants one more attempt before the phantom-drop cap ends the
+# burst: each attempt is original + guard retry, capped attempts total.
+check(f"all-quote message scores 0.0 and triggers the retry each attempt (calls={calls3})",
+      calls3 == 2 * aw.MAX_PHANTOM_DROPS_PER_USER_TURN)
+check("all-quote attempts all stay unpublished", len(spoke3) == 0)
 
 _ck.finish("ALL CHECKS PASSED")

@@ -7,6 +7,9 @@ __pycache__
 .env
 .env.*
 !**/.env.example
+# Plaintext credential sheets. Nothing COPYs them, but they would still be
+# uploaded to the remote builder as part of the build context.
+test_accounts_*.csv
 node_modules
 frontend/node_modules
 frontend/dist

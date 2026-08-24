@@ -838,13 +838,18 @@ export function ProfileModal({
     setSaving(true);
     const profile = valuesToObject(template.profile_fields, values);
     try {
-      await fetch(`${API_BASE}/me/profile`, {
+      const res = await fetch(`${API_BASE}/me/profile`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ profile, scenario_type: scenarioType }),
       });
+      // A 401 from an expired token used to read exactly like success here, so a
+      // profile could silently never reach the server. Chat keeps it in the intake
+      // draft either way, so this stays non-blocking -- but say so in the console
+      // rather than letting the failure leave no trace at all.
+      if (!res.ok) console.warn(`profile save failed (${res.status})`);
     } catch {
-      /* continue with local profile */
+      /* offline: continue with the local profile */
     }
     onConfirm(profile);
     setSaving(false);

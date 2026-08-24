@@ -35,6 +35,7 @@ import {
   toneOptions,
 } from "../i18n/ui";
 import { authFetch, getAuth, logoutRequest } from "../auth";
+import { clearIntakeDraft, loadIntakeDraft, saveIntakeDraft } from "../intakeDraft";
 import { emit, flush as flushTelemetry, setTelemetryRoom, DwellTracker } from "../telemetry";
 import { useAppearanceContext } from "../context/AppearanceContext";
 import {
@@ -2257,11 +2258,15 @@ export default function Chat() {
     } catch {
       /* first session */
     }
+    // Reopening the form after filling it this sitting should bring back their own
+    // answers, not last session's -- the draft is newer than most_recent_intake.
+    const draft = loadIntakeDraft(webUserId);
+    if (draft && draft.scenario_type === s.id) setLastIntake(draft.intake);
     setShowSceneSelector(false);
     setProfileHandoff(false);
     setPendingProfileScene(s);
     setShowProfileModal(true);
-  }, []);
+  }, [webUserId]);
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const c = messagesContainerRef.current;
@@ -2769,6 +2774,28 @@ export default function Chat() {
       })
       .catch(() => setScenes([]));
   }, [uiLang]);
+
+  // Intake and profile live in React state until the first message creates the room,
+  // so a reload used to throw away a finished pair of forms and drop the participant
+  // back at "intake required". Put them back before the welcome screen can say that.
+  // Not the auto-pick the effect above refuses to make: this replays a choice the
+  // participant already confirmed, and only inside the draft's one-sitting window.
+  const draftRestoredRef = useRef(false);
+  useEffect(() => {
+    if (draftRestoredRef.current || scenes.length === 0) return;
+    draftRestoredRef.current = true;
+    const draft = loadIntakeDraft(webUserId);
+    const scene = draft && scenes.find((s) => s.id === draft.scenario_type);
+    if (!draft || !scene) return;
+    setSelectedScene((prev) => prev || scene);
+    setUserProfile((prev) => prev || draft.profile);
+    setAgora2Intake((prev) => prev || {
+      scenario_type: draft.scenario_type,
+      lang: draft.lang,
+      intake: draft.intake,
+      session_update: draft.session_update,
+    });
+  }, [scenes, webUserId]);
 
   useEffect(() => {
     if (currentConv) {
@@ -3734,6 +3761,7 @@ export default function Chat() {
     setShowCustomizer(true);
   }, []);
   const handleLogout = async () => {
+    clearIntakeDraft(webUserId);
     await logoutRequest();
     navigate("/");
   };
@@ -4054,6 +4082,9 @@ export default function Chat() {
                   onConfirm={(payload) => {
                     setSelectedScene(pendingIntakeScene);
                     setAgora2Intake(payload);
+                    // Until the first message creates the room, these answers exist
+                    // nowhere but this tab. Write them down before anything can eat them.
+                    saveIntakeDraft(webUserId, { ...payload, profile: userProfile });
                     setSessionIndex(sessionCountBefore + 1);
                     setPendingIntakeScene(null);
                     setShowSceneSelector(false);

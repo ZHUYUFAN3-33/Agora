@@ -1739,13 +1739,28 @@ function CustomizerModal({
               )}
               <div>
                 <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.basicStance")}</label>
-                <CustomDropdown
-                  value={s.stance || stanceOptions[0]?.value || ""}
-                  onChange={(v) => upd(key, "stance", v)}
-                  options={stanceOptions.map((o) => ({ value: o.value, label: t(uiLang, `stance.${o.value}`) }))}
-                  size="sm"
-                  style={font}
-                />
+                {stanceSceneBound ? (
+                  // A scene that binds stances partitions the interests at issue,
+                  // and the panel only works if each one keeps a voice. Offering a
+                  // picker here let a user set every agent to the same stance --
+                  // and the backend now drops the override anyway, so the control
+                  // was promising something it could not deliver.
+                  <div
+                    className="text-[11px] px-3 py-1.5 border border-black/10 rounded-[6px] bg-black/[0.03] text-[var(--app-muted-text)] cursor-default select-none"
+                    style={font}
+                    aria-readonly="true"
+                  >
+                    {t(uiLang, `stance.${s.stance || stanceOptions[0]?.value || ""}`)}
+                  </div>
+                ) : (
+                  <CustomDropdown
+                    value={s.stance || stanceOptions[0]?.value || ""}
+                    onChange={(v) => upd(key, "stance", v)}
+                    options={stanceOptions.map((o) => ({ value: o.value, label: t(uiLang, `stance.${o.value}`) }))}
+                    size="sm"
+                    style={font}
+                  />
+                )}
               </div>
               <div>
                 <label className={`text-[10px] text-[var(--app-muted-text)] ${lbl} mb-1.5 block`} style={font}>{t(uiLang, "custom.knowledgeHint")}</label>
@@ -2215,6 +2230,18 @@ export default function Chat() {
     () => auth?.user_id || "web_user",
     [auth?.user_id],
   );
+  // What the intake form actually renders. lastIntake covers the paths that run
+  // through beginAgora2Scene(); the send-time guard (err.intake) opens the form
+  // directly and leaves it null, which is how a participant who already filled
+  // the form is handed a blank one and retypes answers the browser still holds.
+  // Memoised because IntakeModal keys its prefill effect on this prop's identity
+  // -- a fresh loadIntakeDraft() object per render would reset the form as they type.
+  const intakePrefill = useMemo(() => {
+    if (lastIntake) return lastIntake;
+    if (!pendingIntakeScene) return null;
+    const draft = loadIntakeDraft(webUserId);
+    return draft && draft.scenario_type === pendingIntakeScene.id ? draft.intake : null;
+  }, [lastIntake, pendingIntakeScene, webUserId]);
   const suggestedPrompts = useMemo(() => {
     const id = selectedScene?.id;
     const local = getSuggestedPrompts(id, uiLang);
@@ -2795,6 +2822,11 @@ export default function Chat() {
       intake: draft.intake,
       session_update: draft.session_update,
     });
+    // The payload above is what /api/start sends; lastIntake is what the FORM
+    // renders. Restoring only the former left "intake ready" on the welcome
+    // screen while `click to change` opened a blank form -- and confirming that
+    // blank form overwrote the restored answers with nothing.
+    setLastIntake((prev) => prev || draft.intake);
   }, [scenes, webUserId]);
 
   useEffect(() => {
@@ -4077,7 +4109,7 @@ export default function Chat() {
                   scene={pendingIntakeScene}
                   lang={uiLang}
                   sessionCount={sessionCountBefore}
-                  lastIntake={lastIntake}
+                  lastIntake={intakePrefill}
                   onClose={() => setPendingIntakeScene(null)}
                   onConfirm={(payload) => {
                     setSelectedScene(pendingIntakeScene);

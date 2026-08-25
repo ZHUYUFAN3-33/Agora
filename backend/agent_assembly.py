@@ -237,18 +237,23 @@ def build_agent_spec(agent_key: str, decision_name: str, emotion_name: str,
 
     agent_keys: full pool for stance assignment wrap-around (backend-dev).
 
-    stance_override: product/UI — when set, use this stance instead of assign_stance().
+    stance_override: only honoured by scenarios that declare NO assignment order.
+
+        A scenario whose stance template carries an `assignment` list partitions
+        the interests at issue, and every one of them has to be voiced or the
+        panel is not a panel: three agents all set to `growth_centered` is one
+        viewpoint wearing three names. stance_enabled() is exactly "this scenario
+        has a forced assignment", so for those the override is dropped and
+        assign_stance() decides. Scenarios with free stances still take it.
     """
     role_text = assemble_role_text(decision_name, emotion_name, decision_dir, emotion_dir)
 
     stance = None
     stance_text = ""
     if HAVE_STANCE and scenario_type and stance_enabled(scenario_type):
-        override = (stance_override or "").strip() or None
-        if override:
-            stance = override
-        else:
-            stance = assign_stance(scenario_type, agent_key, agent_keys)
+        stance = assign_stance(scenario_type, agent_key, agent_keys)
+        if stance is None:
+            stance = (stance_override or "").strip() or None
         stance_text = get_stance_text(scenario_type, stance, lang)
 
     preloaded_knowledge = ""

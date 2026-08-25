@@ -20,9 +20,14 @@
 #   fly secrets set OPENAI_API_KEY='sk-...' AGORA_ADMIN_USER_ID='...' AGORA_ADMIN_PASSWORD='...' -a agora-chat-2
 #   fly deploy -c fly.shard2.toml
 #
-# Note: seed_users.json seeds all 32 study accounts into BOTH shards, so a participant
-# who opens the wrong link gets a working login and a silently empty room. Hand out the
-# links carefully, and export from both shards at the end.
+# Rosters are disjoint: this shard seeds P33-P56 from its own seed_users.shard2.json
+# (AGORA_SEED_USERS_FILE below), while fly.toml keeps P01-P32 from seed_users.json. A
+# participant who opens the wrong link now fails to log in instead of landing in a
+# silently empty room — the ID itself says which shard they belong to.
+#
+# Caveat: seeding only ever adds (INSERT OR IGNORE). Accounts already written to this
+# shard's volume by an earlier deploy are NOT removed by pointing at a new seed file;
+# they have to be deleted from /data/agora.db by hand. Export from both shards at the end.
 
 app = "agora-chat-2"
 primary_region = "nrt"
@@ -35,6 +40,9 @@ primary_region = "nrt"
   AGORA_STATIC_DIR = "/app/frontend/dist"
   PORT = "8080"
   FLASK_DEBUG = "0"
+  # This shard's roster. Dockerfile copies backend/ to /app, so the file lands here.
+  # Without it the default (/app/seed_users.json) would seed P01-P32 into both shards.
+  AGORA_SEED_USERS_FILE = "/app/seed_users.shard2.json"
   # Must stay identical to fly.toml -- the two shards run the same study, so a
   # participant's experience cannot depend on which link they were handed.
   AGORA_PREFER_AGENTS = "0.5"

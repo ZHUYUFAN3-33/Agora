@@ -62,11 +62,20 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=2, help="zero-pad width (default 2 → P01)")
     ap.add_argument("--append", action="store_true", help="keep existing seed rows, add new ones")
     ap.add_argument("--out-dir", default=REPO_ROOT, help="where to write the credential sheet")
+    ap.add_argument(
+        "--seed-file",
+        default=SEED_PATH,
+        help="seed file to read/write (default backend/seed_users.json). Point a shard at "
+        "its own file to give it a disjoint roster, and match it with "
+        "AGORA_SEED_USERS_FILE in that shard's fly.toml.",
+    )
     args = ap.parse_args()
 
+    seed_path = os.path.abspath(args.seed_file)
+
     existing: list[dict] = []
-    if args.append and os.path.isfile(SEED_PATH):
-        with open(SEED_PATH, "r", encoding="utf-8") as fh:
+    if args.append and os.path.isfile(seed_path):
+        with open(seed_path, "r", encoding="utf-8") as fh:
             existing = (json.load(fh) or {}).get("users", [])
     taken = {u.get("user_id") for u in existing}
 
@@ -102,19 +111,20 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "users": users,
     }
-    with open(SEED_PATH, "w", encoding="utf-8") as fh:
+    with open(seed_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    sheet = os.path.join(args.out_dir, f"test_accounts_{stamp}.csv")
+    tag = os.path.splitext(os.path.basename(seed_path))[0].replace("seed_users", "").strip("._-")
+    sheet = os.path.join(args.out_dir, f"test_accounts_{tag + '_' if tag else ''}{stamp}.csv")
     with open(sheet, "w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["user_id", "password"])
         w.writerows(rows)
 
     print(f"✓ {len(rows)} accounts: {rows[0][0]} … {rows[-1][0]}")
-    print(f"✓ Seed (hashes, commit this): {SEED_PATH}")
+    print(f"✓ Seed (hashes, commit this): {seed_path}")
     print(f"✓ Sheet (plaintext, do NOT commit): {sheet}")
     return 0
 

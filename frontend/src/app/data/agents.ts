@@ -108,18 +108,31 @@ export const BACKEND_NAME_TO_KEY: Record<string, AgentKey> = {
   ChatbotF: "F",
 };
 
+/**
+ * Opener chips.
+ *
+ * These are the app's own words, so they decide what the very first agent turn
+ * has to work with. The previous set asked the agents to rank criteria or to
+ * compare the options in general — reasonable questions, but ones no topic card
+ * is about: measured against the stance knowledge base, the 16 chips below
+ * retrieved a card on 1 of 48 (scenario x stance) lookups, and 5 of the 14
+ * retrieved turns in real study sessions were a chip pasted verbatim. So every
+ * chip here names a concrete concern that some card actually covers, and the
+ * four span the three stances rather than asking for all three at once.
+ * tests_offline/test_retrieval_eval.py reads this list and reports what it hits.
+ */
 export const SCENE_SUGGESTED_PROMPTS: Record<string, string[]> = {
   employment: [
-    "I'm choosing between two offers. Can you help me compare growth vs stability vs work-life balance?",
-    "What risks am I underweighting if I switch companies within two weeks?",
-    "How should I rank salary, growth, and location for this decision?",
-    "What clarifying questions should I ask each company before deciding?",
+    "Five years from now, will I regret whichever one I turn down?",
+    "If it does not work out, can I go back? Or is one of these a one-way door?",
+    "One option means moving cities, away from my partner. How much should that weigh?",
+    "What should I check in the contract and probation period before I decide?",
   ],
   parent_child: [
-    "I need to decide on a rule for my child's phone use. How do we balance autonomy and safety?",
-    "How should I weigh what my child wants against practical constraints?",
-    "What does a respectful decision process look like for this parenting choice?",
-    "Can you help me separate my child's stated preference from typical age-based assumptions?",
+    "My child keeps saying 'let me decide'. How much of this is actually theirs to decide?",
+    "We need phone rules that hold. Where should the screen time limits actually sit?",
+    "On this one, am I being too strict or too lenient?",
+    "My child says nobody listens to me when we decide things like this. How do I bring them in?",
   ],
   scene1: [
     "I need a Black Friday laptop under $1200 for coding and light gaming. What should I prioritize?",
@@ -182,16 +195,16 @@ export const SUGGESTED_PROMPTS = SCENE_SUGGESTED_PROMPTS.employment;
 /** Chinese suggested prompts (semantic alignment, not literal machine translation). */
 export const SCENE_SUGGESTED_PROMPTS_ZH: Record<string, string[]> = {
   employment: [
-    "我在两个 offer 之间犹豫，能帮我从成长、稳定和生活平衡比较一下吗？",
-    "如果两周内跳槽，我可能低估了哪些风险？",
-    "这次决策里，薪水、成长和地点该怎么排序？",
-    "决定前，我该向每家公司问清哪些问题？",
+    "五年后回头看，我会不会后悔现在放弃的那个？",
+    "如果去了发现不合适，还能回来吗？还是一条路走到黑？",
+    "有个选择要换城市，和伴侣两地分居，这个该怎么权衡？",
+    "签之前，合同和试用期条款我该重点看哪些？",
   ],
   parent_child: [
-    "孩子的手机使用规则该怎么定？如何在自主和安全之间平衡？",
-    "孩子的意愿和现实约束该如何权衡？",
-    "对这个养育决定来说，怎样的协商过程更尊重彼此？",
-    "怎样把孩子明确表达的偏好，和「这个年龄常见」的假设分开看？",
+    "孩子总说「自己决定」，这件事到底哪部分该他自己定？",
+    "手机和屏幕时间该怎么定规矩，才不会每次都吵起来？",
+    "这件事上我是太严还是太松？",
+    "孩子说「没人问我」，我该怎么把他的意见放进来？",
   ],
 };
 

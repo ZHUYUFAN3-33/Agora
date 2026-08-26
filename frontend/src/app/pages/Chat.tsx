@@ -1081,18 +1081,38 @@ const AgentMessage = React.memo(function AgentMessage({
             ? renderChatAnnotatedText(finalContent, layerAnnotations!, "agent", nickname)
             : highlightUserMentions(finalContent, nickname)}
         </p>
+        {/*
+          The card's tag is always visible; its citation opens on hover.
+
+          It used to be a native title= tooltip, which is not the same thing: the
+          browser one is unstyled, delayed, truncated by some browsers, and never
+          fires on touch. This is a real panel — styled, immediate, and its text
+          is selectable because it sits inside the hovered group rather than
+          being pointer-events-none, so a participant can copy the reference.
+          focus-within carries the same panel to keyboard users, which the chip's
+          tabIndex makes reachable.
+        */}
         {message.knowledge && (
-          <div className="mt-2.5 pt-2 border-t border-black/[0.07] flex flex-wrap items-center gap-1.5">
+          <div className="relative group/src mt-2.5 pt-2 border-t border-black/[0.07] flex flex-wrap items-center gap-1.5">
             <span className="text-[9px] text-black/40" style={getUiFont(uiLang)}>
               {t(uiLang, "chat.knowledgeUsed")}
             </span>
             <span
-              className="text-[9px] px-2 py-0.5 rounded-[4px] border border-black/10 bg-black/[0.03] text-black/65"
+              className="text-[9px] px-2 py-0.5 rounded-[4px] border border-black/10 bg-black/[0.03] text-black/65 cursor-help"
               style={getUiFont(uiLang)}
-              title={message.knowledge.source || undefined}
+              tabIndex={message.knowledge.source ? 0 : undefined}
             >
               {message.knowledge.tag}
             </span>
+            {message.knowledge.source && (
+              <span
+                role="tooltip"
+                className="pointer-events-none group-hover/src:pointer-events-auto absolute bottom-full left-0 right-0 mb-1.5 z-20 rounded-[4px] border border-black/10 bg-white px-2.5 py-2 text-[10px] leading-relaxed text-black/70 shadow-[0_2px_10px_rgba(0,0,0,0.10)] opacity-0 invisible transition-opacity duration-100 group-hover/src:opacity-100 group-hover/src:visible group-focus-within/src:opacity-100 group-focus-within/src:visible group-focus-within/src:pointer-events-auto"
+                style={getUiFont(uiLang)}
+              >
+                {message.knowledge.source}
+              </span>
+            )}
           </div>
         )}
         {(message.options?.length || 0) >= 2 && (

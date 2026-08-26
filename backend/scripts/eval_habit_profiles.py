@@ -54,10 +54,12 @@ from eval_user_moves import (  # noqa: E402
 )
 
 # Verdict / ranking wording, union of both regexes used in earlier evals.
+# "survivor|survives" deliberately excluded: it false-positived on interview
+# advice ("whether your proposed work survives") in the first live run.
 VERDICT_RE = re.compile(
     r"i would (pick|choose|back|support|still eliminate)|should be eliminated"
     r"|i would drop|remains? eliminated|my recommendation|final recommendation"
-    r"|stronger overall case|leading (candidate|option)|survivor|survives"
+    r"|stronger overall case|leading (candidate|option)"
     r"|排除|淘汰|首选|我会选|我推荐|最终建议",
     re.I)
 OPTION_RE = re.compile(r"Kyoto|Singapore|Shibuya|京都|新加坡|涩谷|渋谷", re.I)

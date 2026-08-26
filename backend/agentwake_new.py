@@ -1175,7 +1175,7 @@ Pick exactly ONE label:
 - local_question : a bounded question answerable in its own terms (a fact, a procedure, what to check, how something works, what something means). It does not ask which option to pick.
 - challenge : the user disputes, doubts, or pushes back on something an agent said.
 - new_criterion : the user adds a consideration, constraint, or fact that was not part of the comparison yet.
-- request_recommendation : the user asks which option to pick, for a ranking, or for the group's conclusion.
+- request_recommendation : the user asks which option to pick, for a ranking, or for the group's conclusion — question or imperative alike ("which one?", "just tell me which one to take", "直接说选哪个").
 - goal_switch : the user abandons the current decision and raises an unrelated one.
 - progress : anything else — answering an agent's question, adding detail about their situation, acknowledging.
 
@@ -1206,7 +1206,8 @@ USER_MOVE_CONTRACTS: Dict[str, str] = {
         "The user just pushed back on a point from this discussion. Engage their objection on its "
         "merits: concede what is right in it, defend what you still hold with a specific reason, and "
         "state plainly whether it changes your position. Do not restate your full ranking; address "
-        "the objection itself.",
+        "the objection itself. If the objection was aimed at ANOTHER agent, give your stance's view "
+        "on the objection alone — do not use the turn to re-announce which options you keep or drop.",
     "new_criterion":
         "The user just introduced a consideration that was not part of the comparison. Absorb it: "
         "assess the options against this NEW dimension specifically, from your stance's angle, and "

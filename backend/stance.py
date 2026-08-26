@@ -46,7 +46,12 @@ from typing import Dict, List, Optional
 
 from lang_utils import normalize_lang, pick
 
-STANCE_TEMPLATE_DIR_DEFAULT = "stance_templates"
+# Resolved against THIS FILE, not the process CWD — see the same note in
+# stance_knowledge.py. stance_enabled() reads these templates, and when the
+# directory is missing it answers False rather than raising, so a wrong CWD
+# silently strips every agent of its stance instead of failing loudly.
+STANCE_TEMPLATE_DIR_DEFAULT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "stance_templates")
 
 # -------------------------------------------------------------------------
 # 1. Template loading + forced assignment

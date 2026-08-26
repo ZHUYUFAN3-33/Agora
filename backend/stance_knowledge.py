@@ -49,11 +49,15 @@ Upstream baseline: agora2/backend-dev @ 987c0b0.
 Every function below is upstream VERBATIM except for the two clearly banner-ed
 LOCAL blocks and one upstream function that gained a single opt-in parameter:
 
-  LOCAL BLOCK 1 (helpers, just below the imports)
+  LOCAL BLOCK 1 (helpers, just below the imports) — includes the scored
+                 retrieval pass (`rank_topic_cards`, `_scored_topic_card` and
+                 their tokenizer/index helpers)
   LOCAL BLOCK 2 (preview_matched_card, at the end of the module)
-  _match_topic_card  — gained `allow_soft`, default False. With the default it
-                       is byte-for-byte upstream behaviour; the local pass 2
-                       only runs when a caller opts in.
+  _match_topic_card  — gained `allow_soft`, default False, AND a scored pass.
+                       It is no longer byte-for-byte upstream on either branch:
+                       allow_soft=False now falls through to BM25 instead of
+                       returning None, and allow_soft=True still runs the local
+                       pass 2. Only pass 1 itself is upstream.
 
 The `allow_soft` chain (_match_topic_card -> peek_matched_card_id /
 get_stance_knowledge_hit -> get_stance_knowledge_block) is threaded so the
@@ -65,13 +69,25 @@ re-thread `allow_soft`.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from typing import List, Optional
 
 from lang_utils import normalize_lang, pick, header
 
-STANCE_KNOWLEDGE_DIR_DEFAULT = os.path.join("background_templates", "stance_knowledge")
+# Resolved against THIS FILE, not the process CWD. The cards are package data
+# that ships next to the module, so the caller's working directory has no say in
+# whether they load. It used to be the bare relative path, and load_stance_knowledge()
+# returns {} for a missing directory without raising or logging — so starting the
+# server from the repo root instead of backend/ silently produced a session with
+# no knowledge base at all. Measured on a real local run: 10 agent turns, every
+# retrieval "skipped", zero cards, no error anywhere. Production only escaped it
+# because the Dockerfile does COPY backend/ ./ with WORKDIR /app, which makes the
+# CWD happen to be the backend directory.
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+STANCE_KNOWLEDGE_DIR_DEFAULT = os.path.join(
+    _PACKAGE_DIR, "background_templates", "stance_knowledge")
 
 
 # =============================================================================
@@ -197,6 +213,327 @@ def _humanize_card_id(card_id: str) -> str:
     return title.replace("_", " ").strip()
 
 
+# --- scored retrieval, used only by the per-turn runtime path ----------------
+#
+# Pass 1 (exact substring) is precise but only fires when the user reproduces a
+# hand-written keyword verbatim, and users do not. Measured on production logs:
+# 2 hits in 43 agent turns across 5 participants / 12 rooms, and 0 in the 10
+# turns of the DEMO01 teaser session. The misses are not exotic — "I will
+# regret" misses the keyword "will I regret" on word order alone, and "can I
+# ever come back" misses "can I go back" on one inserted adverb.
+#
+# So pass 1.5 scores every card in the pool with BM25 over its keywords and
+# takes the top one — which is also what sections/4-system.tex has always
+# claimed this module does. Two properties matter more than the ranking itself:
+#
+#   BILINGUAL TOKENS. 11 of the 12 real rooms are Chinese, and Chinese has no
+#   whitespace, so an English word tokenizer produces nothing at all on them.
+#   Tokens are therefore English word stems plus Chinese character bigrams.
+#
+#   ABSTAINING. A wrong card is worse than no card, and roughly a third of real
+#   user turns are meta requests ("compare these two for me") or topics the
+#   corpus does not cover at all, where the correct output is nothing.
+#   _BM25_MIN_MATCHED_TOKENS is what buys that: every false fire measured on the
+#   real corpus rested on a SINGLE shared token — "offer" pulling in a contract
+#   card, "salary" pulling in an income card — while every correct fire shared
+#   at least two. Requiring two distinct query tokens removed all of them and
+#   cost no correct hit. A runner-up margin was also tried and only ever lost
+#   correct hits, so there is deliberately no such knob.
+#
+# Parameters were swept against four labelled corpora (real participant turns,
+# the 8 scripted teaser turns, the DEMO01 session, and the app's own suggested
+# prompts). tests_offline/test_retrieval_eval.py pins the outcome.
+
+_BM25_K1 = 1.5
+_BM25_B = 0.75
+_BM25_MIN_SCORE = 2.0
+_BM25_MIN_MATCHED_TOKENS = 2
+# Scored retrieval is for whole user messages. A two-or-three character query is
+# a setup hint, and binding one is the failure test_kb_integrity.py pins: "跳槽时"
+# tokenizes to 跳槽 + 槽时, both of which sit inside the keyword 跳槽时机, so
+# without this floor a bare hint would clear the two-token guard on its own.
+# The shortest real participant message seen in production yields 5 tokens.
+_BM25_MIN_QUERY_TOKENS = 4
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+_HAN_RUN_RE = re.compile(r"[一-鿿]+")
+# U+2019 is what iOS/macOS smart punctuation and most IMEs emit, so "can’t"
+# would otherwise tokenize to nothing (`can` is a stopword, `t` is one char)
+# while the keyword "can't" keeps its token. 20 shipped keywords across 15 cards
+# depend on that token.
+_APOSTROPHES = str.maketrans({"’": "'", "ʼ": "'", "´": "'"})
+
+# Function words that must not, on their own, satisfy the two-matched-token
+# acceptance bar. These are NOT dropped from the index or the query — `back` has
+# to stay indexable for the keyword "can I go back", and `keep` for "keeping the
+# door open" — they simply do not COUNT as topical evidence.
+#
+# Without this the bar is satisfiable by two pure function words, which is not a
+# theoretical concern: "stay put for another year" matched {put, year} against
+# the keyword "put in so many years" and was handed the sunk-cost card, and
+# "I keep going back and forth" matched {back, keep} against
+# stability_reversibility. Both are exactly the single-token failure the bar was
+# introduced to stop, with a second function word making up the count.
+_EN_WEAK_TOKENS = frozenset("""
+about all am being back come every first long make many more most much new now
+off only other over own people put right say still thing think through want way
+keep last take give get go come know look see thing year years time
+""".split())
+
+# Pools are rebuilt from disk on every /api/message, but their card ids are
+# stable, so the postings can be keyed off identity rather than recomputed.
+# Bounded by the number of distinct (scenario, stance) pools — six today.
+_INDEX_CACHE: dict = {}
+
+
+def _stem(word: str) -> str:
+    """Crude suffix strip, applied to a FIXPOINT.
+
+    Both sides go through this — the keyword when the index is built and the
+    user's own words when the query is tokenized — so the only property that
+    actually matters is that the two agree. A single pass does not give that,
+    because one suffix can mask another: `savings` lost its `s` and stopped,
+    while the user's `saving` went on to lose `ing`, and the two never met. The
+    same masking split `stress`/`stressed` and `siblings`/`sibling`. Looping
+    until nothing more strips makes the function idempotent, which is what
+    closes the gap.
+
+    Plain `s` is stripped before `ing`/`ed` for the same reason, guarded on `ss`
+    so `stress` and `business` keep theirs. An earlier version tried `es` before
+    `s`, which cut the stem-final `e` off every silent-e plural — `rules` became
+    `rul` while `rule` stayed `rule`, so a message saying "rule" could not reach
+    the keyword "different rules".
+
+    Irregulars are still missed (`hire`/`hiring`, `move`/`moved`). Closing those
+    needs a real stemmer, which is a dependency this module does not have; what
+    is fixed here is the class where BOTH sides are regular and only disagreed
+    because the stripping was order-dependent.
+    """
+    previous = None
+    while word != previous and len(word) > 3:
+        previous = word
+        if word.endswith("sses") and len(word) > 5:
+            word = word[:-2]          # businesses -> business, passes -> pass
+            continue
+        if word.endswith("ss"):
+            break
+        if word.endswith("ies") and len(word) > 4:
+            word = word[:-3] + "y"
+        elif word.endswith("s"):
+            word = word[:-1]
+        elif word.endswith("ing") and len(word) > 5:
+            word = word[:-3]
+        elif word.endswith("ed") and len(word) > 4:
+            word = word[:-2]
+        else:
+            break
+    return word
+
+
+def _tokenize(text: str) -> List[str]:
+    """English stems + CJK character bigrams, both lowercased.
+
+    Bigrams rather than a word segmenter because segmentation would be another
+    dependency and would still have to agree with how the keywords were written;
+    overlapping bigrams match 加班 inside 并且加班多 without either.
+    """
+    text = (text or "").lower().translate(_APOSTROPHES)
+    tokens = [_stem(w) for w in _WORD_RE.findall(text)
+              if len(w) > 1 and w not in _EN_STOPWORDS]
+    for run in _HAN_RUN_RE.findall(text):
+        if len(run) == 1:
+            tokens.append(run)
+            continue
+        tokens.extend(run[i:i + 2] for i in range(len(run) - 1))
+    return tokens
+
+
+def _pool_index(topic_cards: list):
+    """(docs, document frequency, N, average length) for one stance pool.
+
+    docs holds POSITIONS, never the card dicts. The pool is re-read from disk on
+    every turn, so a cached card object is a card as it was when the index was
+    first built — returning one would hand the prompt a stale body while pass 1,
+    reading the fresh list, returned the current one for the same card id.
+
+    The cache key is the keyword content itself for the same reason: keying on
+    (id, keyword count) is stable across any edit that preserves the count, so an
+    edited keyword list would go on being scored by its old postings.
+    """
+    key = tuple((c.get("id") or "", tuple(c.get("keywords") or [])) for c in topic_cards)
+    cached = _INDEX_CACHE.get(key)
+    if cached is not None:
+        return cached
+    docs = []
+    for position, card in enumerate(topic_cards):
+        tokens = _tokenize(" ".join(card.get("keywords") or []))
+        docs.append((position, len(tokens), _count(tokens)))
+    n_docs = len(docs)
+    doc_freq: dict = {}
+    for _pos, _len, freqs in docs:
+        for token in freqs:
+            doc_freq[token] = doc_freq.get(token, 0) + 1
+    avg_len = (sum(length for _p, length, _f in docs) / n_docs) if n_docs else 0.0
+    index = (docs, doc_freq, n_docs, avg_len)
+    _INDEX_CACHE[key] = index
+    return index
+
+
+def _count(tokens: List[str]) -> dict:
+    freqs: dict = {}
+    for token in tokens:
+        freqs[token] = freqs.get(token, 0) + 1
+    return freqs
+
+
+def _rank_pool(user_message: str, topic_cards: list) -> List[tuple]:
+    """[(score, strong_matched_count, card), ...] best first, or [] if the query
+    is too short to be a real user message.
+
+    The count returned is of TOPICAL matched tokens — matches on _EN_WEAK_TOKENS
+    still contribute to the score but are not counted as evidence, because the
+    acceptance bar downstream is expressed in that count.
+    """
+    if not user_message or not topic_cards:
+        return []
+    docs, doc_freq, n_docs, avg_len = _pool_index(topic_cards)
+    if not n_docs or not avg_len:
+        return []
+    # Generic CJK stubs are dropped from the QUERY only: a card whose keyword
+    # genuinely contains 工作 should still be findable by a more specific token.
+    query = {t for t in _tokenize(user_message) if t not in _CJK_GENERIC_HINTS}
+    if len(query) < _BM25_MIN_QUERY_TOKENS:
+        return []
+    scored = []
+    for position, length, freqs in docs:
+        score = 0.0
+        matched = 0
+        for token in query:
+            freq = freqs.get(token, 0)
+            if not freq:
+                continue
+            if token not in _EN_WEAK_TOKENS:
+                matched += 1
+            idf = math.log(1 + (n_docs - doc_freq[token] + 0.5) / (doc_freq[token] + 0.5))
+            score += idf * freq * (_BM25_K1 + 1) / (
+                freq + _BM25_K1 * (1 - _BM25_B + _BM25_B * length / avg_len)
+            )
+        scored.append((score, matched, topic_cards[position]))
+    # id as the tie-break so equal scores do not silently depend on JSON order.
+    scored.sort(key=lambda r: (-r[0], r[2].get("id") or ""))
+    return scored
+
+
+def rank_topic_cards(user_message: str, topic_cards: list, limit: int = 3) -> List[dict]:
+    """The ranking as plain data — [{"id", "score", "matched_tokens"}, ...].
+
+    Public because the runtime logs the top few candidates for every retrieval
+    ATTEMPT, hit or miss. Before that existed a miss left no trace anywhere, so a
+    whole session could retrieve nothing with nothing in any log looking wrong.
+    """
+    ranked = _rank_pool(user_message, topic_cards)
+    rows = [{"id": card.get("id"), "score": round(score, 4), "matched_tokens": matched}
+            for score, matched, card in ranked]
+    return rows[:limit] if limit else rows
+
+
+def _surface_words(text: str) -> set:
+    """Stemmed words INCLUDING function words, single letters dropped.
+
+    _tokenize throws stopwords away, which is right for scoring and wrong for
+    deciding whether the user reproduced a keyword PHRASE. "can I go back" and
+    "decided for me" both reduce to one content token, but the first survives
+    here as {can, go, back} against a message saying "can I ever come back",
+    while the second keeps only {decid} against "before deciding".
+    """
+    text = (text or "").lower().translate(_APOSTROPHES)
+    return {_stem(w) for w in _WORD_RE.findall(text) if len(w) > 1}
+
+
+def _covered_keyword_ids(user_message: str, topic_cards: list) -> set:
+    """Cards holding a keyword whose every content token the user said.
+
+    The two-token floor is the right guard against a lone shared word dragging in
+    an unrelated card, but on its own it also discards the single most valuable
+    class of miss: the user says exactly what the keyword says, only not
+    contiguously. "I will regret" against the keyword "will I regret" reduces to
+    the one content token `regret`, and "can I ever come back" against
+    "can I go back" reduces to `back` — both scored one matched token and were
+    dropped, even though the keyword is fully contained in what the user wrote.
+
+    So full coverage of a keyword is accepted as a second route in, with the
+    degenerate case fenced off. A keyword that reduces to ONE content token has
+    to clear two extra bars: that token must be unique to this card within the
+    pool, AND *every* surface word of the keyword — function words included —
+    must appear in the message.
+
+    Both bars were arrived at by measurement, in that order. Pool-uniqueness
+    alone let `decided for me` and `who decides` (both reducing to the
+    pool-unique `decid`) fire on "What clarifying questions should I ask each
+    company before deciding?". Requiring merely TWO surface words then let
+    `disappointed in you` fire on "I was disappointed in how the school handled
+    it" — the missing word is `you`, and `you` is the entire difference between
+    a parent's disappointment in a child and in a school. Requiring all of them
+    keeps `will I regret` against "I am afraid I will regret whichever one I
+    pick", which is the case this route exists for, and drops both of those.
+
+    What this route does NOT do is dispose of `just a job` — an earlier version
+    of this docstring claimed it did. `_surface_words('just a job')` is
+    {just, job} (the single letter is dropped, stopwords are deliberately kept),
+    so any sentence with both words covers it fully. What actually rejects it is
+    the pool-uniqueness bar: `job` has doc_freq 2 in the life_centered pool,
+    because life_partner_career also carries "partner's job". That is worth
+    knowing before curating: dropping that keyword would make
+    life_meaning_orientation fire on any message containing `just` and `job`.
+    """
+    _docs, doc_freq, _n, _avg = _pool_index(topic_cards)
+    query = {t for t in _tokenize(user_message) if t not in _CJK_GENERIC_HINTS}
+    if len(query) < _BM25_MIN_QUERY_TOKENS:
+        return set()
+    surface = _surface_words(user_message)
+    hits = set()
+    for card in topic_cards:
+        for keyword in card.get("keywords") or []:
+            tokens = {t for t in _tokenize(keyword) if t not in _CJK_GENERIC_HINTS}
+            if not tokens or not tokens <= query:
+                continue
+            if len(tokens) < 2:
+                only = next(iter(tokens))
+                # The one token carrying the whole keyword cannot be a weak one.
+                # `make up` reduces to `make`, and "I want to make new rules but
+                # I am not sure how to bring it up" covers both of its surface
+                # words without being about making up at all.
+                if only in _EN_WEAK_TOKENS or doc_freq.get(only, 0) != 1:
+                    continue
+                keyword_surface = _surface_words(keyword)
+                if len(keyword_surface) < 2 or not keyword_surface <= surface:
+                    continue
+            hits.add(card.get("id"))
+            break
+    return hits
+
+
+def _scored_topic_card(user_message: str, topic_cards: list) -> Optional[dict]:
+    ranked = _rank_pool(user_message, topic_cards)
+    if not ranked:
+        return None
+    covered = _covered_keyword_ids(user_message, topic_cards)
+    # Rank order decides WHICH card; the two acceptance routes decide WHETHER
+    # any card is good enough. Coverage is exempt from the score floor on
+    # purpose — the floor exists to reject weak partial overlap, and a keyword
+    # the user reproduced in full is not partial overlap however it scores.
+    # growth_affective_forecasting on "I am afraid I will regret whichever one I
+    # pick" is exactly that case: score 1.95, below the floor, keyword covered.
+    for score, matched, card in ranked:
+        if score <= 0:
+            break
+        if card.get("id") in covered:
+            return card
+        if score >= _BM25_MIN_SCORE and matched >= _BM25_MIN_MATCHED_TOKENS:
+            return card
+    return None
+
+
 # =============================================================================
 # END LOCAL BLOCK 1 — everything below is upstream unless banner-ed otherwise
 # =============================================================================
@@ -253,7 +590,17 @@ def _match_topic_card(user_message: str, topic_cards: list, lang: str,
             if kw.lower() in msg_lower:
                 return card
     if not allow_soft:
-        return None
+        # Pass 1.5 (LOCAL): scored retrieval — see the block above for why, and
+        # why it sits here rather than before pass 1. Exact containment stays
+        # first because it is the more precise signal when it fires; BM25 only
+        # gets the turns that would otherwise have injected nothing at all.
+        #
+        # Confined to the allow_soft=False branch on purpose. allow_soft=True
+        # means the input is a short SETUP HINT from the customizer UI, which
+        # pass 2 already handles with hint-specific guardrails; running a
+        # sentence-shaped retriever on a two-character hint would bind cards the
+        # user never asked about, and would change chips the UI has always shown.
+        return _scored_topic_card(user_message, topic_cards)
     # Pass 2 (LOCAL): short hint against a longer keyword; unique match only.
     soft_hits = []
     for card in topic_cards:

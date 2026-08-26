@@ -2527,9 +2527,20 @@ def run_user_turn(
         turns_in_state = int(session.get("turns_in_current_state") or 0)
         stall_eligible = turns_in_state > MODERATOR_STALL_TURNS
         had_user_input = bool(session.get("user_spoke_since_moderator"))
+        # Consume the recheck throttle always, but USER-turn credit only on a
+        # run that may act on it. A stall re-check (allow_state_change=False)
+        # used to zero user_turns_since_moderator too, which froze the phase:
+        # once turns_in_current_state passed MODERATOR_STALL_TURNS, re-checks
+        # fired every MODERATOR_STALL_RECHECK turns and ate the user-turn count
+        # before it could ever reach MODERATOR_USER_TURN_INTERVAL, so due_user
+        # never fired again and every proposed state change was suppressed
+        # forever. Measured: rooms 954660 (3 suppressed, stuck in Exploration),
+        # 894275 (4 suppressed, stuck in Structuring), 434276 (1 suppressed),
+        # and 5 consecutive suppressed Convergence verdicts in one eval run.
         session["turns_since_moderator"] = 0
-        session["user_turns_since_moderator"] = 0
-        session["user_spoke_since_moderator"] = False
+        if allow_state_change:
+            session["user_turns_since_moderator"] = 0
+            session["user_spoke_since_moderator"] = False
 
         reported_state = (
             "Convergence"
@@ -3349,6 +3360,14 @@ def run_user_turn(
             f"{prev} -> Exploration | user switched to a different question; "
             f"stage reset around it.",
         )
+    elif user_move == "request_recommendation":
+        # The user asked for the verdict — the strongest possible evidence the
+        # phase should be reassessed NOW, not on the every-2-user-turns clock.
+        # Admin-3 still decides the state (asking "which one?" on turn 1 keeps
+        # Exploration; the convergence gate still requires disagreement on
+        # record), so this cannot force a premature close — it only removes
+        # cadence luck from the path to Convergence.
+        run_moderator(allow_state_change=True)
 
     maybe_run_moderator()
 
@@ -4059,11 +4078,16 @@ def main():
 
         # Consume the scheduling counters for this run, but keep the "did the
         # user contribute since last time" answer — the Concluded latch below
-        # needs it.
+        # needs it. USER-turn credit is consumed only by a run that may act on
+        # it (HTTP-faithful): a stall re-check zeroing it froze the phase —
+        # re-checks fired every MODERATOR_STALL_RECHECK turns and ate the count
+        # before it could reach MODERATOR_USER_TURN_INTERVAL, so due_user never
+        # fired again and every proposed change was suppressed forever.
         had_user_input = user_spoke_since_moderator
         turns_since_moderator = 0
-        user_turns_since_moderator = 0
-        user_spoke_since_moderator = False
+        if allow_state_change:
+            user_turns_since_moderator = 0
+            user_spoke_since_moderator = False
 
         # Include stall context so Admin-3 knows how long we've been here
         # Only allow stall detection after MODERATOR_STALL_TURNS (first turn excluded)
@@ -4339,6 +4363,11 @@ def main():
                     f"{prev} -> Exploration | user switched to a different "
                     f"question; stage reset around it.",
                 )
+            elif user_move_state["move"] == "request_recommendation":
+                # The user asked for the verdict: reassess the phase NOW
+                # instead of waiting for the every-2-user-turns clock
+                # (HTTP-faithful). Admin-3 still decides the state.
+                run_moderator(allow_state_change=True)
 
             maybe_run_moderator()
             return True

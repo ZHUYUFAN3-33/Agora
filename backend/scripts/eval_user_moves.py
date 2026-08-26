@@ -55,9 +55,13 @@ SCRIPT = [
     {"user": "One thing I did not mention: my partner may get a Kyoto offer of their own next year.",
      "expected": "new_criterion", "note": "new fact that reweighs the comparison"},
     {"user": "So which one would you pick, all things considered?",
-     "expected": "request_recommendation", "note": "phase machinery should run"},
+     "expected": "request_recommendation",
+     "note": "must fast-track the moderator; phase should reach Convergence"},
+    {"user": "That matches my own read — if the PI-track terms check out in writing, I will take Kyoto.",
+     "expected": None,
+     "note": "user accepts; group should close (Convergence/Concluded), not reopen"},
     {"user": "Set the job choice aside for now — my visa renewal just got complicated, what should I sort out first?",
-     "expected": "goal_switch", "note": "paper's Redirecting case"},
+     "expected": "goal_switch", "note": "paper's Redirecting case, now from a closed state"},
 ]
 
 # Same frame as the log analysis that motivated the layer (54% of agent

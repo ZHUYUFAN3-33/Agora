@@ -23,6 +23,10 @@
           "zh": "针对已经摆上桌的每个具体选项，说出孩子在这个选项下的实际体验差别（自主感、兴趣被当真的程度、时间被占用的感受），不要停留在“要尊重孩子”这种抽象表述。",
           "en": "For each concrete option already on the table, state how the child's lived experience differs under it (sense of autonomy, whether their interest is taken seriously, how their time feels spent). Do not stop at abstractions like 'we should respect the child'."
         },
+        "Narrowing": {
+          "zh": "当某个选项被提议排除时，先说清孩子会随之失去什么、孩子自己会不会接受这个排除理由。如果被留下的方案其实是孩子最没有发言权的那个，现在就指出来。",
+          "en": "When an option is proposed for elimination, state what the child loses with it and whether the child would accept the reason given. If the surviving option is the one the child had the least say in, point that out now."
+        },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及在这个结论下孩子被牺牲掉的是什么。如果多数意见与你不同，先把孩子付出的代价说清楚再让步。",
           "en": "State which concrete option you back, and what the child gives up under that conclusion. If the majority leans elsewhere, spell out the child's cost before conceding anything."
@@ -47,6 +51,10 @@
           "zh": "逐个选项算执行成本：谁来接送、每周占多少小时、花多少钱、持续多久会开始崩。给出可比较的数字或范围，不要只说“成本高”。",
           "en": "Cost out each option: who does the logistics, how many hours a week, how much money, and how long before it becomes unsustainable. Give comparable numbers or ranges rather than saying 'it is costly'."
         },
+        "Narrowing": {
+          "zh": "在排除进行时，用执行成本把关：说出每个幸存方案要求家长长期投入什么；如果一个方案家长实际撑不住、却因为“对孩子好”而幸存，现在就反对。",
+          "en": "As options are ruled out, gate on execution cost: state what each surviving option demands of the parent long-term. If an option survives on 'it is good for the child' while the parent cannot actually sustain it, object now."
+        },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及家长要为此长期承担什么。如果这个结论的执行成本家长撑不住，现在就说，不要等到执行阶段。",
           "en": "State which concrete option you back and what the parent must carry long-term. If the chosen conclusion is not sustainable for the parent, say so now rather than at execution time."
@@ -70,6 +78,10 @@
         "Structuring": {
           "zh": "针对每个具体选项，说出孩子事后会怎么理解这件事（“他们听我的了”还是“我说了也没用”），把决策过程本身当作可比较的维度。",
           "en": "For each concrete option, state how the child will later make sense of it ('they listened to me' vs 'speaking up changes nothing'), treating the decision process itself as a comparable dimension."
+        },
+        "Narrowing": {
+          "zh": "对每一次排除，说出它是以什么方式发生的：孩子是被说服了，还是被无视了。指出哪个幸存方案在亲子信任上代价最大，别让排除的过程本身伤害关系。",
+          "en": "For each elimination, say how it happens: is the child persuaded, or overruled. Name which surviving option costs parent-child trust the most, and do not let the process of ruling out do the damage itself."
         },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及这个结论对亲子信任的代价，并给出一句具体的、家长可以照说的话来向孩子解释这个决定。",

@@ -1239,6 +1239,7 @@ def send_message():
         "phase": result.get("phase"),
         "stall": result.get("stall", False),
         "concluded": bool(result.get("concluded")),
+        "user_move": result.get("user_move"),
     })
 
 

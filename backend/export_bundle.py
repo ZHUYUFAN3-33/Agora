@@ -17,6 +17,7 @@ Layout produced for one room:
         params.jsonl
         generation.jsonl
         novelty.jsonl
+        retrieval.jsonl
         ux.jsonl
         db.json                 SQLite side: room row, messages, intake, board snapshot
         transcript.txt          flat "speaker: text" render, convenience only
@@ -50,6 +51,7 @@ ROOM_ARTIFACTS: Tuple[Tuple[str, str, str, str], ...] = (
     ("_params", ".jsonl", "", "params.jsonl"),
     ("_generation", ".jsonl", "", "generation.jsonl"),
     ("_novelty", ".jsonl", "", "novelty.jsonl"),
+    ("_retrieval", ".jsonl", "", "retrieval.jsonl"),
     ("_ux", ".jsonl", "", "ux.jsonl"),
     # Derived: rebuildable from the raw logs, but rebuilding needs an LLM call and is not
     # deterministic, so the artifact as produced at the time is what gets shipped.
@@ -312,6 +314,49 @@ novelty.jsonl
   it as one.
   Stall-burst turns publish without any novelty scoring, so they have no row here.
   Coverage is therefore not "every turn".
+
+retrieval.jsonl
+  Stance-knowledge retrieval, one row per ATTEMPT — that is, once per agent turn
+  that reached the prompt-assembly stage, whether or not a card was found.
+  Fields: chat_room_id, time, agent, stance, scenario_type, lang, state, query,
+  query_chars, outcome, card_id, reason, candidates.
+    query        the user's latest message, which is the ONLY thing retrieval
+                 runs on. A moderator-goal fallback was tried and removed: the
+                 goal is model-written and restates all three option names every
+                 turn, so a bare keyword like "startup" fired a firm-type card
+                 into a turn about reversibility. Measured before removal: one
+                 extra hit in 43 historical turns, and a wrong card on the first
+                 live session it ran in.
+    outcome    hit | miss | skipped | discarded.
+               skipped   retrieval could not be attempted. `reason` names which
+                         of the four causes it was: the module not importing,
+                         the knowledge base loading empty, the agent having no
+                         stance assigned, or no user message yet. They are
+                         reported separately because they are fixed in
+                         different files and look alike from the outside.
+               discarded not a retrieval outcome at all: the turn whose rows
+                         precede it was rolled back by the novelty or refusal
+                         guard, or produced no MESSAGE block, so its message was
+                         never published. Rows are written during PROMPT
+                         ASSEMBLY, before that is known, so a hit can belong to
+                         a turn nobody ever saw. Any "retrieval fired on N of M
+                         turns" taken from this file must drop the rows for the
+                         (agent, room) that each discarded row follows, or it
+                         over-counts by the number of phantom turns.
+    card_id    the card injected, on a hit. On outcome=miss with
+               reason="fallback suppressed" it names the card that matched but
+               resolved to the stance's generic fallback, which the runtime
+               deliberately does not inject.
+    candidates top 3 by BM25 with {id, score, matched_tokens}, ALWAYS recorded,
+               including on a miss. This is the point of the file: a miss whose
+               best candidate scores 1.9 is a threshold problem, a miss where
+               everything scores 0.0 is a coverage problem, and the two call for
+               opposite fixes. Rooms recorded before this file existed have no
+               retrieval evidence at all — for those, only hits are observable,
+               as the knowledge key on a chat.jsonl agent message.
+  A hit on a PUBLISHED turn corresponds 1:1 with that key — see `discarded`
+  above for the turns where it does not. A miss has no counterpart anywhere
+  else, which is exactly why this file was added.
 
 ux.jsonl
   Client-side behavior: what the user did, as opposed to what they typed.

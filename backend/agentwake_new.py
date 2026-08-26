@@ -58,12 +58,14 @@ try:
         get_stance_knowledge_block,
         get_stance_knowledge_hit,
         peek_matched_card_id,
+        rank_topic_cards,
         _match_topic_card as sk_match_topic_card,
     )
     HAVE_STANCE_KNOWLEDGE = True
 except ImportError:
     HAVE_STANCE_KNOWLEDGE = False
     peek_matched_card_id = None  # type: ignore
+    rank_topic_cards = None  # type: ignore
 
 # Cross-session memory: carry a short recap of the last few sessions into the
 # next one (implicit auto-carry, keyed by user_id + scenario_type). Adds exactly
@@ -414,6 +416,7 @@ def resolve_dynamic_stance_knowledge(
     agent_key: str,
     deliberation_state: str,
     on_match: Optional[Callable[[dict], None]] = None,
+    on_attempt: Optional[Callable[[dict], None]] = None,
 ) -> str:
     """
     Dynamic stance-knowledge channel with one-hop related_cards expansion.
@@ -422,27 +425,66 @@ def resolve_dynamic_stance_knowledge(
       A. this agent already hit the SAME card earlier this session (repeat hit), or
       B. deliberation is in Convergence.
     Records the card_id into hit_history after the repeat check.
+
+    on_match fires only on a hit and feeds the card badge on the message.
+    on_attempt fires on EVERY call, hit or miss, and feeds the retrieval log.
+    The two are separate because a badge is a product feature and the log is
+    evidence: with only on_match, a session that retrieved nothing at all left
+    no trace anywhere, which is why a 0-of-10 production session looked normal.
     """
-    if not (HAVE_STANCE_KNOWLEDGE and knowledge and stance and last_user_message and peek_matched_card_id):
+    query = last_user_message
+
+    def _report(outcome: str, card_id=None, reason: str = "") -> str:
+        if on_attempt is None:
+            return ""
+        candidates = []
+        if rank_topic_cards is not None and knowledge and stance:
+            stance_cfg = (knowledge.get(scenario_type or "") or {}).get(stance)
+            if isinstance(stance_cfg, dict):
+                candidates = rank_topic_cards(
+                    query, stance_cfg.get("topic_cards") or [], limit=3)
+        on_attempt({
+            "agent": agent_key,
+            "stance": stance,
+            "scenario_type": scenario_type,
+            "lang": lang,
+            "state": deliberation_state,
+            "query": query,
+            "query_chars": len(query or ""),
+            "outcome": outcome,
+            "card_id": card_id,
+            "reason": reason,
+            # The near-misses. A miss with a plausible card at 1.9 is a
+            # threshold problem; a miss with everything at 0.0 is a coverage
+            # problem, and the two need opposite fixes.
+            "candidates": candidates,
+        })
         return ""
+
+    # Reported separately, not as one combined reason. These three have nothing
+    # to do with each other and are fixed in different files, but a single
+    # "no knowledge base, stance, or user message" string sent the first real
+    # investigation to the wrong one: the session showed stance=None, which
+    # looked like a roster bug, when the actual cause was a CWD-relative data
+    # path that had emptied BOTH the stance templates and the card corpus.
+    if not (HAVE_STANCE_KNOWLEDGE and peek_matched_card_id):
+        return _report("skipped", reason="stance_knowledge module not importable")
+    if not knowledge:
+        return _report("skipped", reason="knowledge base loaded empty")
+    if not stance:
+        return _report("skipped", reason="agent has no stance assigned")
+    if not last_user_message:
+        return _report("skipped", reason="no user message yet")
     card_id = peek_matched_card_id(
-        scenario_type or "",
-        stance,
-        last_user_message,
-        lang,
-        knowledge=knowledge,
+        scenario_type or "", stance, query, lang, knowledge=knowledge,
     )
     if not card_id:
-        return ""
+        return _report("miss", reason="no card matched")
     hit = get_stance_knowledge_hit(
-        scenario_type or "",
-        stance,
-        last_user_message,
-        lang,
-        knowledge=knowledge,
+        scenario_type or "", stance, query, lang, knowledge=knowledge,
     )
     if not hit or hit.get("is_fallback"):
-        return ""
+        return _report("miss", card_id=card_id, reason="fallback suppressed")
     hits = hit_history.setdefault(agent_key, [])
     repeat_hit = card_id in hits  # trigger A (check BEFORE recording)
     in_convergence = deliberation_state == "Convergence"  # trigger B
@@ -453,10 +495,13 @@ def resolve_dynamic_stance_knowledge(
             "tag": hit.get("tag") or card_id,
             "source": hit.get("source") or "",
         })
+    _report("hit", card_id=card_id,
+            reason=("related expanded: repeat hit" if repeat_hit
+                    else "related expanded: convergence" if in_convergence else ""))
     return stance_knowledge_on_hit(
         scenario_type,
         stance,
-        last_user_message,
+        query,
         lang,
         knowledge,
         include_header=True,
@@ -2246,29 +2291,41 @@ def run_user_turn(
 
         # Stance Knowledge — DYNAMIC channel + related_cards A-OR-B expand
         # (repeat hit of same card, or Convergence / Concluded).
-        if HAVE_STANCE_KNOWLEDGE and stance_knowledge_data:
-            stance = agent_configs.get(agent_key, {}).get("stance")
-            li = last_user_index(transcript_lines)
-            last_user_message = (
-                transcript_lines[li].split(":", 1)[1].strip() if li is not None else ""
-            )
-            # A phase context can be rebuilt after a dropped/retried turn. Clear
-            # any earlier candidate first so a future message never inherits a
-            # stale badge from a generation that was not emitted.
-            pending_knowledge_matches.pop(agent_key, None)
-            sk_block = resolve_dynamic_stance_knowledge(
-                scenario_type=scenario_type,
-                stance=stance,
-                last_user_message=last_user_message,
-                lang=lang,
-                knowledge=stance_knowledge_data,
-                hit_history=session["agent_knowledge_hit_history"],
-                agent_key=agent_key,
-                deliberation_state=s.get("state", "Exploration"),
-                on_match=lambda hit: pending_knowledge_matches.__setitem__(agent_key, hit),
-            )
-            if sk_block:
-                lines.append(sk_block)
+        #
+        # Deliberately NOT guarded on `HAVE_STANCE_KNOWLEDGE and
+        # stance_knowledge_data` any more. resolve_dynamic_stance_knowledge
+        # already returns "" for both cases, and guarding here meant the one
+        # failure worth logging above all others — the knowledge base loading
+        # empty, which load_stance_knowledge() does silently from any cwd but
+        # backend/ — produced an EMPTY retrieval log, indistinguishable from a
+        # room that simply had no user message yet. Letting the call through
+        # makes that case write outcome="skipped" rows instead.
+        stance = agent_configs.get(agent_key, {}).get("stance")
+        li = last_user_index(transcript_lines)
+        last_user_message = (
+            transcript_lines[li].split(":", 1)[1].strip() if li is not None else ""
+        )
+        # A phase context can be rebuilt after a dropped/retried turn. Clear
+        # any earlier candidate first so a future message never inherits a
+        # stale badge from a generation that was not emitted.
+        pending_knowledge_matches.pop(agent_key, None)
+        sk_block = resolve_dynamic_stance_knowledge(
+            scenario_type=scenario_type,
+            stance=stance,
+            last_user_message=last_user_message,
+            lang=lang,
+            knowledge=stance_knowledge_data,
+            hit_history=session["agent_knowledge_hit_history"],
+            agent_key=agent_key,
+            deliberation_state=s.get("state", "Exploration"),
+            on_match=lambda hit: pending_knowledge_matches.__setitem__(agent_key, hit),
+            on_attempt=lambda rec: _append_jsonl(
+                session.get("retrieval_fp"),
+                {"chat_room_id": room_id, "time": now_local_iso(), **rec},
+            ),
+        )
+        if sk_block:
+            lines.append(sk_block)
         return "\n".join(lines)
 
     def append_agent(agent: "ChatAgent", txt: str, options: Optional[list] = None) -> None:
@@ -2800,6 +2857,20 @@ def run_user_turn(
             # phantom turns one user message may absorb before the floor
             # returns to the user.
             phantom_drops["n"] += 1
+            # Retrieval already logged an attempt for this turn during prompt
+            # assembly, and on a hit it logged outcome="hit" — but the message
+            # is now being thrown away, so no `knowledge` key will ever appear
+            # in chat.jsonl for it. Without this marker any "retrieval fired on
+            # N of M turns" computed from retrieval.jsonl over-counts N by the
+            # number of phantom turns. Reconcile by discarding the rows for an
+            # (agent, room) that a discarded row follows.
+            _append_jsonl(session.get("retrieval_fp"), {
+                "chat_room_id": room_id,
+                "time": now_local_iso(),
+                "agent": agent.key,
+                "outcome": "discarded",
+                "reason": "turn rolled back; the message was never published",
+            })
 
         session["last_speaker_key"] = agent.key
         session["bots_since_user"] = int(session.get("bots_since_user") or 0) + 1

@@ -573,6 +573,11 @@ SESSION_LOG_FILES: Tuple[Tuple[str, str, str], ...] = (
     ("config_fp", "config_log_path", "_config"),
     ("generation_fp", "generation_log_path", "_generation"),
     ("novelty_fp", "novelty_log_path", "_novelty"),
+    # One line per stance-knowledge retrieval ATTEMPT, hit or miss, with the
+    # top candidates and their scores. Added because misses were invisible:
+    # only hits were recorded (as the badge on the message), so a session that
+    # retrieved nothing produced logs indistinguishable from a healthy one.
+    ("retrieval_fp", "retrieval_log_path", "_retrieval"),
 )
 SESSION_LOG_HANDLES: Tuple[str, ...] = tuple(fp_key for fp_key, _, _ in SESSION_LOG_FILES)
 

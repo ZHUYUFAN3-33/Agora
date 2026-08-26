@@ -330,6 +330,130 @@ def persist_session_memory(
     )
 
 
+def jsonl_memory_ids(user_id: str, scenario_type: str) -> set:
+    """session_ids already recorded in the JSONL store (DB ids are the
+    caller's to add — the two stores can disagree, see backfill below)."""
+    if not HAVE_SESSION_MEMORY or not user_id or not scenario_type:
+        return set()
+    path = memory_path(user_id, scenario_type, MEMORY_DIR)
+    ids: set = set()
+    if not os.path.exists(path):
+        return ids
+    with open(path, "r", encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                sid = json.loads(line).get("session_id")
+            except json.JSONDecodeError:
+                continue
+            if sid:
+                ids.add(str(sid))
+    return ids
+
+
+def backfill_session_memory(
+    user_id: str,
+    scenario_type: str,
+    *,
+    create_response,
+    list_rooms,
+    load_messages,
+    existing_ids: Optional[set] = None,
+    upsert_db=None,
+    exclude_room: str = "",
+    max_rooms: int = 3,
+    model: str = MEMORY_MODEL,
+) -> List[dict]:
+    """Lazy write for cross-session memory, run at the NEXT /api/start.
+
+    Why this exists: the only HTTP write site used to be /api/summary, i.e.
+    memory was recorded only when the user pressed Generate on the Summary
+    panel. Measured across 5 study users / 12 rooms, exactly 1 memory record
+    existed — the one room whose summary was generated. The CLI writes at
+    /exit; HTTP has no reliable end-of-session signal (tab close, room switch
+    and disconnects are all silent), so the write happens lazily at the next
+    session start for the same (user, scenario) — right before the read, which
+    is the only moment the record is needed.
+
+    Dependency-injected (list_rooms / load_messages / upsert_db) so the logic
+    is testable offline without Flask or SQLite.
+
+    - Only rooms with at least one user message AND one agent message are
+      summarized; abandoned intake-only rooms are skipped silently (and will
+      be re-inspected next start — they cost no LLM call).
+    - Oldest-first, capped at max_rooms per start to bound /api/start latency.
+    - The summary language is DETECTED from the room's own user messages, not
+      taken from the UI language: room 133633 was a fully Chinese discussion
+      whose memory was stored in English because session lang carried the UI
+      setting.
+    - Written to BOTH stores (JSONL + upsert_db when provided): the read side
+      prefers SQLite and falls back to JSONL only when the DB is empty, so a
+      record landing in just one store can shadow the other's history.
+    """
+    if not HAVE_SESSION_MEMORY or not user_id or not scenario_type:
+        return []
+    from lang_utils import detect_lang
+
+    seen = set(existing_ids or set()) | jsonl_memory_ids(user_id, scenario_type)
+    rooms = [
+        r for r in (list_rooms() or [])
+        if r.get("room_id")
+        and str(r.get("room_id")) != str(exclude_room)
+        and str(r.get("room_id")) not in seen
+        and (r.get("scenario_type") or scenario_type) == scenario_type
+    ]
+    rooms.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or ""))
+
+    written: List[dict] = []
+    for room in rooms:
+        if len(written) >= max_rooms:
+            break
+        room_id = str(room["room_id"])
+        msgs = load_messages(room_id) or []
+        user_lines = [m for m in msgs if str(m.get("character") or "").lower() == "user"
+                      and (m.get("txt") or "").strip()]
+        agent_lines = [m for m in msgs if str(m.get("character") or "").lower() != "user"
+                       and (m.get("txt") or "").strip()]
+        if not user_lines or not agent_lines:
+            continue  # nothing worth remembering; no LLM call spent
+        transcript_text = "\n".join(
+            f"{m.get('character')}: {(m.get('txt') or '').strip()}" for m in msgs
+            if (m.get("txt") or "").strip()
+        )
+        mem_lang = detect_lang("\n".join(m["txt"] for m in user_lines))
+        # The room's own last-activity date, not today: the record describes
+        # that session, and the date is what the read side shows the agents.
+        date = str(room.get("updated_at") or room.get("created_at") or "")[:10]
+        result = summarize_session(transcript_text, mem_lang, create_response, model=model)
+        rec = append_session_record(
+            user_id=user_id,
+            scenario_type=scenario_type,
+            session_id=room_id,
+            date=date,
+            summary=result.get("summary") or "",
+            open_threads=result.get("open_threads") or [],
+            dir_path=MEMORY_DIR,
+        )
+        if rec is None:
+            continue
+        if upsert_db is not None:
+            try:
+                upsert_db(
+                    user_id=user_id,
+                    scenario_type=scenario_type,
+                    session_id=room_id,
+                    date=date,
+                    summary=rec.get("summary") or "",
+                    open_threads=rec.get("open_threads") or [],
+                )
+            except Exception:
+                pass  # JSONL record exists; DB catches up on the next write
+        written.append(rec)
+    return written
+
+
 def load_suggested_prompts(scenario_type: str, lang: str = "en") -> List[str]:
     lang = normalize_lang(lang)
     path = os.path.join(SCENES_DIR, f"{scenario_type}_prompts_{lang}.json")

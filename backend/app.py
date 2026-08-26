@@ -862,6 +862,37 @@ def start_chat():
         # Legacy session-level hint is no longer used for knowledge preload;
         # per-agent hints live on agent_runtime_config.
 
+        # Lazy cross-session-memory write: summarize this user's earlier rooms
+        # that have dialogue but no memory record yet, BEFORE the context prep
+        # below reads recent sessions. HTTP has no end-of-session signal, so
+        # "next session start" is the write point (see backfill_session_memory
+        # for the measurements that motivated this).
+        memory_backfilled = 0
+        if HAVE_USER_STORE and not user_id.startswith("web_"):
+            try:
+                store = get_user_store()
+                existing_ids = {
+                    str(r.get("session_id"))
+                    for r in store.load_session_memory(user_id, scenario_type, limit=0)
+                    if r.get("session_id")
+                }
+                backfilled = agora2_http.backfill_session_memory(
+                    user_id,
+                    scenario_type,
+                    create_response=agent_module.create_response,
+                    list_rooms=lambda: store.list_chat_rooms(user_id, limit=50),
+                    load_messages=store.list_chat_messages,
+                    existing_ids=existing_ids,
+                    upsert_db=store.upsert_session_memory,
+                    exclude_room=room_id,
+                )
+                memory_backfilled = len(backfilled)
+                if memory_backfilled:
+                    print(f"session memory backfilled for {user_id}/{scenario_type}: "
+                          f"{[r['session_id'] for r in backfilled]}")
+            except Exception as mem_err:
+                print(f"⚠ session memory backfill skipped: {mem_err}")
+
         ctx = agora2_http.prepare_http_context(
             scenario_type=scenario_type,
             lang=lang,
@@ -957,6 +988,7 @@ def start_chat():
         payload["session_index"] = (session.get("agora2") or {}).get("session_index", 1)
         payload["session_count_before"] = (session.get("agora2") or {}).get("session_count", 0)
         payload["hint"] = session.get("hint") or ""
+        payload["memory_backfilled"] = memory_backfilled
     return jsonify(payload)
 
 
@@ -1684,7 +1716,13 @@ def session_summary(room_id):
                     if content:
                         lines.append(f"{speaker}: {content}" if speaker else content)
             transcript_text = "\n".join(lines)
-            mem_lang = session.get("lang") or lang
+            # Summarize in the language the room was actually spoken in, not
+            # the UI language: room 133633 was a fully Chinese discussion whose
+            # memory landed in English because session lang carried the UI
+            # setting — and was then injected as an English block into the
+            # user's next Chinese session.
+            from lang_utils import detect_lang as _detect_lang
+            mem_lang = _detect_lang(transcript_text) or session.get("lang") or lang
             memory_record = agora2_http.persist_session_memory(
                 user_id=session["user_id"],
                 scenario_type=session["scenario_type"],
@@ -1704,16 +1742,19 @@ def session_summary(room_id):
                         if t not in merged:
                             merged.append(t)
                     memory_record["open_threads"] = merged[:12]
-                    # Re-persist merged threads to JSONL+SQLite
-                    if HAVE_USER_STORE:
-                        get_user_store().upsert_session_memory(
-                            user_id=session["user_id"],
-                            scenario_type=session["scenario_type"],
-                            session_id=room_id,
-                            date=datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d"),
-                            summary=memory_record.get("summary") or "",
-                            open_threads=memory_record["open_threads"],
-                        )
+                # ALWAYS mirror to SQLite, not only when board threads were
+                # seeded: the read side prefers the DB and falls back to JSONL
+                # only when the DB is empty, so a JSONL-only record is shadowed
+                # for any user who ever gets one row into the DB.
+                if HAVE_USER_STORE:
+                    get_user_store().upsert_session_memory(
+                        user_id=session["user_id"],
+                        scenario_type=session["scenario_type"],
+                        session_id=room_id,
+                        date=datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d"),
+                        summary=memory_record.get("summary") or "",
+                        open_threads=memory_record.get("open_threads") or [],
+                    )
                 session["memory_saved"] = True
                 _sync_room_meta(session, room_id)
         except Exception as mem_err:

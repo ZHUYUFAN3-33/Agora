@@ -1132,6 +1132,150 @@ QUESTION_BUDGET: Dict[str, str] = {
         "concrete next step.",
 }
 
+# ── User-move layer (Admin-4) ──────────────────────────────────────────────
+# PHASE_PROMPTS is keyed on (state, mode, decision_style) alone — it does not
+# know what the user just said. Measured across 15 logged rooms before this
+# layer existed: 41 of 76 published agent messages carried ranking/elimination
+# wording, and a user asking a bounded side question ("what should I check in
+# the contract?") got the answer *wrapped in* a fresh round of "X remains
+# eliminated / Y is the leading candidate" — because in Narrowing every agent's
+# assignment is literally "say which option should survive or be dropped", no
+# matter what the user asked. The [MOVE] vocabulary already contains `clarify`
+# ("you answer a question or supply facts"); across those 76 turns it was used
+# 0 times, because no turn assignment ever asked for it.
+#
+# Design: the phase machinery (decision progress) is left untouched; what the
+# user's last message DOES (the conversational move) is classified per user
+# turn by one cheap Admin-4 call, and a matching per-burst contract REPLACES
+# the phase task + question budget for the agents answering that message. The
+# phase is never reset by a side question — the next scheduled Admin-3 run
+# resumes it — except for goal_switch, which resets to Exploration (the paper's
+# "Redirecting": the stage resets around the new question). This mirrors the
+# LOW_CONTENT_TURN_DIRECTIVE precedent: a per-turn contract triggered by the
+# user's message, riding over the phase task without touching phase state.
+#
+# Kill switch: AGORA_USER_MOVE_LAYER=0 disables classification entirely (no
+# Admin-4 call, every turn behaves as move="progress", i.e. exactly the old
+# behavior). tests_offline/_harness.py sets it to 0 so pre-existing offline
+# tests keep their scripted LLM-call counts; test_user_move_routing.py turns
+# it back on explicitly.
+
+USER_MOVE_LABELS = (
+    "local_question",
+    "challenge",
+    "new_criterion",
+    "request_recommendation",
+    "goal_switch",
+    "progress",
+)
+
+ADMIN4_SYSTEM = """You are Admin-4: you classify the LAST USER MESSAGE in a group decision chat.
+
+Pick exactly ONE label:
+- local_question : a bounded question answerable in its own terms (a fact, a procedure, what to check, how something works, what something means). It does not ask which option to pick.
+- challenge : the user disputes, doubts, or pushes back on something an agent said.
+- new_criterion : the user adds a consideration, constraint, or fact that was not part of the comparison yet.
+- request_recommendation : the user asks which option to pick, for a ranking, or for the group's conclusion — question or imperative alike ("which one?", "just tell me which one to take", "直接说选哪个").
+- goal_switch : the user abandons the current decision and raises an unrelated one.
+- progress : anything else — answering an agent's question, adding detail about their situation, acknowledging.
+
+Rules:
+- A question that serves the current decision is local_question or request_recommendation, NOT goal_switch. Choose goal_switch only when the message clearly leaves the current decision behind.
+- If a message both answers an agent and introduces a brand-new consideration, prefer new_criterion.
+- Between local_question and request_recommendation: request_recommendation only if the user asks for a choice, ranking, or conclusion.
+
+Output ONLY the label, nothing else."""
+
+# Per-burst contracts. A contract REPLACES the phase task, the phase-keyed
+# stance focus, and the question budget for every agent turn in the burst that
+# answers this user message; it does NOT touch moderator_state, so the phase
+# resumes untouched on the next scheduled Admin-3 run. Stance differentiation
+# on contract turns comes from the contract's own "from your stance's angle"
+# instruction (the stance block itself is always in the system prompt).
+# request_recommendation and progress deliberately have no contract: the phase
+# machinery is the right behavior for both.
+USER_MOVE_CONTRACTS: Dict[str, str] = {
+    "local_question":
+        "The user's last message asks a bounded question. Answer THAT question first, in its own "
+        "terms, with the concrete specifics your stance makes you attend to — the checklist, facts, "
+        "or steps only you would give. Do NOT rank the options, do NOT say which option leads or "
+        "should be dropped, and do NOT restate the overall comparison. Only if your answer genuinely "
+        "changes how one option looks, say so in ONE closing sentence. You may ask ONE follow-up "
+        "question, but only if the user's question cannot be answered without it.",
+    "challenge":
+        "The user just pushed back on a point from this discussion. Engage their objection on its "
+        "merits: concede what is right in it, defend what you still hold with a specific reason, and "
+        "state plainly whether it changes your position. Do not restate your full ranking; address "
+        "the objection itself. If the objection was aimed at ANOTHER agent, give your stance's view "
+        "on the objection alone — do not use the turn to re-announce which options you keep or drop.",
+    "new_criterion":
+        "The user just introduced a consideration that was not part of the comparison. Absorb it: "
+        "assess the options against this NEW dimension specifically, from your stance's angle, and "
+        "say what it changes and what it does not. Do not restart the whole discussion; keep prior "
+        "conclusions this new information does not touch.",
+    "goal_switch":
+        "The user has moved to a different question. Address the NEW question; do not drag the "
+        "previous comparison into it unless the user connects them.",
+}
+
+
+def user_move_layer_on() -> bool:
+    """Read at call time (not import) so tests and ops can flip it per run."""
+    return (os.getenv("AGORA_USER_MOVE_LAYER") or "1").strip().lower() not in ("0", "false", "off")
+
+
+def get_user_move_contract(move: str) -> str:
+    return USER_MOVE_CONTRACTS.get(move, "")
+
+
+def parse_user_move(raw: str) -> str:
+    """First recognized label anywhere in the output, else "progress".
+
+    Admin-4 runs with a small token cap like Admin-2, so an "incomplete"
+    generation status is normal; the label itself is short enough to survive.
+    Any unparseable output degrades to "progress" — i.e. to the old behavior.
+    """
+    low = (raw or "").strip().lower()
+    for label in USER_MOVE_LABELS:
+        if label in low:
+            return label
+    return "progress"
+
+
+def build_user_move_messages(user_message: str, transcript_lines: List[str]) -> List[dict]:
+    tail = "\n".join(transcript_lines[-8:])
+    return [
+        {"role": "system", "content": ADMIN4_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f"=== RECENT TRANSCRIPT (Speaker: message) ===\n{tail}\n\n"
+                f"=== LAST USER MESSAGE ===\n{user_message}\n\nLabel:"
+            ),
+        },
+    ]
+
+
+def classify_user_move(user_message: str, transcript_lines: List[str],
+                       create_fn: Callable[[List[dict]], str]) -> str:
+    """One Admin-4 call per user turn; every failure path degrades to "progress".
+
+    A low-content message (greeting / bare acknowledgement) is not classified:
+    it already gets the LOW_CONTENT_TURN_DIRECTIVE contract, and the two must
+    never compose.
+    """
+    if not user_move_layer_on():
+        return "progress"
+    if not user_message or is_low_content_message(user_message):
+        return "progress"
+    try:
+        raw = create_fn(build_user_move_messages(user_message, transcript_lines))
+    except Exception:
+        # Admin-4 is advisory: a failed classification must never kill the turn.
+        return "progress"
+    return parse_user_move(raw)
+
+
 # Decision-style names PHASE_PROMPTS / STALL_PROMPTS actually key on. Anything
 # else in info.jsonl (including a case mismatch like "rational") would fall
 # through to the generic fallback above without any visible symptom.
@@ -2234,7 +2378,12 @@ def run_user_turn(
         decision = agent_configs.get(agent_key, {}).get("decision", "Rational")
         mode = s.get("mode") or "S"
         lookup_state = "Convergence" if s.get("state") == CONCLUDED_STATE else s.get("state", "Exploration")
-        assignment = get_phase_prompt(lookup_state, mode, decision, bool(s.get("stall")))
+        # User-move contract: when the user's last message is a move that must
+        # be answered in its own terms, the contract replaces the phase task,
+        # the phase-keyed stance focus, and the question budget for this burst.
+        # The phase itself is NOT touched — it stays visible below and resumes
+        # on the next scheduled Admin-3 run.
+        contract = get_user_move_contract(str(session.get("user_move") or ""))
         lines = ["=== DELIBERATION STATE ==="]
         if s.get("mode"):
             lines.append(
@@ -2242,24 +2391,28 @@ def run_user_turn(
             )
         else:
             lines.append(f"Phase: {s['state']}")
-        if s.get("goal"):
-            lines.append(f"Current goal: {s['goal']}")
-        lines.append(f"Your task this turn: {assignment}")
+        if contract:
+            lines.append(f"Your task this turn: {contract}")
+        else:
+            assignment = get_phase_prompt(lookup_state, mode, decision, bool(s.get("stall")))
+            if s.get("goal"):
+                lines.append(f"Current goal: {s['goal']}")
+            lines.append(f"Your task this turn: {assignment}")
 
-        # The generic task above is keyed on (state, mode, decision_style), so all
-        # agents get one of the same SHAPE. This line is keyed on STANCE, and is
-        # what makes the three voices produce structurally different content
-        # instead of three phrasings of the same evaluation dimension.
-        if HAVE_STANCE:
-            focus = get_stance_phase_focus(
-                scenario_type, agent_configs.get(agent_key, {}).get("stance"),
-                lookup_state, lang)
-            if focus:
-                lines.append(f"What only YOU should be putting on the table this turn: {focus}")
+            # The generic task above is keyed on (state, mode, decision_style), so all
+            # agents get one of the same SHAPE. This line is keyed on STANCE, and is
+            # what makes the three voices produce structurally different content
+            # instead of three phrasings of the same evaluation dimension.
+            if HAVE_STANCE:
+                focus = get_stance_phase_focus(
+                    scenario_type, agent_configs.get(agent_key, {}).get("stance"),
+                    lookup_state, lang)
+                if focus:
+                    lines.append(f"What only YOU should be putting on the table this turn: {focus}")
 
-        budget = QUESTION_BUDGET.get(lookup_state)
-        if budget and not s.get("stall"):
-            lines.append(budget)
+            budget = QUESTION_BUDGET.get(lookup_state)
+            if budget and not s.get("stall"):
+                lines.append(budget)
         if known_context or domain_background:
             # The examples have to match the scenario (CLI-faithful): a fixed
             # employment wording pointed parent_child sessions at details that
@@ -2275,19 +2428,24 @@ def run_user_turn(
                 "replace understanding the user's actual, specific situation, and it must not be "
                 "treated as a source of concrete numbers or facts beyond what it states."
             )
-        recent = [ln for ln in transcript_lines[-6:] if not ln.lower().startswith("user:")]
-        if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
-            lines.append(
-                "CONSENSUS WARNING: the last several messages contained no real disagreement. "
-                "Before adding anything, state plainly where your stance differs from where the "
-                "group is heading, and what that direction costs the interest you represent. "
-                "If you genuinely agree, name the specific sacrifice you are accepting to get there."
-            )
-        if HAVE_STANCE and s.get("state") == "Convergence":
-            stance = agent_configs.get(agent_key, {}).get("stance")
-            weight_hint = get_convergence_weight_hint(scenario_type, intake_data, stance, lang)
-            if weight_hint:
-                lines.append(f"Stance weighting for this closing stage: {weight_hint}")
+        # Both nudges below push agents back toward stance-vs-stance ranking
+        # talk, which is exactly what a contract turn suspends: three agents
+        # answering the same bounded question SHOULD agree on facts, and the
+        # closing weight push has no business in a side answer.
+        if not contract:
+            recent = [ln for ln in transcript_lines[-6:] if not ln.lower().startswith("user:")]
+            if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
+                lines.append(
+                    "CONSENSUS WARNING: the last several messages contained no real disagreement. "
+                    "Before adding anything, state plainly where your stance differs from where the "
+                    "group is heading, and what that direction costs the interest you represent. "
+                    "If you genuinely agree, name the specific sacrifice you are accepting to get there."
+                )
+            if HAVE_STANCE and s.get("state") == "Convergence":
+                stance = agent_configs.get(agent_key, {}).get("stance")
+                weight_hint = get_convergence_weight_hint(scenario_type, intake_data, stance, lang)
+                if weight_hint:
+                    lines.append(f"Stance weighting for this closing stage: {weight_hint}")
 
         # Stance Knowledge — DYNAMIC channel + related_cards A-OR-B expand
         # (repeat hit of same card, or Convergence / Concluded).
@@ -2370,9 +2528,20 @@ def run_user_turn(
         turns_in_state = int(session.get("turns_in_current_state") or 0)
         stall_eligible = turns_in_state > MODERATOR_STALL_TURNS
         had_user_input = bool(session.get("user_spoke_since_moderator"))
+        # Consume the recheck throttle always, but USER-turn credit only on a
+        # run that may act on it. A stall re-check (allow_state_change=False)
+        # used to zero user_turns_since_moderator too, which froze the phase:
+        # once turns_in_current_state passed MODERATOR_STALL_TURNS, re-checks
+        # fired every MODERATOR_STALL_RECHECK turns and ate the user-turn count
+        # before it could ever reach MODERATOR_USER_TURN_INTERVAL, so due_user
+        # never fired again and every proposed state change was suppressed
+        # forever. Measured: rooms 954660 (3 suppressed, stuck in Exploration),
+        # 894275 (4 suppressed, stuck in Structuring), 434276 (1 suppressed),
+        # and 5 consecutive suppressed Convergence verdicts in one eval run.
         session["turns_since_moderator"] = 0
-        session["user_turns_since_moderator"] = 0
-        session["user_spoke_since_moderator"] = False
+        if allow_state_change:
+            session["user_turns_since_moderator"] = 0
+            session["user_spoke_since_moderator"] = False
 
         reported_state = (
             "Convergence"
@@ -3163,6 +3332,44 @@ def run_user_turn(
             f"user mentioned {mentioned}; queued for hard-routed replies",
         )
 
+    # User-move layer: classify what this message DOES before the moderator
+    # re-classifies where the deliberation IS. One row per user turn, always
+    # logged (also on "progress"), so label rates are computable from the log
+    # without a denominator correction.
+    user_move = classify_user_move(
+        user_message or "", transcript_lines,
+        lambda msgs: create(client_admin, msgs, 0.0, MIN_OUTPUT_TOKENS,
+                            call_kind="admin4_usermove", agent_key="admin4"),
+    )
+    session["user_move"] = user_move
+    log_moderator("admin4_usermove", user_move)
+    if user_move == "goal_switch" and moderator_state.get("state") != "Exploration":
+        # The paper's Redirecting: the stage resets around the new question.
+        # Deterministic, no extra LLM call — and the moderator counters are
+        # zeroed so the next scheduled Admin-3 run happens after the new
+        # question has some discussion behind it, not on the stale transcript
+        # of the old one (which would immediately re-classify the old state).
+        prev = moderator_state.get("state")
+        moderator_state["state"] = "Exploration"
+        moderator_state["goal"] = ""
+        moderator_state["stall"] = False
+        session["turns_in_current_state"] = 0
+        session["turns_since_moderator"] = 0
+        session["user_turns_since_moderator"] = 0
+        log_moderator(
+            "admin3_redirected",
+            f"{prev} -> Exploration | user switched to a different question; "
+            f"stage reset around it.",
+        )
+    elif user_move == "request_recommendation":
+        # The user asked for the verdict — the strongest possible evidence the
+        # phase should be reassessed NOW, not on the every-2-user-turns clock.
+        # Admin-3 still decides the state (asking "which one?" on turn 1 keeps
+        # Exploration; the convergence gate still requires disagreement on
+        # record), so this cannot force a premature close — it only removes
+        # cadence luck from the path to Convergence.
+        run_moderator(allow_state_change=True)
+
     maybe_run_moderator()
 
     # Burst: mention hard-route (bypasses consecutive valve, CLI-faithful),
@@ -3244,6 +3451,7 @@ def run_user_turn(
         "phase": phase,
         "stall": bool(moderator_state.get("stall")),
         "concluded": concluded,
+        "user_move": str(session.get("user_move") or "progress"),
         "moderator_state": dict(moderator_state),
     }
 
@@ -3552,6 +3760,10 @@ def main():
         "stall": False,
         "goal":  "",
     }
+    # User-move layer (Admin-4): what the user's LAST message does, refreshed
+    # every user turn. A dict rather than a bare local so the nested
+    # get_phase_context / user_turn closures can write it without nonlocal.
+    user_move_state = {"move": "progress"}
 
     # Memory snippet chains: one independent LINEAR chain per agent (not a
     # tree) — each new snippet's parent_id points at that agent's previous one.
@@ -3630,30 +3842,37 @@ def main():
         # in that state when the user forces it (/next or an @-mention), and
         # Convergence is the right brief for that.
         lookup_state = "Convergence" if s["state"] == CONCLUDED_STATE else s["state"]
-        assignment = get_phase_prompt(lookup_state, mode, decision, s["stall"])
+        # User-move contract (HTTP-faithful): replaces the phase task, the
+        # phase-keyed stance focus, and the question budget for this burst;
+        # the phase itself is untouched and resumes on the next Admin-3 run.
+        contract = get_user_move_contract(user_move_state["move"])
         lines = ["=== DELIBERATION STATE ==="]
         if s["mode"]:
             lines.append(f"Mode: {'Selection' if mode == 'S' else 'Package'} | Phase: {s['state']}")
         else:
             lines.append(f"Phase: {s['state']}")
-        if s["goal"]:
-            lines.append(f"Current goal: {s['goal']}")
-        lines.append(f"Your task this turn: {assignment}")
+        if contract:
+            lines.append(f"Your task this turn: {contract}")
+        else:
+            assignment = get_phase_prompt(lookup_state, mode, decision, s["stall"])
+            if s["goal"]:
+                lines.append(f"Current goal: {s['goal']}")
+            lines.append(f"Your task this turn: {assignment}")
 
-        # The generic task above is keyed on (state, mode, decision_style), so all
-        # agents get one of the same SHAPE. This line is keyed on STANCE, and is
-        # what makes the three voices produce structurally different content
-        # instead of three phrasings of the same evaluation dimension.
-        if HAVE_STANCE:
-            focus = get_stance_phase_focus(
-                args.scenario_type, agent_configs.get(agent_key, {}).get("stance"),
-                lookup_state, args.lang)
-            if focus:
-                lines.append(f"What only YOU should be putting on the table this turn: {focus}")
+            # The generic task above is keyed on (state, mode, decision_style), so all
+            # agents get one of the same SHAPE. This line is keyed on STANCE, and is
+            # what makes the three voices produce structurally different content
+            # instead of three phrasings of the same evaluation dimension.
+            if HAVE_STANCE:
+                focus = get_stance_phase_focus(
+                    args.scenario_type, agent_configs.get(agent_key, {}).get("stance"),
+                    lookup_state, args.lang)
+                if focus:
+                    lines.append(f"What only YOU should be putting on the table this turn: {focus}")
 
-        budget = QUESTION_BUDGET.get(lookup_state)
-        if budget and not s["stall"]:
-            lines.append(budget)
+            budget = QUESTION_BUDGET.get(lookup_state)
+            if budget and not s["stall"]:
+                lines.append(budget)
 
         if known_context or domain_background:
             # The examples have to match the scenario. They used to be hardcoded
@@ -3678,19 +3897,23 @@ def main():
         # agent, which is precisely the voice that should have been defending the
         # other one. The stance text alone did not hold against the model's pull
         # toward agreeableness, so the drift is detected and named explicitly.
-        recent = [ln for ln in transcript_lines[-6:] if not ln.startswith("user:")]
-        if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
-            lines.append(
-                "CONSENSUS WARNING: the last several messages contained no real disagreement. "
-                "Before adding anything, state plainly where your stance differs from where the "
-                "group is heading, and what that direction costs the interest you represent. "
-                "If you genuinely agree, name the specific sacrifice you are accepting to get there."
-            )
-        if HAVE_STANCE and s["state"] == "Convergence":
-            stance = agent_configs.get(agent_key, {}).get("stance")
-            weight_hint = get_convergence_weight_hint(args.scenario_type, intake_data, stance, args.lang)
-            if weight_hint:
-                lines.append(f"Stance weighting for this closing stage: {weight_hint}")
+        # Suspended on contract turns (HTTP-faithful): agents answering the
+        # same bounded question SHOULD agree on facts, and the closing weight
+        # push has no business in a side answer.
+        if not contract:
+            recent = [ln for ln in transcript_lines[-6:] if not ln.startswith("user:")]
+            if len(recent) >= 4 and not any(has_disagreement(ln) for ln in recent):
+                lines.append(
+                    "CONSENSUS WARNING: the last several messages contained no real disagreement. "
+                    "Before adding anything, state plainly where your stance differs from where the "
+                    "group is heading, and what that direction costs the interest you represent. "
+                    "If you genuinely agree, name the specific sacrifice you are accepting to get there."
+                )
+            if HAVE_STANCE and s["state"] == "Convergence":
+                stance = agent_configs.get(agent_key, {}).get("stance")
+                weight_hint = get_convergence_weight_hint(args.scenario_type, intake_data, stance, args.lang)
+                if weight_hint:
+                    lines.append(f"Stance weighting for this closing stage: {weight_hint}")
 
         # Stance Knowledge — DYNAMIC channel: keyword-triggered card for this
         # agent's stance, matched against the user's LATEST message and re-checked
@@ -3856,11 +4079,16 @@ def main():
 
         # Consume the scheduling counters for this run, but keep the "did the
         # user contribute since last time" answer — the Concluded latch below
-        # needs it.
+        # needs it. USER-turn credit is consumed only by a run that may act on
+        # it (HTTP-faithful): a stall re-check zeroing it froze the phase —
+        # re-checks fired every MODERATOR_STALL_RECHECK turns and ate the count
+        # before it could reach MODERATOR_USER_TURN_INTERVAL, so due_user never
+        # fired again and every proposed change was suppressed forever.
         had_user_input = user_spoke_since_moderator
         turns_since_moderator = 0
-        user_turns_since_moderator = 0
-        user_spoke_since_moderator = False
+        if allow_state_change:
+            user_turns_since_moderator = 0
+            user_spoke_since_moderator = False
 
         # Include stall context so Admin-3 knows how long we've been here
         # Only allow stall detection after MODERATOR_STALL_TURNS (first turn excluded)
@@ -4066,7 +4294,7 @@ def main():
         def user_turn():
             nonlocal consecutive_agent_turns, turns_since_moderator
             nonlocal user_turns_since_moderator, user_spoke_since_moderator
-            nonlocal last_speaker_key
+            nonlocal last_speaker_key, turns_in_current_state
             consecutive_agent_turns = 0
             try:
                 user_txt = input("You> ").strip()
@@ -4109,6 +4337,39 @@ def main():
             turns_since_moderator += 1
             user_turns_since_moderator += 1
             user_spoke_since_moderator = True
+
+            # User-move layer (HTTP-faithful): classify what this message DOES
+            # before the moderator re-classifies where the deliberation IS.
+            user_move_state["move"] = classify_user_move(
+                user_txt, transcript_lines,
+                lambda msgs: create_response(args.model, msgs, temperature=0.0,
+                                             max_output_tokens=MIN_OUTPUT_TOKENS),
+            )
+            log_moderator("admin4_usermove", user_move_state["move"])
+            if (user_move_state["move"] == "goal_switch"
+                    and moderator_state["state"] != "Exploration"):
+                # Redirect: the stage resets around the new question, and the
+                # moderator counters are zeroed so the next Admin-3 run happens
+                # after the new question has discussion behind it, not on the
+                # stale transcript of the old one.
+                prev = moderator_state["state"]
+                moderator_state["state"] = "Exploration"
+                moderator_state["goal"] = ""
+                moderator_state["stall"] = False
+                turns_in_current_state = 0
+                turns_since_moderator = 0
+                user_turns_since_moderator = 0
+                log_moderator(
+                    "admin3_redirected",
+                    f"{prev} -> Exploration | user switched to a different "
+                    f"question; stage reset around it.",
+                )
+            elif user_move_state["move"] == "request_recommendation":
+                # The user asked for the verdict: reassess the phase NOW
+                # instead of waiting for the every-2-user-turns clock
+                # (HTTP-faithful). Admin-3 still decides the state.
+                run_moderator(allow_state_change=True)
+
             maybe_run_moderator()
             return True
 

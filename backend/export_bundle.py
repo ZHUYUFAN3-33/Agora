@@ -217,6 +217,15 @@ moderator.jsonl
     admin3_state_change         a phase actually changed, with a timestamp
     admin3_state_change_suppressed
                                 a change was proposed and rejected
+    admin4_usermove             the user-move label for that user turn, one row
+                                per user turn (also on "progress"), so label
+                                rates need no denominator correction. Rooms
+                                recorded before the user-move layer have none.
+    admin3_redirected           a goal_switch label reset the phase to
+                                Exploration. Like admin3_reopened, this is NOT
+                                paired with an admin3_state_change row, so
+                                phase timelines built from state_change rows
+                                alone do not show redirects (or reopens).
   Shares its field names with chat.jsonl but the `character` column means
   something completely different. Do not union the two without a source column.
 
@@ -261,15 +270,17 @@ generation.jsonl
   Fields: seq (monotonic per room), call_kind, agent, retry_index, user_turn,
   message_index, model, input_tokens, output_tokens, total_tokens, cached_tokens,
   reasoning_tokens, status, incomplete_reason, refusal, latency_ms, output_chars.
-    call_kind   agent_turn, admin1, admin2, admin3_moderator, memory_distill,
-                refusal_retry, novelty_retry, stall_burst.
+    call_kind   agent_turn, admin1, admin2, admin3_moderator, admin4_usermove,
+                memory_distill, refusal_retry, novelty_retry, stall_burst,
+                truncation_retry.
     model       what the API reported serving, which can be a dated snapshot
                 rather than the alias that was requested.
   Expect several times more rows here than messages in chat.jsonl -- one user turn
   costs an admin1 + admin2 pair per speaker plus the turns themselves.
-  admin2 runs with a 16-token cap, so status "incomplete" with
-  incomplete_reason "max_output_tokens" is its NORMAL outcome. Exclude
-  call_kind == "admin2" from any truncation analysis or it dominates the result.
+  admin2 and admin4_usermove run with a 16-token cap, so status "incomplete"
+  with incomplete_reason "max_output_tokens" is their NORMAL outcome. Exclude
+  call_kind "admin2" and "admin4_usermove" from any truncation analysis or
+  they dominate the result.
   Rows are emitted before a message id exists, and dropped turns never reach the
   point where one is minted, so rows cannot be joined to chat.jsonl by id. Join on
   message_index, and expect dropped turns to have no counterpart at all.

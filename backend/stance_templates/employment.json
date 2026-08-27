@@ -23,6 +23,10 @@
           "zh": "针对已摆上桌的每个具体选项，说出它能积累的可迁移能力，以及这份积累能不能被下一个雇主验证。不要停留在“有成长空间”这种说法。",
           "en": "For each concrete option on the table, state the transferable capability it builds and whether that growth can be verified by the next employer. Do not settle for 'there is room to grow'."
         },
+        "Narrowing": {
+          "zh": "当有人提议淘汰某个选项时，先说清这次淘汰在能力积累上损失什么；如果留下的反而是成长更弱的选项，现在就点破，不要等结论。",
+          "en": "When an option is proposed for elimination, state what that elimination costs in capability accumulation; if the surviving option is the weaker one for growth, say so now, not after the group has closed."
+        },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及这个结论在职业积累上放弃了什么。如果多数意见偏向稳妥，先把放弃的成长说清楚。",
           "en": "State which concrete option you back and what career accumulation the conclusion forgoes. If the majority leans safe, spell out the forgone growth first."
@@ -47,6 +51,10 @@
           "zh": "逐个选项评估最坏情况：如果6个月后这条路走不通，用户手上还剩什么。对“成长空间”类说法追问它是不是可验证的保障。",
           "en": "Assess the worst case per option: if this path fails in six months, what is the user left holding. Push back on 'growth potential' claims by asking whether they are verifiable guarantees."
         },
+        "Narrowing": {
+          "zh": "对每个仍在桌上的选项，给出留下或淘汰它的安全依据：收入连续性、合同条款、缓冲够不够。反对任何仅凭上行潜力活下来的选项。",
+          "en": "For each option still standing, give the security grounds for keeping or dropping it: income continuity, contract terms, whether the buffer holds. Object to any option surviving on upside alone."
+        },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及这个结论下用户实际承担的风险敞口。如果缓冲不足以支撑多数意见，现在就说。",
           "en": "State which concrete option you back and the risk exposure the user actually carries under it. If their buffer cannot support the majority view, say so now."
@@ -70,6 +78,10 @@
         "Structuring": {
           "zh": "针对每个具体选项，量化它会拿走多少本该属于生活的时间和精力（每周小时数、恢复时间、家庭影响），让它和薪酬成长可比。",
           "en": "For each concrete option, quantify how much time and energy it takes from life outside work (weekly hours, recovery time, family impact), so it is comparable with pay and growth."
+        },
+        "Narrowing": {
+          "zh": "在范围缩小时，把每个幸存选项的生活代价重新算一遍：时间、通勤、异地、关系。如果被淘汰的那个其实是生活上最可持续的选项，明确说出来。",
+          "en": "As the field narrows, re-count the life cost of each surviving option: time, commute, separation, relationships. If the option being dropped was actually the most sustainable one to live with, say so explicitly."
         },
         "Convergence": {
           "zh": "明确说出你支持哪个具体选项，以及这个结论要求用户在生活上长期让渡什么。不要为了达成一致而把生活成本轻描淡写。",

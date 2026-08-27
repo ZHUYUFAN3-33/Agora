@@ -36,6 +36,12 @@ def bootstrap(prefix):
     """
     backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.environ["OPENAI_API_KEY"] = "sk-test-dummy"
+    # The user-move layer adds one Admin-4 call per user turn. The pre-existing
+    # offline tests script their fake LLMs by call order/count, so that extra
+    # call would silently shift every scripted reply by one. Default it OFF for
+    # tests; test_user_move_routing.py flips it on explicitly (it is read at
+    # call time, not import time, so flipping after bootstrap works).
+    os.environ.setdefault("AGORA_USER_MOVE_LAYER", "0")
     if backend not in sys.path:
         sys.path.insert(0, backend)
     os.chdir(tempfile.mkdtemp(prefix=prefix))

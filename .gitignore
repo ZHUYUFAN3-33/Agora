@@ -61,3 +61,6 @@ test_accounts_*.csv
 # Node
 node_modules/
 paper/.vite/
+
+# Live-eval run output (scripts/eval_*.py)
+backend/logs_eval/

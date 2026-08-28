@@ -175,10 +175,13 @@ def _trim_to_sentence_boundary(text: str, keep_ratio: float = 0.6) -> str:
     return t
 
 
-# How many opening turns the single agent spends orienting itself before it is allowed to
-# deliver the full analysis. 1 means: first user message -> short reply + one question,
-# everything after that -> unconstrained.
+# How many opening turns the single agent spends orienting itself before it starts
+# delivering content. 1 means: first user message -> short reply + one question.
 SINGLE_MODE_INTAKE_TURNS = int(os.getenv("AGORA_SINGLE_MODE_INTAKE_TURNS") or "1")
+
+# Whether the turns AFTER the opening stay in installments. Off (0) restores the old
+# behaviour: one question up front, then the whole analysis in a single reply.
+SINGLE_MODE_INSTALLMENTS = (os.getenv("AGORA_SINGLE_MODE_INSTALLMENTS") or "1") != "0"
 
 # Injected for those turns only. A contract, not a token cap -- the same reasoning as
 # LOW_CONTENT_TURN_DIRECTIVE in agentwake_new.py: shortness has to come from the role
@@ -194,6 +197,23 @@ SINGLE_MODE_INTAKE_DIRECTIVE = (
     "full analysis once the user has answered."
 )
 
+# Injected on every turn after the opening. The opening directive only bought one
+# question: turn 2 went straight back to an unconstrained reply, which is how a 2510-
+# character wall arrives one turn later than before instead of not arriving. Delivering
+# one piece per turn is also what makes the two conditions comparable per turn -- a
+# multi-agent turn is three to five short utterances, so a single agent answering in one
+# essay differs in pacing as well as in roster.
+SINGLE_MODE_INSTALLMENT_DIRECTIVE = (
+    "\n\n(This turn) Answer in installments, not all at once. Deliver ONE piece — the "
+    "single most useful thing given what the user has just told you — in at most four "
+    "short sentences, then hand the turn back: either ask the one question you now most "
+    "need answered, or name what you would cover next and ask whether to go there. Do "
+    "not summarise the whole decision, and do not pre-empt the parts the user has not "
+    "asked for yet. If the user asks for everything at once, or for your conclusion, "
+    "drop this constraint for that turn and answer in full."
+)
+
+
 # The escape hatch. Someone who opens with "just tell me which one" has already declined
 # the question, and asking it anyway reads as stalling. Bilingual and deliberately narrow:
 # it should fire on an explicit demand for the answer, not on any mention of a conclusion.
@@ -206,17 +226,20 @@ _WANTS_ANSWER_NOW_RE = re.compile(
 )
 
 
-def _single_intake_contract(turn_no: int, user_message: str, low_content: bool) -> str:
+def _single_turn_contract(turn_no: int, user_message: str, low_content: bool) -> str:
     """The turn contract for this single-mode turn, or "" if the turn is unconstrained.
 
-    Applies to the opening turn(s) and to any turn that carried no new information --
-    the same two situations the multi-agent condition treats as low content -- so the
-    two conditions still differ only in roster.
+    Opening turns (and any turn that carried no new information -- the same situation
+    the multi-agent condition treats as low content) orient and ask. Every turn after
+    that delivers one piece and hands the turn back, so the analysis arrives across the
+    conversation instead of in one reply the participant has to scroll.
     """
     if _WANTS_ANSWER_NOW_RE.search(user_message or ""):
         return ""
     if turn_no <= SINGLE_MODE_INTAKE_TURNS or low_content:
         return SINGLE_MODE_INTAKE_DIRECTIVE
+    if SINGLE_MODE_INSTALLMENTS:
+        return SINGLE_MODE_INSTALLMENT_DIRECTIVE
     return ""
 
 
@@ -1307,7 +1330,7 @@ def send_message():
                 "You are a helpful AI assistant. Reply concisely and neutrally. "
                 "Do not adopt any persona, emotion, or role."
                 + scene_context
-                + _single_intake_contract(
+                + _single_turn_contract(
                     session["user_turn_count"], user_message, low_content
                 )
             )

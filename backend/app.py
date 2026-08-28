@@ -191,10 +191,11 @@ SINGLE_MODE_INTAKE_DIRECTIVE = (
     "\n\n(This turn) The conversation has just opened. Do NOT deliver your full "
     "analysis yet: you do not know enough about this person's situation for it to be "
     "worth reading, and a wall of text they did not ask for is the least useful thing "
-    "you can send first. Reply with at most three short sentences — one or two that say "
-    "what you take the decision to be about, plus exactly ONE question, the single thing "
-    "you most need to know before you can help. No lists, no headings. Expand into the "
-    "full analysis once the user has answered."
+    "you can send first. Reply with exactly two or three short sentences: FIRST one or "
+    "two that say back what you take the decision to be about, so the user can see you "
+    "registered what they told you, THEN exactly ONE question — the single thing you "
+    "most need to know before you can help. No lists, no headings. Expand into the full "
+    "analysis once the user has answered."
 )
 
 # Injected on every turn after the opening. The opening directive only bought one

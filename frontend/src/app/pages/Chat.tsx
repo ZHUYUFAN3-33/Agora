@@ -2580,6 +2580,14 @@ export default function Chat() {
     );
   }, [currentConv?.messages, currentConv?.roomId, phaseMarkersByRoom, currentPhase, uiLang]);
 
+  // The decision map is drawn from the stance / option-board apparatus, and in the
+  // single-agent condition that apparatus never runs: app.py:1481 answers the turn
+  // itself and never reaches run_user_turn. The navi pill, though, is built from the
+  // user's own messages (DecisionNavi.tsx:70), so it does not know that and used to
+  // appear anyway -- opening a map with an empty advisor lane. Gated like the
+  // Decision summary in SettingsMenu below.
+  const mapAvailable = (currentConv?.settings?.mode ?? experimentMode) !== "single";
+
   const jumpToMessage = useCallback((messageId: string) => {
     const root = messagesContainerRef.current;
     if (!root) return;
@@ -2677,6 +2685,10 @@ export default function Chat() {
   }, [currentConv?.roomId, uiLang]);
 
   const handleOpenDecisionMap = useCallback(() => {
+    // Second gate, on the same reasoning as study_policy.py: hiding the control is
+    // not enough on its own, since a stale render or a re-entered callback would
+    // still put a participant in front of a panel their condition does not have.
+    if (!mapAvailable) return;
     setDecisionMapOpen(true);
     setDecisionMapDocked(false);
     mapDwellRef.current.open();
@@ -2685,7 +2697,7 @@ export default function Chat() {
     emit("map_opened", { topic_count: decisionMapTopicCountRef.current });
     // Open → smart extract only if transcript changed (backend skips when cache is fresh).
     void fetchDecisionMap({ extract: true });
-  }, [fetchDecisionMap]);
+  }, [fetchDecisionMap, mapAvailable]);
 
   // Jump from the map: dock it (chat becomes visible), then scroll+flash the
   // evidence. The pill rendered by DecisionMapPanel is the way back.
@@ -4451,7 +4463,7 @@ export default function Chat() {
                 )}
               </div>
             )}
-            {currentConv && decisionNaviNodes.length > 0 && (
+            {currentConv && mapAvailable && decisionNaviNodes.length > 0 && (
               <div className="pr-3 border-r border-black/10">
                 <DecisionNavi
                   nodes={decisionNaviNodes}

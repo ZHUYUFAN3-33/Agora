@@ -2,8 +2,8 @@
 
 For participants. Six steps. The red numbers on each screenshot match the notes below it.
 
-Web version (shown after you enter your ID; switches language): <https://claude.ai/code/artifact/62c8371a-1849-4311-998a-0869a6bff812>
-中文版: [USER_GUIDE.P01-P32.zh.md](USER_GUIDE.P01-P32.zh.md) / 日本語版: [USER_GUIDE.P01-P32.ja.md](USER_GUIDE.P01-P32.ja.md)
+Web version (shown after you enter your ID; switches language): <https://claude.ai/code/artifact/197a6de6-9454-43d3-8a3d-49a6ce4550ab>
+中文版: [USER_GUIDE.P33-P44.zh.md](USER_GUIDE.P33-P44.zh.md) / 日本語版: [USER_GUIDE.P33-P44.ja.md](USER_GUIDE.P33-P44.ja.md)
 
 ---
 
@@ -33,7 +33,7 @@ Use the user ID and password you were given. You do not need to register your ow
 
 ## 02 · Pick a scene
 
-First choose what kind of decision this is: `Employment` or `Parent-Child`. Nothing starts until you pick one.
+Pick a scene first. Nothing starts until you do.
 
 ![Start screen](images/en/fig-welcome.png)
 
@@ -41,6 +41,8 @@ First choose what kind of decision this is: `Employment` or `Parent-Child`. Noth
 - ② Your three AI advisors (the interface calls them "agents"). You can rename them or change how they talk — **leaving them as they are is completely fine**
 - ③ Suggested prompts: click one to start straight away
 - ④ Or type your own question here
+
+The study runs `Employment` only; the other card is greyed out, marked "not in this study", and does not respond.
 
 ---
 

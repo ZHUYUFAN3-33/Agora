@@ -2,8 +2,8 @@
 
 给参与者看的说明，六步走完。截图上的红色编号对应每张图下面的说明。
 
-网页版（填 ID 后显示，可切换语言）：<https://claude.ai/code/artifact/62c8371a-1849-4311-998a-0869a6bff812>
-English version: [USER_GUIDE.P01-P32.en.md](USER_GUIDE.P01-P32.en.md) / 日本語版: [USER_GUIDE.P01-P32.ja.md](USER_GUIDE.P01-P32.ja.md)
+网页版（填 ID 后显示，可切换语言）：<https://claude.ai/code/artifact/197a6de6-9454-43d3-8a3d-49a6ce4550ab>
+English version: [USER_GUIDE.P33-P44.en.md](USER_GUIDE.P33-P44.en.md) / 日本語版: [USER_GUIDE.P33-P44.ja.md](USER_GUIDE.P33-P44.ja.md)
 
 ---
 
@@ -33,7 +33,7 @@ Agora 是一个帮你想清楚**难做的决定**的网站——比如两个 off
 
 ## 02 · 选场景
 
-登录后先选这次要聊哪一类决定：`就职决策` 或 `亲子决策`。不选场景就没法开始。
+登录后先选场景。不选场景就没法开始。
 
 ![开始页面](images/zh/fig-welcome.png)
 
@@ -41,6 +41,8 @@ Agora 是一个帮你想清楚**难做的决定**的网站——比如两个 off
 - ② 三位 AI 顾问（界面上叫「智能体」）。想改名字、说话语气可以点卡片，**不改也完全没问题**
 - ③ 推荐提问：点一条就能直接开始
 - ④ 输入框：也可以自己写
+
+本次研究只开放 `就职决策`。另一张卡片是灰的，写着「本次研究不开放」，点不动。
 
 ---
 

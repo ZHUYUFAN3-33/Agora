@@ -26,6 +26,7 @@ import importlib.util
 
 from data_paths import BASE_DIR, LOG_DIR, DATA_DIR, MEMORY_DIR
 import export_bundle
+import study_policy
 
 # ─── Load emotion module (optional) ───────────────────────────────────────────
 EMOTION_MODULE_LOADED = False
@@ -773,6 +774,26 @@ def start_chat():
             return jsonify({
                 "error": f"Unknown scene_id '{scene_id}'. Available: {sorted(SCENES.keys())}",
             }), 400
+
+    # Study policy (study_policy.py). The pickers already grey these out, but a
+    # stale bundle or a hand-rolled request must not be able to put a participant
+    # in the wrong condition -- that would stay invisible until analysis.
+    policy_user = _optional_auth_user() or {}
+    policy = study_policy.policy_for(
+        user_id=policy_user.get("user_id"),
+        is_admin=bool(policy_user.get("is_admin")),
+        all_scenarios=list(agora2_http.SCENARIO_TYPES) if HAVE_AGORA2 else [],
+    )
+    if use_agora2 and scenario_type not in policy["allowed_scenarios"]:
+        return jsonify({
+            "error": f"Scenario '{scenario_type}' is not part of this study deployment.",
+            "allowed_scenarios": policy["allowed_scenarios"],
+        }), 403
+    if mode not in policy["allowed_modes"]:
+        return jsonify({
+            "error": f"Mode '{mode}' is not assigned to this participant.",
+            "allowed_modes": policy["allowed_modes"],
+        }), 403
 
     room_id = make_room_id_6()
     session = init_session(room_id)
@@ -2300,7 +2321,14 @@ def agora2_scenarios():
     if not HAVE_AGORA2:
         return jsonify({"error": "Agora-2 adapter not available"}), 503
     lang = (request.args.get("lang") or "en").strip()
-    return jsonify({"scenes": agora2_http.list_scenarios(lang)})
+    scenes = agora2_http.list_scenarios(lang)
+    allowed = set(study_policy.allowed_scenarios(list(agora2_http.SCENARIO_TYPES)))
+    # Scenes this deployment does not run stay in the list, flagged: the picker
+    # greys them out rather than hiding them, so what a participant sees still
+    # matches the roster they were briefed on.
+    for s in scenes:
+        s["available"] = s.get("id") in allowed
+    return jsonify({"scenes": scenes, "allowed_scenarios": sorted(allowed)})
 
 
 @app.route('/api/agora2/profile-template', methods=['GET'])
@@ -2341,6 +2369,17 @@ def _bearer_token() -> Optional[str]:
     if auth.lower().startswith("bearer "):
         return auth[7:].strip() or None
     return None
+
+
+def _optional_auth_user() -> Optional[dict]:
+    """The logged-in user, or None. Unlike _require_user this never 401s, so
+    endpoints that predate accounts keep working without a token."""
+    if not HAVE_USER_STORE:
+        return None
+    try:
+        return get_user_store().resolve_token(_bearer_token())
+    except Exception:
+        return None
 
 
 def _require_user():
@@ -2397,6 +2436,18 @@ def auth_me():
     if err:
         return err
     return jsonify(user)
+
+
+@app.route('/api/study/policy', methods=['GET'])
+def study_policy_route():
+    """Which scenarios and modes this participant may choose. Unauthenticated
+    callers get the deployment-level answer, which is all the login screen needs."""
+    user = _optional_auth_user() or {}
+    return jsonify(study_policy.policy_for(
+        user_id=user.get("user_id"),
+        is_admin=bool(user.get("is_admin")),
+        all_scenarios=list(agora2_http.SCENARIO_TYPES) if HAVE_AGORA2 else [],
+    ))
 
 
 @app.route('/api/me/profile', methods=['GET', 'POST'])

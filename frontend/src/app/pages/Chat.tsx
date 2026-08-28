@@ -2047,17 +2047,32 @@ function SceneSelectorModal({ scenes, selectedScene, onSelect, onClose, lang }: 
                 {(scenePages.length > 0 ? scenePages : [[]]).map((pageScenes, pageIdx) => (
                   <div key={pageIdx} className="shrink-0 grow-0 basis-full p-4">
                     <div className="grid grid-cols-2 gap-3">
-                      {pageScenes.map((s) => (
-                        <button key={s.id} onClick={() => onSelect(s)}
-                          className={`text-left p-4 border-2 rounded-[12px] transition-all hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)] ${selectedScene?.id === s.id ? "border-black" : "border-black/10 hover:border-black/30"}`}>
-                          <div className="text-2xl mb-2">{s.icon}</div>
+                      {pageScenes.map((s) => {
+                        // available === false: this deployment does not run the
+                        // scene. Kept on the board, greyed and inert, so the
+                        // roster stays the one participants were briefed on.
+                        const unavailable = s.available === false;
+                        return (
+                        <button key={s.id} onClick={() => { if (!unavailable) onSelect(s); }}
+                          disabled={unavailable}
+                          aria-disabled={unavailable}
+                          title={unavailable ? t(lang, "welcome.sceneUnavailable") : undefined}
+                          className={`text-left p-4 border-2 rounded-[12px] transition-all ${
+                            unavailable
+                              ? "border-black/8 bg-black/[0.03] opacity-45 cursor-not-allowed"
+                              : `hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)] ${selectedScene?.id === s.id ? "border-black" : "border-black/10 hover:border-black/30"}`
+                          }`}>
+                          <div className="text-2xl mb-2 grayscale-0">{s.icon}</div>
                           <div className="text-[13px] mb-1" style={{ ...font, fontWeight: 500 }}>{s.title}</div>
                           <div className="text-[10px] text-[var(--app-muted-text)] leading-relaxed" style={font}>{s.description}</div>
-                          {isAgora2SceneId(s.id) && (
+                          {unavailable ? (
+                            <div className={`text-[9px] text-[var(--app-muted-text)] mt-2 ${labelCaseClass(lang)}`} style={font}>{t(lang, "welcome.sceneUnavailable")}</div>
+                          ) : isAgora2SceneId(s.id) && (
                             <div className={`text-[9px] text-[var(--app-muted-text)] mt-2 ${labelCaseClass(lang)}`} style={font}>{t(lang, "welcome.intakeRequired")}</div>
                           )}
                         </button>
-                      ))}
+                        );
+                      })}
                       <motion.button
                         whileHover={{ y: -2 }}
                         whileTap={{ scale: 0.98 }}
@@ -2224,6 +2239,10 @@ export default function Chat() {
   const [lastIntake, setLastIntake] = useState<Record<string, unknown> | null>(null);
   const [showMemoryHistory, setShowMemoryHistory] = useState(false);
   const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full");
+  // Which conditions this participant may run. Server-assigned by participant id
+  // (AGORA_MODE_POLICY, see backend/study_policy.py); everything until the fetch
+  // lands, and on any older backend, so nothing is locked by a failed request.
+  const [allowedModes, setAllowedModes] = useState<ExperimentMode[]>(["full", "limited", "single"]);
   const [welcomeTutorialStep, setWelcomeTutorialStep] = useState<number | null>(null);
 
   const [chatAnnotationMode, setChatAnnotationMode] = useState(false);
@@ -2367,6 +2386,34 @@ export default function Chat() {
       setExperimentMode("full");
     }
   }, [isAdmin, experimentMode]);
+
+  useEffect(() => {
+    if (!auth?.token) return;
+    let cancelled = false;
+    authFetch("/study/policy")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        const modes = (d.allowed_modes as unknown[] | undefined)?.filter(
+          (m): m is ExperimentMode => m === "full" || m === "limited" || m === "single",
+        );
+        if (modes && modes.length) setAllowedModes(modes);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [auth?.token]);
+
+  // A participant assigned a single condition must not sit in another one — the
+  // default is "full", so anyone assigned single starts out in the wrong mode.
+  useEffect(() => {
+    if (allowedModes.length === 0 || allowedModes.includes(experimentMode)) return;
+    const next = allowedModes[0];
+    setExperimentMode(next);
+    if (next === "single") {
+      setActiveAgentKeys(["A"]);
+      activeAgentKeysRef.current = ["A"];
+    }
+  }, [allowedModes, experimentMode]);
 
   // Restore past rooms from SQLite after re-login
   useEffect(() => {
@@ -2833,7 +2880,7 @@ export default function Chat() {
     draftRestoredRef.current = true;
     const draft = loadIntakeDraft(webUserId);
     const scene = draft && scenes.find((s) => s.id === draft.scenario_type);
-    if (!draft || !scene) return;
+    if (!draft || !scene || scene.available === false) return;
     setSelectedScene((prev) => prev || scene);
     setUserProfile((prev) => prev || draft.profile);
     setAgora2Intake((prev) => prev || {
@@ -4226,10 +4273,16 @@ export default function Chat() {
             <div className="flex flex-col gap-1.5">
               {(["full", "limited", "single"] as const)
                 .filter((m) => m !== "limited" || isAdmin)
-                .map((m) => (
+                .map((m) => {
+                const locked = !allowedModes.includes(m);
+                return (
                 <button
                   key={m}
+                  disabled={locked}
+                  aria-disabled={locked}
+                  title={locked ? t(uiLang, "chat.modeLocked") : undefined}
                   onClick={() => {
+                    if (locked) return;
                     setExperimentMode(m);
                     if (m === "single") {
                       setActiveAgentKeys(["A"]);
@@ -4240,13 +4293,16 @@ export default function Chat() {
                     }
                   }}
                   className={`w-full text-left px-3 py-2 rounded-[6px] text-[11px] transition-colors border ${
-                    experimentMode === m ? "bg-black text-white border-black" : "border-black/10 hover:bg-black/5"
+                    locked
+                      ? "border-black/8 bg-black/[0.03] text-black/35 opacity-60 cursor-not-allowed"
+                      : experimentMode === m ? "bg-black text-white border-black" : "border-black/10 hover:bg-black/5"
                   }`}
                   style={uiFont}
                 >
                   {modeLabelFor(m)}
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

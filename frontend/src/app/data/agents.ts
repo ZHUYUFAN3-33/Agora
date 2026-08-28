@@ -582,6 +582,13 @@ export interface Scene {
   icon: string;
   color: string;
   suggestedPrompts?: string[];
+  /**
+   * False when this deployment does not run the scene (AGORA_ALLOWED_SCENARIOS,
+   * see backend/study_policy.py). The picker greys it out instead of dropping
+   * it, so the roster a participant was briefed on still matches what they see.
+   * Undefined from an older backend, which means "no restriction".
+   */
+  available?: boolean;
 }
 
 /** Scenes that use the Agora-2 profile + intake pipeline before /api/start. */

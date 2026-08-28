@@ -46,6 +46,19 @@ primary_region = "nrt"
   # Must stay identical to fly.toml -- the two shards run the same study, so a
   # participant's experience cannot depend on which link they were handed.
   AGORA_PREFER_AGENTS = "0.5"
+  # Study policy for this shard (backend/study_policy.py). Both shards run the
+  # same image, so this env block is the only place the split exists; fly.toml
+  # deliberately sets neither key, which leaves shard 1 (P01-P32) as it was.
+  #
+  # Scenario: this shard runs the employment scene only. parent_child stays on
+  # the picker, greyed out and inert, rather than disappearing -- a card that
+  # silently vanishes reads as a bug to someone briefed on two scenes.
+  AGORA_ALLOWED_SCENARIOS = "employment"
+  # Condition: assigned by participant id, not chosen. P33-P44 deliberate with
+  # the full agent roster, P45-P56 with a single agent. Both ends inclusive, so
+  # this is 12 and 12. /api/start rejects the other mode as well as the UI
+  # hiding it, because a wrong condition would only surface at analysis time.
+  AGORA_MODE_POLICY = "P33-P44=multi;P45-P56=single"
 
 [http_service]
   internal_port = 8080

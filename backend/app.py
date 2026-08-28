@@ -141,11 +141,78 @@ MODEL = os.getenv("AGORA_MODEL") or "gpt-4o"
 # with it (and vice versa) mid-study.
 SUMMARY_MODEL = os.getenv("AGORA_SUMMARY_MODEL") or "gpt-4o"
 
-# Output cap for the single-agent condition. 900 matches run_user_turn's default, which
-# is what the multi-agent condition runs on -- the two conditions differ in roster, and
-# a reply that stops mid-sentence in only one of them is a confound, not a stimulus.
-# Env-overridable so it can be raised without a redeploy of the image.
-SINGLE_MODE_MAX_TOKENS = int(os.getenv("AGORA_SINGLE_MODE_MAX_TOKENS") or "900")
+# Output cap for the single-agent condition. NOT 900 (run_user_turn's per-agent default):
+# that default budgets ONE agent's turn out of the three-to-five a multi-agent turn
+# produces, and the single agent has to carry the whole reply by itself. Measured on room
+# 867319: a 1014-character prompt drew a reply that was still going at the 1800-token
+# retry ceiling and got cut mid-sentence ("...从东京的大量输入中抽"). 3000 clears the
+# longest reply seen so far with room to spare, and the retry below doubles it again.
+# The cap is deliberately generous rather than a length contract: the single-agent
+# condition is meant to read as a plain assistant, so its replies should end where the
+# model would end them, not where the budget runs out.
+SINGLE_MODE_MAX_TOKENS = int(os.getenv("AGORA_SINGLE_MODE_MAX_TOKENS") or "3000")
+
+# Sentence terminators used to walk a still-truncated reply back to its last complete
+# sentence. Covers CJK full stops and closing quotes as well as ASCII, because the study
+# runs in ja/zh/en and a Japanese reply cut mid-clause has no ASCII period to find.
+_SENTENCE_END_CHARS = "。．.！!？?…\n」』）)\"'"
+
+
+def _trim_to_sentence_boundary(text: str, keep_ratio: float = 0.6) -> str:
+    """Walk a truncated reply back to its last sentence end.
+
+    Only applied after the retry has already failed to produce a complete reply, and
+    only when the boundary keeps at least ``keep_ratio`` of what the model produced --
+    dropping half an answer to avoid a ragged edge trades a visible flaw for an
+    invisible one, which is worse in a study transcript.
+    """
+    t = (text or "").rstrip()
+    if not t or t[-1] in _SENTENCE_END_CHARS:
+        return t
+    cut = max(t.rfind(ch) for ch in _SENTENCE_END_CHARS)
+    if cut >= int(len(t) * keep_ratio):
+        return t[: cut + 1]
+    return t
+
+
+def _log_single_generation(session: dict, meta: dict, *, retry_index: int,
+                           output_chars: int) -> None:
+    """One generation row per single-mode LLM call.
+
+    The multi-agent path has logged these since it was written (agentwake_new.py's
+    log_generation); this branch never did, so single-mode truncation was invisible in
+    the logs and had to be spotted by reading transcripts. Same schema and same file, so
+    the existing readers work unchanged.
+    """
+    fp = session.get("generation_fp")
+    if fp is None:
+        return
+    try:
+        session["single_gen_seq"] = int(session.get("single_gen_seq") or 0) + 1
+        fp.write(json.dumps({
+            "chat_room_id": session.get("room_id"),
+            "time": now_local_iso(),
+            "seq": session["single_gen_seq"],
+            "call_kind": "single_agent_turn" if not retry_index else "truncation_retry",
+            "agent": "A",
+            "retry_index": retry_index,
+            "user_turn": session.get("user_turn_count"),
+            "message_index": len(session.get("history") or []),
+            "model": meta.get("model") or MODEL,
+            "input_tokens": meta.get("input_tokens"),
+            "output_tokens": meta.get("output_tokens"),
+            "total_tokens": meta.get("total_tokens"),
+            "cached_tokens": meta.get("cached_tokens"),
+            "reasoning_tokens": meta.get("reasoning_tokens"),
+            "status": meta.get("status"),
+            "incomplete_reason": meta.get("incomplete_reason"),
+            "refusal": meta.get("refusal"),
+            "latency_ms": meta.get("latency_ms"),
+            "output_chars": output_chars,
+        }, ensure_ascii=False) + "\n")
+        fp.flush()
+    except Exception as e:  # logging must never take down a turn
+        print(f"[single_mode] generation log failed: {e}")
 
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
@@ -1198,22 +1265,31 @@ def send_message():
                     "content": "Conversation:\n" + transcript + "\n\nRespond to the user:",
                 },
             ]
-            # 900, not 500, and one retry at double the cap on truncation -- the same
-            # contract the multi-agent path has had (agentwake_new.py:3123). At 500 a
-            # Japanese answer is cut off after ~300-400 characters, and this branch used
-            # to discard the metadata that says so, so the half-sentence was written to
-            # the transcript and shown to the participant verbatim. The retry can only
-            # improve the turn: if it comes back empty, the truncated first attempt
-            # still publishes rather than the turn being lost.
+            # One retry at double the cap on truncation, the same contract the
+            # multi-agent path has (agentwake_new.py:3123). This branch used to pass no
+            # meta at all, so the API's "I cut this off" answer was discarded and the
+            # half-sentence went straight into the transcript and onto the screen.
             gen_meta: dict = {}
             txt = create_response_with_client(
                 client_chat, MODEL, msgs, 0.5, SINGLE_MODE_MAX_TOKENS, meta=gen_meta
             ).strip()
-            if gen_meta.get("incomplete_reason") == "max_output_tokens":
+            _log_single_generation(session, gen_meta, retry_index=0, output_chars=len(txt))
+            truncated = gen_meta.get("incomplete_reason") == "max_output_tokens"
+            if truncated:
+                retry_meta: dict = {}
                 retry = create_response_with_client(
-                    client_chat, MODEL, msgs, 0.5, SINGLE_MODE_MAX_TOKENS * 2
+                    client_chat, MODEL, msgs, 0.5, SINGLE_MODE_MAX_TOKENS * 2,
+                    meta=retry_meta,
                 ).strip()
-                txt = retry or txt
+                _log_single_generation(session, retry_meta, retry_index=1,
+                                       output_chars=len(retry))
+                if retry:
+                    txt = retry
+                    truncated = retry_meta.get("incomplete_reason") == "max_output_tokens"
+            if truncated:
+                # Both attempts ran out of budget. Publishing the longer answer beats
+                # dropping the turn, but it should not end mid-word on screen.
+                txt = _trim_to_sentence_boundary(txt)
             txt = txt or "..."
         except Exception as e:
             print(f"[single_mode] Error: {e}")

@@ -235,9 +235,35 @@ In Chat (`/chat`), outside an input: press **`x`** for in-conversation annotatio
 
 Also available experimentally: Full / Limited / Single modes, emotion & decision customization, welcome tutorial (**`T`**), log export.
 
-The participant-facing walkthrough of that flow, with screenshots, is
-[`docs/USER_GUIDE.en.md`](docs/USER_GUIDE.en.md) / [`docs/USER_GUIDE.zh.md`](docs/USER_GUIDE.zh.md) —
-hand that to people in the study, not this README.
+The participant-facing walkthrough of that flow, with screenshots, is in `docs/`.
+**There is one guide per experimental condition, and they are not interchangeable** — a
+participant handed the wrong one reads a description of somebody else's condition. Each web
+version asks for the participant's id and only unlocks for the ids it serves; no page contains
+any other condition's wording or screenshots, so a wrong id reveals nothing.
+
+| Ids | Shard / condition | Hand out this link | Markdown |
+|---|---|---|---|
+| P01–P32 | shard 1, both scenes, full roster | <https://claude.ai/code/artifact/62c8371a-1849-4311-998a-0869a6bff812> | [`docs/USER_GUIDE.P01-P32.*.md`](docs/USER_GUIDE.P01-P32.en.md) |
+| P33–P44 | shard 2, employment only, full roster | <https://claude.ai/code/artifact/197a6de6-9454-43d3-8a3d-49a6ce4550ab> | [`docs/USER_GUIDE.P33-P44.*.md`](docs/USER_GUIDE.P33-P44.en.md) |
+| P45–P56 | shard 2, employment only, single advisor, no map, no summary | <https://claude.ai/code/artifact/8700c202-f06b-49ff-b3ed-1c875a09603c> | [`docs/USER_GUIDE.P45-P56.*.md`](docs/USER_GUIDE.P45-P56.en.md) |
+
+The conditions differ in more than the roster size. `mode == "single"` is a **baseline**: it takes a
+separate backend path (`backend/app.py:1481`) that never reaches `run_user_turn`, so the stance /
+option-board apparatus that produces the decision map never runs, and `domain_background` is
+deliberately withheld. The gear menu also has no **Decision summary** entry
+(`frontend/src/app/pages/Chat.tsx:5035`), one advisor answers once per message, and the
+customizer's settings are discarded on send. So that guide is four steps, with neither map nor
+summary. No version asks participants to export logs — the study reads them server-side.
+Re-check those branches before editing any guide.
+
+The `DECISION MAP` pill is gated the same way (`mapAvailable` in `Chat.tsx`), on both the render and
+`handleOpenDecisionMap`, because the pill itself is built from user messages only
+(`DecisionNavi.tsx:70`) and would otherwise open a near-empty map in that condition.
+
+Ranges come from `AGORA_MODE_POLICY` / `AGORA_ALLOWED_SCENARIOS` in `fly.toml` and
+`fly.shard2.toml` (see `backend/study_policy.py`); if those change, the guides have to change
+with them. Each page carries all three languages behind a switch — hand out one link per
+participant, not one per language. Hand these to people in the study, not this README.
 
 ---
 

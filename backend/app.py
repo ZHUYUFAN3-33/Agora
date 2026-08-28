@@ -175,6 +175,51 @@ def _trim_to_sentence_boundary(text: str, keep_ratio: float = 0.6) -> str:
     return t
 
 
+# How many opening turns the single agent spends orienting itself before it is allowed to
+# deliver the full analysis. 1 means: first user message -> short reply + one question,
+# everything after that -> unconstrained.
+SINGLE_MODE_INTAKE_TURNS = int(os.getenv("AGORA_SINGLE_MODE_INTAKE_TURNS") or "1")
+
+# Injected for those turns only. A contract, not a token cap -- the same reasoning as
+# LOW_CONTENT_TURN_DIRECTIVE in agentwake_new.py: shortness has to come from the role
+# the turn is given, because squeezing max_output_tokens just cuts the tail off
+# mid-sentence, which is the bug this whole thread started with.
+SINGLE_MODE_INTAKE_DIRECTIVE = (
+    "\n\n(This turn) The conversation has just opened. Do NOT deliver your full "
+    "analysis yet: you do not know enough about this person's situation for it to be "
+    "worth reading, and a wall of text they did not ask for is the least useful thing "
+    "you can send first. Reply with at most three short sentences — one or two that say "
+    "what you take the decision to be about, plus exactly ONE question, the single thing "
+    "you most need to know before you can help. No lists, no headings. Expand into the "
+    "full analysis once the user has answered."
+)
+
+# The escape hatch. Someone who opens with "just tell me which one" has already declined
+# the question, and asking it anyway reads as stalling. Bilingual and deliberately narrow:
+# it should fire on an explicit demand for the answer, not on any mention of a conclusion.
+_WANTS_ANSWER_NOW_RE = re.compile(
+    r"(直接(说|講|告诉|給|给)|别问|別問|不用问|不要问|先别问|给我结论|給我結論|"
+    r"说结论|說結論|一次说完|一次講完|结论先说|"
+    r"結論から|まとめて教え|質問しないで|そのまま教え|"
+    r"just tell me|don'?t ask|no questions|give me the answer|straight to the point)",
+    re.IGNORECASE,
+)
+
+
+def _single_intake_contract(turn_no: int, user_message: str, low_content: bool) -> str:
+    """The turn contract for this single-mode turn, or "" if the turn is unconstrained.
+
+    Applies to the opening turn(s) and to any turn that carried no new information --
+    the same two situations the multi-agent condition treats as low content -- so the
+    two conditions still differ only in roster.
+    """
+    if _WANTS_ANSWER_NOW_RE.search(user_message or ""):
+        return ""
+    if turn_no <= SINGLE_MODE_INTAKE_TURNS or low_content:
+        return SINGLE_MODE_INTAKE_DIRECTIVE
+    return ""
+
+
 def _log_single_generation(session: dict, meta: dict, *, retry_index: int,
                            output_chars: int) -> None:
     """One generation row per single-mode LLM call.
@@ -1245,6 +1290,10 @@ def send_message():
         return jsonify({"error": str(e)}), 503
 
     if single_mode:
+        # Incremented here because run_user_turn -- which owns this counter in the
+        # multi-agent condition -- is never reached on this path, so single-mode rooms
+        # used to report user_turn 0 for every turn.
+        session["user_turn_count"] = int(session.get("user_turn_count") or 0) + 1
         transcript = build_transcript(session["history"], max_turns=12)
         scene_context = ""
         if base_scene and base_scene.strip():
@@ -1256,7 +1305,11 @@ def send_message():
         try:
             sys_content = (
                 "You are a helpful AI assistant. Reply concisely and neutrally. "
-                "Do not adopt any persona, emotion, or role." + scene_context
+                "Do not adopt any persona, emotion, or role."
+                + scene_context
+                + _single_intake_contract(
+                    session["user_turn_count"], user_message, low_content
+                )
             )
             msgs = [
                 {"role": "system", "content": sys_content},

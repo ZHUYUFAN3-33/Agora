@@ -141,6 +141,12 @@ MODEL = os.getenv("AGORA_MODEL") or "gpt-4o"
 # with it (and vice versa) mid-study.
 SUMMARY_MODEL = os.getenv("AGORA_SUMMARY_MODEL") or "gpt-4o"
 
+# Output cap for the single-agent condition. 900 matches run_user_turn's default, which
+# is what the multi-agent condition runs on -- the two conditions differ in roster, and
+# a reply that stops mid-sentence in only one of them is a confound, not a stimulus.
+# Env-overridable so it can be raised without a redeploy of the image.
+SINGLE_MODE_MAX_TOKENS = int(os.getenv("AGORA_SINGLE_MODE_MAX_TOKENS") or "900")
+
 # Global state for chat sessions
 chat_sessions: Dict[str, dict] = {}
 
@@ -1192,7 +1198,23 @@ def send_message():
                     "content": "Conversation:\n" + transcript + "\n\nRespond to the user:",
                 },
             ]
-            txt = create_response_with_client(client_chat, MODEL, msgs, 0.5, 500).strip() or "..."
+            # 900, not 500, and one retry at double the cap on truncation -- the same
+            # contract the multi-agent path has had (agentwake_new.py:3123). At 500 a
+            # Japanese answer is cut off after ~300-400 characters, and this branch used
+            # to discard the metadata that says so, so the half-sentence was written to
+            # the transcript and shown to the participant verbatim. The retry can only
+            # improve the turn: if it comes back empty, the truncated first attempt
+            # still publishes rather than the turn being lost.
+            gen_meta: dict = {}
+            txt = create_response_with_client(
+                client_chat, MODEL, msgs, 0.5, SINGLE_MODE_MAX_TOKENS, meta=gen_meta
+            ).strip()
+            if gen_meta.get("incomplete_reason") == "max_output_tokens":
+                retry = create_response_with_client(
+                    client_chat, MODEL, msgs, 0.5, SINGLE_MODE_MAX_TOKENS * 2
+                ).strip()
+                txt = retry or txt
+            txt = txt or "..."
         except Exception as e:
             print(f"[single_mode] Error: {e}")
             txt = "Sorry, something went wrong."

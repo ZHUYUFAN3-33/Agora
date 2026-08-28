@@ -3429,7 +3429,16 @@ export default function Chat() {
     const postMessage = async (rid: string) => {
       const res = await fetch(`${API_BASE}/message`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // The token is what lets the server rebuild a room it no longer holds in
+        // memory: _rehydrate_session refuses to restore a room to anyone who cannot be
+        // shown to own it, and without this header there is nobody to check against.
+        // /api/start and the recreate path have always sent it; this one had not, so
+        // the first message after a restart 400'd and the client silently started a
+        // NEW room instead -- losing the transcript the old one already had.
+        headers: {
+          "Content-Type": "application/json",
+          ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+        },
         body: JSON.stringify({
           room_id: rid,
           message: text,

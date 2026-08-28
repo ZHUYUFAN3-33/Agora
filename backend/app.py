@@ -603,6 +603,11 @@ def _rehydrate_session(room_id: str) -> Optional[dict]:
         # id must not hand someone another participant's transcript.
         auth_user = _optional_auth_user() or {}
         if not owner or (owner != auth_user.get("user_id") and not auth_user.get("is_admin")):
+            # Logged, because the first version of this shipped against a client that
+            # sent no Authorization header on /api/message: every restore refused here,
+            # silently, and looked exactly like the 400 it was supposed to replace.
+            print(f"[rehydrate] refused for room {room_id}: "
+                  f"owner={owner or '?'} caller={auth_user.get('user_id') or '(no token)'}")
             return None
 
         session = init_session(room_id)

@@ -558,6 +558,160 @@ def _agents_payload_for_session(session: dict, session_agents: Dict[str, ChatAge
         })
     return agents_payload
 
+def _guess_lang_from_history(history: List[dict]) -> str:
+    """Fallback for rooms whose config lines predate the logged `lang`.
+
+    Kana settles ja against zh; anything with no CJK at all is en. Wrong only for a
+    Japanese message written entirely in kanji, which a real one is not.
+    """
+    txt = " ".join(
+        str(m.get("txt") or "") for m in history if m.get("character") == "user"
+    )[:2000]
+    if re.search(r"[\u3040-\u30ff]", txt):
+        return "ja"
+    if re.search(r"[\u4e00-\u9fff]", txt):
+        return "zh"
+    return "en"
+
+
+def _rehydrate_session(room_id: str) -> Optional[dict]:
+    """Rebuild an in-process session for a room that outlived the process.
+
+    ``chat_sessions`` is an in-process dict, so every restart -- a deploy, a crash, a
+    machine move -- dropped every live room and /api/message answered 400 "Invalid
+    room_id". The participant's way out was the forms: the client recreates the room
+    from whatever this tab still holds, and when it holds nothing (a reload, a draft
+    past its 12-hour window, another device) it sends them back through profile and
+    intake. That is one of the paths behind "the intake made me fill it in again".
+
+    Everything needed is already on disk: chat_rooms and chat_messages carry the
+    transcript, session_intake carries the answers, profiles/ carries the profile, and
+    {room}_config.jsonl carries the mode and roster that were actually in force.
+
+    Returns the session (already registered in ``chat_sessions``) or None when the room
+    is unknown or the caller does not own it -- callers keep their existing 400.
+    """
+    if not HAVE_USER_STORE or not room_id:
+        return None
+    try:
+        store = get_user_store()
+        room = store.get_chat_room(room_id)
+        if not room:
+            return None
+        owner = str(room.get("user_id") or "")
+        # Ownership, not just existence: a room id is six digits, so a wrong or guessed
+        # id must not hand someone another participant's transcript.
+        auth_user = _optional_auth_user() or {}
+        if not owner or (owner != auth_user.get("user_id") and not auth_user.get("is_admin")):
+            return None
+
+        session = init_session(room_id)
+        session["user_id"] = owner
+        scenario_type = str(room.get("scenario_type") or "")
+
+        # The config log is the only record of what was actually in force -- mode and
+        # roster are not columns on chat_rooms. Last line wins: /api/roster can have
+        # replaced the roster mid-session.
+        cfg_path = os.path.join(LOG_DIR, f"{room_id}_config.jsonl")
+        cfg: dict = {}
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        cfg = json.loads(line) or cfg
+                    except json.JSONDecodeError:
+                        continue
+        if cfg:
+            session["mode"] = cfg.get("mode") or session["mode"]
+            scenario_type = cfg.get("scenario_type") or scenario_type
+            session["scene_id"] = cfg.get("scene_id") or scenario_type or session["scene_id"]
+            slot_keys = [k for k in (cfg.get("slot_keys") or []) if isinstance(k, str)]
+            if slot_keys:
+                _apply_slot_keys_to_session(session, slot_keys)
+                session["slot_to_profile"] = dict(cfg.get("slot_to_profile") or {})
+                for entry in cfg.get("agents") or []:
+                    key = entry.get("key")
+                    if key not in slot_keys:
+                        continue
+                    if entry.get("name"):
+                        session["agent_display_names"][key] = entry["name"]
+                    conf = {
+                        "decision": entry.get("decision", "Rational"),
+                        "emotion": entry.get("emotion", "Joy"),
+                    }
+                    if entry.get("stance"):
+                        conf["stance"] = entry["stance"]
+                    if entry.get("hint"):
+                        conf["hint"] = entry["hint"]
+                    session.setdefault("agent_runtime_config", {})[key] = conf
+        session["scenario_type"] = scenario_type
+
+        # Agora-2 context, rebuilt from the stored intake and the profile on disk.
+        # persist=False: nothing new happened, so this must not append another session
+        # to the profile's history or re-save it.
+        history_rows = store.list_chat_messages(room_id)
+        lang = str(cfg.get("lang") or "").strip() or _guess_lang_from_history([
+            {"character": r.get("character"), "txt": r.get("txt")} for r in history_rows
+        ])
+        if HAVE_AGORA2 and scenario_type and agora2_http.is_agora2_scenario(scenario_type):
+            from profile_store import load_profile
+            # get_session_intake returns the ROW (session_id/user_id/.../intake), not
+            # the answers themselves -- unwrapping it is what makes the form count.
+            intake_row = store.get_session_intake(room_id) or {}
+            intake = intake_row.get("intake") if isinstance(intake_row, dict) else {}
+            profile = (load_profile(owner, agora2_http.PROFILES_DIR) or {}).get("profile", {})
+            ctx = agora2_http.prepare_http_context(
+                scenario_type=scenario_type,
+                lang=lang,
+                profile=profile,
+                intake=intake if isinstance(intake, dict) else {},
+                user_id=owner,
+                persist=False,
+                session_id=room_id,
+            )
+            session["agora2"] = ctx
+            session["lang"] = ctx.get("lang") or session.get("lang") or "en"
+            session["pipeline"] = "agora2"
+
+        # The transcript. Only the two roles the loop reads back; option chips and
+        # knowledge cards stay in the DB, where the client reads them from.
+        session["lang"] = session.get("lang") or lang
+        history = []
+        for row in history_rows:
+            txt = row.get("txt")
+            character = row.get("character")
+            if not txt or not character:
+                continue
+            history.append({
+                "chat_room_id": room_id,
+                "time": row.get("created_at") or now_local_iso(),
+                "character": character,
+                "txt": txt,
+            })
+        session["history"] = history
+        session["user_turn_count"] = sum(1 for m in history if m.get("character") == "user")
+        for m in history:
+            ch = str(m.get("character") or "")
+            if ch.startswith("Chatbot"):
+                slot = ch.replace("Chatbot", "")[:1]
+                if slot in session.get("has_spoken", {}):
+                    session["has_spoken"][slot] = True
+
+        phase = str(room.get("phase") or "").strip()
+        if phase and isinstance(session.get("moderator_state"), dict):
+            session["moderator_state"]["state"] = phase
+
+        chat_sessions[room_id] = session
+        log_config_event(session, "rehydrate", restored_messages=len(history))
+        print(f"[rehydrate] room {room_id} restored: {len(history)} messages, "
+              f"mode={session.get('mode')}")
+        return session
+    except Exception as e:
+        # A failed rebuild must look exactly like a missing room, never a 500.
+        print(f"⚠ rehydrate {room_id} failed: {e}")
+        return None
+
+
 def log_config_event(session: dict, event: str, **extra) -> None:
     """Append one line to {room}_config.jsonl carrying the FULL effective config.
 
@@ -588,6 +742,10 @@ def log_config_event(session: dict, event: str, **extra) -> None:
         "user_id": session.get("user_id"),
         "slot_keys": list(_session_slot_keys(session)),
         "slot_to_profile": dict(session.get("slot_to_profile") or {}),
+        # Recorded because it is nowhere else: chat_rooms has no lang column, and
+        # _rehydrate_session has to serve a restored room in the language the
+        # participant started in rather than guessing from their text.
+        "lang": session.get("lang"),
         "agents": agents,
         # Recorded per event rather than assumed at read time: the HTTP and CLI defaults
         # for these disagree, and the documented values do not match the code.
@@ -1264,7 +1422,9 @@ def send_message():
     room_id = data.get("room_id")
     user_message = (data.get("message") or "").strip()
 
-    if not room_id or room_id not in chat_sessions:
+    if not room_id:
+        return jsonify({"error": "Invalid room_id"}), 400
+    if room_id not in chat_sessions and _rehydrate_session(room_id) is None:
         return jsonify({"error": "Invalid room_id"}), 400
     if not user_message:
         return jsonify({"error": "Message cannot be empty"}), 400
@@ -1326,6 +1486,25 @@ def send_message():
                 + base_scene.strip()
                 + "\n"
             )
+        # The participant's OWN answers. base_scene above is scene_text, which is the
+        # same paragraph for everyone; profile and intake live in known_context, and
+        # this branch never read it -- so a single-condition participant filled the
+        # intake form, saw it saved (session_intake has a row for every single-mode
+        # room), and then talked to an assistant that had never seen a word of it.
+        # Both blocks arrive with their own headers from profile_store /
+        # build_session_memory_text, so they are injected raw, exactly as the
+        # multi-agent prompt does it (agentwake_new.py:821).
+        #
+        # domain_background is deliberately NOT included: that is the stance-knowledge
+        # apparatus the multi-agent condition is built on, and handing the baseline a
+        # curated knowledge base would stop it being a baseline.
+        agora2_ctx = session.get("agora2") or {}
+        known_context = (agora2_ctx.get("known_context") or "").strip()
+        session_memory_text = (agora2_ctx.get("session_memory_text") or "").strip()
+        if known_context:
+            scene_context += "\n" + known_context + "\n"
+        if session_memory_text:
+            scene_context += "\n" + session_memory_text + "\n"
         try:
             sys_content = (
                 "You are a helpful AI assistant. Reply concisely and neutrally. "

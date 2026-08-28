@@ -2308,6 +2308,23 @@ export default function Chat() {
   }, []);
 
   const beginAgora2Scene = useCallback(async (s: Scene) => {
+    // Re-opening the SAME scenario with both forms already filled must not throw them
+    // away. The welcome card reads "intake ready" and clicking it ran the wipe below:
+    // intake, profile and the prefill all to null, then the participant walked the
+    // profile form and the intake form again to get back exactly where they were.
+    // Several of them reported having to fill the intake repeatedly, and the database
+    // shows it -- P45 opened three rooms in five and a half minutes carrying a
+    // byte-identical intake payload. Go straight to the intake form with their own
+    // answers in it, so the click edits what they have instead of restarting from
+    // nothing. Closing that form leaves everything untouched.
+    if (s.id === selectedScene?.id && agora2Intake && userProfile) {
+      setSelectedScene(s);
+      setLastIntake(agora2Intake.intake);
+      setShowSceneSelector(false);
+      setProfileHandoff(false);
+      setPendingIntakeScene(s);
+      return;
+    }
     setSelectedScene(s);
     setAgora2Intake(null);
     setUserProfile(null);
@@ -2332,7 +2349,7 @@ export default function Chat() {
     setProfileHandoff(false);
     setPendingProfileScene(s);
     setShowProfileModal(true);
-  }, [webUserId]);
+  }, [webUserId, selectedScene?.id, agora2Intake, userProfile]);
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const c = messagesContainerRef.current;

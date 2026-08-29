@@ -175,46 +175,30 @@ def _trim_to_sentence_boundary(text: str, keep_ratio: float = 0.6) -> str:
     return t
 
 
-# How many opening turns the single agent spends orienting itself before it starts
-# delivering content. 1 means: first user message -> short reply + one question.
-SINGLE_MODE_INTAKE_TURNS = int(os.getenv("AGORA_SINGLE_MODE_INTAKE_TURNS") or "1")
-
-# Whether the turns AFTER the opening stay in installments. Off (0) restores the old
-# behaviour: one question up front, then the whole analysis in a single reply.
+# The per-turn contract for the single-agent condition. ONE directive, modelled on how
+# a plain assistant actually behaves, because that is what this condition is supposed to
+# be. The previous two-stage version (opening turn: restate + exactly ONE question;
+# later turns: one piece then "hand the turn back") scripted a question into every turn,
+# and the model spent the allowance every time -- a participant answered "a dozen
+# rounds" of questions and gave up. A baseline that interrogates is not a baseline.
+#
+# The rule here is the one ChatGPT follows in practice: lead with your read, ask only
+# when you genuinely cannot proceed (or were invited to ask), otherwise state the
+# assumption and keep going. Brevity stays a contract -- without it, turn 1 against a
+# 1000-character opener is a 2500-character wall (measured, room 867319) -- but the
+# question is now conditional, not budgeted.
 SINGLE_MODE_INSTALLMENTS = (os.getenv("AGORA_SINGLE_MODE_INSTALLMENTS") or "1") != "0"
 
-# Injected for those turns only. A contract, not a token cap -- the same reasoning as
-# LOW_CONTENT_TURN_DIRECTIVE in agentwake_new.py: shortness has to come from the role
-# the turn is given, because squeezing max_output_tokens just cuts the tail off
-# mid-sentence, which is the bug this whole thread started with.
-SINGLE_MODE_INTAKE_DIRECTIVE = (
-    "\n\n(This turn) The conversation has just opened. Do NOT deliver your full "
-    "analysis yet: you do not know enough about this person's situation for it to be "
-    "worth reading, and a wall of text they did not ask for is the least useful thing "
-    "you can send first. Reply with exactly two or three short sentences: FIRST one or "
-    "two that say back what you take the decision to be about, so the user can see you "
-    "registered what they told you, THEN exactly ONE question — the single thing you "
-    "most need to know before you can help — something the context above does NOT "
-    "already answer. No lists, no headings. Expand into the full analysis once the user "
-    "has answered."
-)
-
-# Injected on every turn after the opening. The opening directive only bought one
-# question: turn 2 went straight back to an unconstrained reply, which is how a 2510-
-# character wall arrives one turn later than before instead of not arriving. Delivering
-# one piece per turn is also what makes the two conditions comparable per turn -- a
-# multi-agent turn is three to five short utterances, so a single agent answering in one
-# essay differs in pacing as well as in roster.
-SINGLE_MODE_INSTALLMENT_DIRECTIVE = (
-    "\n\n(This turn) Answer in installments, not all at once, and LEAD WITH SUBSTANCE. "
-    "Give the single most useful piece of your actual read, given everything the user "
-    "has told you, in at most four short sentences. You may then add at most ONE "
-    "question, and only if you truly cannot go further without the answer — otherwise "
-    "name what you would cover next and let the user steer. Never reply with a question "
-    "alone: they have answered several already, and a turn that asks without giving "
-    "anything back reads as an interrogation rather than help. Do not ask for anything "
-    "the context above already answers. If the user asks for everything at once, or for "
-    "your conclusion, drop this constraint for that turn and answer in full."
+SINGLE_MODE_TURN_DIRECTIVE = (
+    "\n\n(This turn) You are in a live back-and-forth chat, so pace yourself like a "
+    "thoughtful consultant rather than a report generator: a few short sentences (aim "
+    "for five or fewer), leading with your actual read, answer, or advice on what the "
+    "user just said. Ask a question ONLY if you genuinely cannot help without the "
+    "answer, or the user has invited questions — at most one, never as the whole "
+    "reply, and never one the context above already answers. Otherwise state the "
+    "assumption you are working under and keep going; most replies should end with "
+    "substance, not a question. When the user asks for the full analysis or your "
+    "conclusion, drop the length limit for that turn and answer in full."
 )
 
 # After this many replies in a row that ended on a question, the next turn owes the user
@@ -265,23 +249,19 @@ def _agent_question_streak(history: List[dict]) -> int:
     return streak
 
 
-def _single_turn_contract(turn_no: int, user_message: str, low_content: bool,
-                          question_streak: int = 0) -> str:
+def _single_turn_contract(user_message: str, question_streak: int = 0) -> str:
     """The turn contract for this single-mode turn, or "" if the turn is unconstrained.
 
-    Opening turns (and any turn that carried no new information -- the same situation
-    the multi-agent condition treats as low content) orient and ask ONE question. Later
-    turns lead with substance. A run of question-ended replies overrides both: the next
-    turn answers, because the participant has held up their end several times over.
+    Every constrained turn gets the same natural-assistant directive; a run of
+    question-ended replies escalates to the deliver directive (the model owes an
+    answer); an explicit demand for the conclusion lifts the contract entirely.
     """
     if _WANTS_ANSWER_NOW_RE.search(user_message or ""):
         return ""
     if question_streak >= SINGLE_MODE_QUESTION_STREAK_MAX:
         return SINGLE_MODE_DELIVER_DIRECTIVE
-    if turn_no <= SINGLE_MODE_INTAKE_TURNS or low_content:
-        return SINGLE_MODE_INTAKE_DIRECTIVE
     if SINGLE_MODE_INSTALLMENTS:
-        return SINGLE_MODE_INSTALLMENT_DIRECTIVE
+        return SINGLE_MODE_TURN_DIRECTIVE
     return ""
 
 
@@ -1557,9 +1537,7 @@ def send_message():
                 "Do not adopt any persona, emotion, or role."
                 + scene_context
                 + _single_turn_contract(
-                    session["user_turn_count"],
                     user_message,
-                    low_content,
                     _agent_question_streak(session.get("history") or []),
                 )
             )

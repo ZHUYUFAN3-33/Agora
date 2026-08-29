@@ -194,8 +194,9 @@ SINGLE_MODE_INTAKE_DIRECTIVE = (
     "you can send first. Reply with exactly two or three short sentences: FIRST one or "
     "two that say back what you take the decision to be about, so the user can see you "
     "registered what they told you, THEN exactly ONE question — the single thing you "
-    "most need to know before you can help. No lists, no headings. Expand into the full "
-    "analysis once the user has answered."
+    "most need to know before you can help — something the context above does NOT "
+    "already answer. No lists, no headings. Expand into the full analysis once the user "
+    "has answered."
 )
 
 # Injected on every turn after the opening. The opening directive only bought one
@@ -205,13 +206,33 @@ SINGLE_MODE_INTAKE_DIRECTIVE = (
 # multi-agent turn is three to five short utterances, so a single agent answering in one
 # essay differs in pacing as well as in roster.
 SINGLE_MODE_INSTALLMENT_DIRECTIVE = (
-    "\n\n(This turn) Answer in installments, not all at once. Deliver ONE piece — the "
-    "single most useful thing given what the user has just told you — in at most four "
-    "short sentences, then hand the turn back: either ask the one question you now most "
-    "need answered, or name what you would cover next and ask whether to go there. Do "
-    "not summarise the whole decision, and do not pre-empt the parts the user has not "
-    "asked for yet. If the user asks for everything at once, or for your conclusion, "
-    "drop this constraint for that turn and answer in full."
+    "\n\n(This turn) Answer in installments, not all at once, and LEAD WITH SUBSTANCE. "
+    "Give the single most useful piece of your actual read, given everything the user "
+    "has told you, in at most four short sentences. You may then add at most ONE "
+    "question, and only if you truly cannot go further without the answer — otherwise "
+    "name what you would cover next and let the user steer. Never reply with a question "
+    "alone: they have answered several already, and a turn that asks without giving "
+    "anything back reads as an interrogation rather than help. Do not ask for anything "
+    "the context above already answers. If the user asks for everything at once, or for "
+    "your conclusion, drop this constraint for that turn and answer in full."
+)
+
+# After this many replies in a row that ended on a question, the next turn owes the user
+# an answer. A participant reported answering "a dozen rounds" of questions and giving
+# up -- the model always took the ask branch, because nothing bounded it. Prompt wording
+# alone cannot fix that: it is the same instruction that produced the streak. This is the
+# hard stop that does.
+SINGLE_MODE_QUESTION_STREAK_MAX = int(
+    os.getenv("AGORA_SINGLE_MODE_QUESTION_STREAK") or "2"
+)
+
+SINGLE_MODE_DELIVER_DIRECTIVE = (
+    "\n\n(This turn) Your last replies each ended on a question, and the user has "
+    "answered them. Ask nothing this turn. Say what you actually think now: your read "
+    "of their situation, the trade-off the decision turns on, and what you would do in "
+    "their place — at most six short sentences, no lists. If something you would like "
+    "to know is still missing, state the assumption you are making about it instead of "
+    "asking for it."
 )
 
 
@@ -227,16 +248,36 @@ _WANTS_ANSWER_NOW_RE = re.compile(
 )
 
 
-def _single_turn_contract(turn_no: int, user_message: str, low_content: bool) -> str:
+def _agent_question_streak(history: List[dict]) -> int:
+    """How many of the agent's most recent replies in a row ended on a question."""
+    streak = 0
+    for msg in reversed(history or []):
+        character = str(msg.get("character") or "")
+        if character == "user":
+            continue
+        if not character.startswith("Chatbot"):
+            continue
+        tail = (str(msg.get("txt") or "").rstrip())[-60:]
+        if tail.endswith("?") or tail.endswith("？") or "?" in tail or "？" in tail:
+            streak += 1
+            continue
+        break
+    return streak
+
+
+def _single_turn_contract(turn_no: int, user_message: str, low_content: bool,
+                          question_streak: int = 0) -> str:
     """The turn contract for this single-mode turn, or "" if the turn is unconstrained.
 
     Opening turns (and any turn that carried no new information -- the same situation
-    the multi-agent condition treats as low content) orient and ask. Every turn after
-    that delivers one piece and hands the turn back, so the analysis arrives across the
-    conversation instead of in one reply the participant has to scroll.
+    the multi-agent condition treats as low content) orient and ask ONE question. Later
+    turns lead with substance. A run of question-ended replies overrides both: the next
+    turn answers, because the participant has held up their end several times over.
     """
     if _WANTS_ANSWER_NOW_RE.search(user_message or ""):
         return ""
+    if question_streak >= SINGLE_MODE_QUESTION_STREAK_MAX:
+        return SINGLE_MODE_DELIVER_DIRECTIVE
     if turn_no <= SINGLE_MODE_INTAKE_TURNS or low_content:
         return SINGLE_MODE_INTAKE_DIRECTIVE
     if SINGLE_MODE_INSTALLMENTS:
@@ -1516,7 +1557,10 @@ def send_message():
                 "Do not adopt any persona, emotion, or role."
                 + scene_context
                 + _single_turn_contract(
-                    session["user_turn_count"], user_message, low_content
+                    session["user_turn_count"],
+                    user_message,
+                    low_content,
+                    _agent_question_streak(session.get("history") or []),
                 )
             )
             msgs = [

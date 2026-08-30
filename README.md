@@ -241,11 +241,24 @@ participant handed the wrong one reads a description of somebody else's conditio
 version asks for the participant's id and only unlocks for the ids it serves; no page contains
 any other condition's wording or screenshots, so a wrong id reveals nothing.
 
-| Ids | Shard / condition | Hand out this link | Markdown |
-|---|---|---|---|
-| P01–P32 | shard 1, both scenes, full roster | <https://claude.ai/code/artifact/62c8371a-1849-4311-998a-0869a6bff812> | [`docs/USER_GUIDE.P01-P32.*.md`](docs/USER_GUIDE.P01-P32.en.md) |
-| P33–P44 | shard 2, employment only, full roster | <https://claude.ai/code/artifact/197a6de6-9454-43d3-8a3d-49a6ce4550ab> | [`docs/USER_GUIDE.P33-P44.*.md`](docs/USER_GUIDE.P33-P44.en.md) |
-| P45–P56 | shard 2, employment only, single advisor, no map, no summary | <https://claude.ai/code/artifact/8700c202-f06b-49ff-b3ed-1c875a09603c> | [`docs/USER_GUIDE.P45-P56.*.md`](docs/USER_GUIDE.P45-P56.en.md) |
+Two links go to each participant: the app they log into, and the guide for their condition.
+Both are decided by their id, and both are wrong for anyone outside the range.
+
+| Ids | App to log into (shard) | Scenes | Advisors | Map / summary | Guide link to hand out |
+|---|---|---|---|---|---|
+| **P01–P32** (32) | <https://agora-chat.fly.dev> — shard 1, `fly.toml`, `agora-chat` | Employment + Parent-Child | full roster | both | <https://claude.ai/code/artifact/62c8371a-1849-4311-998a-0869a6bff812> |
+| **P33–P44** (12) | <https://agora-chat-2.fly.dev> — shard 2, `fly.shard2.toml`, `agora-chat-2` | Employment only | full roster | both | <https://claude.ai/code/artifact/197a6de6-9454-43d3-8a3d-49a6ce4550ab> |
+| **P45–P56** (12) | <https://agora-chat-2.fly.dev> — shard 2, `fly.shard2.toml`, `agora-chat-2` | Employment only | single (baseline) | neither | <https://claude.ai/code/artifact/8700c202-f06b-49ff-b3ed-1c875a09603c> |
+
+Markdown twins of the three guides, three languages each (the web version carries all three behind
+a switch, so hand out one link per participant, not one per language):
+[`P01-P32`](docs/USER_GUIDE.P01-P32.en.md) · [`P33-P44`](docs/USER_GUIDE.P33-P44.en.md) ·
+[`P45-P56`](docs/USER_GUIDE.P45-P56.en.md).
+
+Rosters are disjoint and seeded per shard — `backend/seed_users.json` holds P01–P32,
+`backend/seed_users.shard2.json` holds P33–P56 — so opening the other shard's URL fails at login
+rather than landing someone in a silently empty room. The P33/P45 split inside shard 2 is not a
+second deployment: both groups use the same URL and are separated only by `AGORA_MODE_POLICY`.
 
 The conditions differ in more than the roster size. `mode == "single"` is a **baseline**: it takes a
 separate backend path (`backend/app.py:1481`) that never reaches `run_user_turn`, so the stance /

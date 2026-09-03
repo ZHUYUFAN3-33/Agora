@@ -2223,6 +2223,11 @@ export default function Chat() {
   // Docked: map collapsed to a floating pill while the user reads evidence in
   // chat; the panel stays mounted so selection/zoom survive the round trip.
   const [decisionMapDocked, setDecisionMapDocked] = useState(false);
+  // Split view: the map keeps the right edge while the chat stays live on the
+  // left. Docking (the "read the evidence" collapse) would hide the map that
+  // the split exists to show, so the two states are mutually exclusive.
+  const [decisionMapSplit, setDecisionMapSplit] = useState(false);
+  const mapSplitActive = decisionMapOpen && decisionMapSplit && !decisionMapDocked;
   // Telemetry timing state. Refs, not state: none of this should trigger a render, and
   // Chat.tsx re-renders often enough that state would both cost paints and lose precision.
   const mapDwellRef = useRef(new DwellTracker());
@@ -4418,8 +4423,14 @@ export default function Chat() {
         </div>
       </aside>
 
-      {/* Main */}
-      <div className="relative flex-1 flex flex-col min-w-0">
+      {/* Main — yields the right edge to the map when it is split alongside,
+          so the composer and the last turn stay visible rather than sitting
+          under the panel. The width here must stay in step with the panel's own
+          width in DecisionMapPanel.tsx: the two are one layout across two files. */}
+      <div
+        className="relative flex-1 flex flex-col min-w-0 transition-[padding] duration-300"
+        style={mapSplitActive ? { paddingRight: "min(52vw, 860px)" } : undefined}
+      >
       <AnimatePresence>
           {!currentConv && welcomeTutorialStep !== null && !(showCustomizer && welcomeTutorialStep >= 2 && welcomeTutorialStep <= 4) && (
             <motion.div
@@ -5181,6 +5192,13 @@ export default function Chat() {
         if (dwell) emit("map_closed", dwell);
         setDecisionMapOpen(false);
         setDecisionMapDocked(false);
+        setDecisionMapSplit(false);
+      }}
+      split={mapSplitActive}
+      onToggleSplit={() => {
+        const next = !decisionMapSplit;
+        setDecisionMapSplit(next);
+        emit(next ? "map_split_opened" : "map_split_closed", {});
       }}
       docked={decisionMapDocked}
       onUndock={() => {

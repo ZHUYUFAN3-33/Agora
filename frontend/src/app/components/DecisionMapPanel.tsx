@@ -126,6 +126,8 @@ export function DecisionMapPanel({
   userName,
   docked = false,
   onUndock,
+  split = false,
+  onToggleSplit,
   onEvent,
 }: {
   open: boolean;
@@ -147,6 +149,12 @@ export function DecisionMapPanel({
    * zoom and pan survive the round trip. */
   docked?: boolean;
   onUndock?: () => void;
+  /** Split: the map gives up the overlay and takes the right half of the
+   * window, so the chat stays live and readable beside it. The river is the
+   * view that earns this — it grows a lane as each turn lands — so it is the
+   * default here, though the switch still works. */
+  split?: boolean;
+  onToggleSplit?: () => void;
   /** Behavior telemetry sink. Whether anyone actually reads this map is not observable
    * server-side: opening it only leaves a row when the extract cache misses, and nothing
    * at all records which node was selected. */
@@ -188,7 +196,7 @@ export function DecisionMapPanel({
   // Derived, not sticky: the ledger arrives with the payload, so a stored
   // default set before the fetch resolves would strand the reader on the river.
   const [viewPref, setViewPref] = useState<"ledger" | "river" | null>(null);
-  const view: "ledger" | "river" = hasLedger ? viewPref ?? "ledger" : "river";
+  const view: "ledger" | "river" = hasLedger ? viewPref ?? (split ? "river" : "ledger") : "river";
   const setView = setViewPref;
 
   // One effect rather than wrapping all eight setSelectedNodeId call sites: this catches
@@ -306,23 +314,43 @@ export function DecisionMapPanel({
     <>
     <AnimatePresence>
       {open && !docked && (
-        <div className="fixed inset-0 z-[200]" style={font}>
-          <motion.button
-            type="button"
-            aria-label={t(lang, "map.close")}
-            className="absolute inset-0 bg-black/20"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18 }}
-            onClick={onClose}
-          />
+        <div
+          key={split ? "map-split" : "map-full"}
+          className={
+            split
+              ? "fixed right-0 top-0 bottom-0 w-[52vw] min-w-[440px] max-w-[860px] z-[150]"
+              : "fixed inset-0 z-[200]"
+          }
+          style={font}
+        >
+          {/* No scrim when split: dimming the chat would undo the whole point
+              of putting the two side by side. */}
+          {!split && (
+            <motion.button
+              type="button"
+              aria-label={t(lang, "map.close")}
+              className="absolute inset-0 bg-black/20"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              onClick={onClose}
+            />
+          )}
 
+          {/* One animation for both modes. Swapping the animation config when
+              `split` flips left motion holding a stale transform — the panel
+              stuck at its initial y, with the header above the viewport. The
+              split is a layout change; it does not need its own entrance. */}
           <motion.div
             role="dialog"
-            aria-modal="true"
+            aria-modal={split ? undefined : true}
             aria-label={t(lang, "map.title")}
-            className="absolute inset-0 flex flex-col bg-[#f7f7f5] shadow-[0_12px_40px_rgba(0,0,0,0.12)]"
+            className={`absolute inset-0 flex flex-col bg-[#f7f7f5] ${
+              split
+                ? "border-l border-black/10 shadow-[-8px_0_28px_rgba(0,0,0,0.08)]"
+                : "shadow-[0_12px_40px_rgba(0,0,0,0.12)]"
+            }`}
             initial={{ y: "-8%", opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: "-6%", opacity: 0 }}
@@ -332,8 +360,8 @@ export function DecisionMapPanel({
             <header className="flex items-center justify-between gap-3 px-4 sm:px-5 h-14 border-b border-black/8 bg-white/90 backdrop-blur-sm flex-shrink-0">
               <div className="min-w-0 flex items-center gap-3">
                 <div className="min-w-0">
-                  <p className={`text-[12px] text-black ${labelCaseClass(lang)}`}>{t(lang, "map.title")}</p>
-                  <p className="text-[10px] text-[var(--app-muted-text)] truncate hidden sm:block">
+                  <p className={`text-[12px] text-black whitespace-nowrap ${labelCaseClass(lang)}`}>{t(lang, "map.title")}</p>
+                  <p className={`text-[10px] text-[var(--app-muted-text)] truncate ${split ? "hidden" : "hidden sm:block"}`}>
                     {busy
                       ? t(lang, "map.extracting")
                       : t(lang, view === "ledger" ? "map.subtitleLedger" : "map.subtitleSmart")}
@@ -366,7 +394,10 @@ export function DecisionMapPanel({
                     the whole map — surprising on the ledger, where it reads as
                     a status badge rather than a control. Hidden below lg now
                     that the view switch shares this row. */}
-                {view === "river" && (data?.phase_spine?.length || 0) > 0 && (
+                {/* Split mode drops these: the breakpoint that gates them reads
+                    the viewport, not this panel, so at 46vw they collide with
+                    the view switch instead of staying out of its way. */}
+                {view === "river" && !split && (data?.phase_spine?.length || 0) > 0 && (
                   <div className="hidden lg:flex items-center gap-1 ml-2 pl-2 border-l border-black/8">
                     {data!.phase_spine.slice(0, 5).map((p, i) => (
                       <button
@@ -440,6 +471,26 @@ export function DecisionMapPanel({
                     {t(lang, "map.fit")}
                   </button>
                 </div>
+
+                {onToggleSplit && (
+                  <button
+                    type="button"
+                    onClick={onToggleSplit}
+                    className="ml-1 p-1.5 rounded-[6px] hover:bg-black/5 text-black/50"
+                    title={t(lang, split ? "map.expand" : "map.splitView")}
+                    aria-label={t(lang, split ? "map.expand" : "map.splitView")}
+                  >
+                    {split ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M4 4h16v16H4z" />
+                      </svg>
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M4 4h16v16H4zM13 4v16" />
+                      </svg>
+                    )}
+                  </button>
+                )}
 
                 <button
                   type="button"

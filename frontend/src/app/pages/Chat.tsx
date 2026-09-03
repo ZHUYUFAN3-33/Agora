@@ -326,22 +326,54 @@ function applyDisplayNames(
   return out;
 }
 
-/** Highlight @userName (and leftover @U) in red. */
+/**
+ * The `**` of a bold run, kept in the DOM but not shown.
+ *
+ * Chat-layer annotations store offsets measured off the *rendered* text
+ * (`getChatSelectionInElement` counts `Range.toString()`), while
+ * `renderChatAnnotatedText` slices the *raw* string with them. Dropping the
+ * markers outright would shorten the rendered text and shift every annotation
+ * after a bold run by two characters per marker. `display:none` still counts
+ * in `Range.toString()`, so the two stay aligned.
+ */
+function boldMarker(key: string): ReactNode {
+  return (
+    <span key={key} className="hidden">
+      **
+    </span>
+  );
+}
+
+/** Highlight @userName (and leftover @U) in red, and render **bold** runs. */
 function highlightUserMentions(text: string, nickname?: string): ReactNode {
   const label = (nickname || "").trim() || "You";
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`@(?:${escaped}|U)\\b`, "gi");
+  // Either a mention, or a bold run that opens on a non-space, non-star char.
+  const re = new RegExp(`@(?:${escaped}|U)\\b|\\*\\*(?=[^\\s*])([\\s\\S]+?)\\*\\*`, "gi");
   const nodes: React.ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) nodes.push(text.slice(last, m.index));
-    nodes.push(
-      <span key={`um-${i++}`} className="text-red-500">
-        {m[0].replace(/^@U$/i, `@${label}`)}
-      </span>,
-    );
+    if (m[1] !== undefined) {
+      // Colour is inherited on purpose: this renders inside the white agent
+      // card and inside the black user bubble.
+      nodes.push(boldMarker(`bo-${i}`));
+      nodes.push(
+        <strong key={`b-${i}`} className="font-semibold">
+          {highlightUserMentions(m[1], nickname)}
+        </strong>,
+      );
+      nodes.push(boldMarker(`bc-${i}`));
+      i += 1;
+    } else {
+      nodes.push(
+        <span key={`um-${i++}`} className="text-red-500">
+          {m[0].replace(/^@U$/i, `@${label}`)}
+        </span>,
+      );
+    }
     last = m.index + m[0].length;
   }
   if (last === 0) return text;
@@ -4977,7 +5009,7 @@ export default function Chat() {
               {/* @-picker */}
               {mentionQuery !== null && mentionCandidates.length > 0 && (
                 <div
-                  className="absolute bottom-[calc(100%+8px)] left-[56px] z-30 min-w-[190px] rounded-[10px] border border-black/10 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.12)] py-1"
+                  className="absolute bottom-[calc(100%+8px)] left-[56px] z-30 min-w-[190px] rounded-[10px] border border-white/10 bg-black shadow-[0_8px_28px_rgba(0,0,0,0.32)] py-1"
                   style={uiFont}
                 >
                   {mentionCandidates.map((a, i) => (
@@ -4987,14 +5019,19 @@ export default function Chat() {
                       onMouseEnter={() => setMentionHighlight(i)}
                       onMouseDown={(e) => { e.preventDefault(); applyMention(a.name); }}
                       className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] ${
-                        i === mentionHighlight ? "bg-black/[0.06]" : "hover:bg-black/[0.03]"
+                        i === mentionHighlight ? "bg-white/[0.16]" : "hover:bg-white/[0.08]"
                       }`}
                     >
+                      {/* The default accent is pure black, which would vanish on
+                          this panel — the inset ring keeps the swatch readable. */}
                       <span
                         className="w-2 h-2 rounded-[2px] flex-shrink-0"
-                        style={{ backgroundColor: agentSettings[a.key]?.accentColor || DEFAULT_AGENT_COLORS[a.key] }}
+                        style={{
+                          backgroundColor: agentSettings[a.key]?.accentColor || DEFAULT_AGENT_COLORS[a.key],
+                          boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.55)",
+                        }}
                       />
-                      <span className="text-black">{a.name}</span>
+                      <span className="text-white">{a.name}</span>
                     </button>
                   ))}
                 </div>
